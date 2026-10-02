@@ -1,0 +1,150 @@
+"""Look up the owner of record for each lead from the Pima County Assessor.
+
+Uses the county-wide parcel layer (PAREGION) that Pima County GIS publishes
+and the City of Tucson serves as a public ArcGIS map service. One row per
+parcel with the taxpayer/owner name and mailing address, the site address,
+use code and year built:
+https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17
+
+Leads with a parcel number are looked up by parcel; leads with only an
+address are matched on the parcel's site address.
+"""
+
+import re
+from datetime import datetime, timezone
+
+import requests
+
+from . import config
+from .normalize import normalize_address
+
+PARCEL_LAYER = (
+    "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17"
+)
+FIELDS = (
+    "PARCEL", "ADDRESSEE", "ADDRESS", "CITY", "STATE_PROVINCE", "POSTAL_CODE",
+    "MAIL1", "MAIL2", "MAIL3", "SITE_ADDRESS", "SITE_ZIP", "SITE_ZIPCITY",
+    "USE_DESC", "PPT_DESC", "YearBuilt", "LAT", "LON",
+)
+BATCH = 50
+
+_ENTITY_RE = re.compile(
+    r"\b(LLC|L L C|LLLP|LP|INC|CORP|CORPORATION|CO|COMPANY|TRUST|TR|TRS|TRUSTEE|"
+    r"PROPERTIES|PROPERTY|HOLDINGS|INVESTMENTS?|HOMES|REALTY|REAL ESTATE|MANAGEMENT|"
+    r"MGMT|BANK|ASSN|ASSOCIATION|FUND|PARTNERS|PARTNERSHIP|VENTURES|CAPITAL|RENTALS?|"
+    r"APARTMENTS?|ESTATE OF)\b"
+)
+
+
+def is_entity(name):
+    """True for owners that are companies, trusts or estates, not people."""
+    return bool(name and _ENTITY_RE.search(name.upper()))
+
+
+def _sql_str(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def owner_fields(attrs):
+    """Map one parcel record to the lead's owner_* columns."""
+    name = (attrs.get("ADDRESSEE") or attrs.get("MAIL1") or "").strip() or None
+    mail = (attrs.get("ADDRESS") or attrs.get("MAIL2") or "").strip() or None
+    site = (attrs.get("SITE_ADDRESS") or "").strip() or None
+    absentee = None
+    if mail and site:
+        absentee = int(normalize_address(mail) != normalize_address(site))
+    return {
+        "owner_name": name,
+        "owner_address": mail,
+        "owner_city": (attrs.get("CITY") or "").strip() or None,
+        "owner_state": (attrs.get("STATE_PROVINCE") or "").strip() or None,
+        "owner_zip": (attrs.get("POSTAL_CODE") or "").strip() or None,
+        "owner_absentee": absentee,
+        "owner_entity": int(is_entity(name)) if name else None,
+        "property_use": (attrs.get("USE_DESC") or attrs.get("PPT_DESC") or "").strip() or None,
+        "year_built": (str(attrs.get("YearBuilt") or "")).strip() or None,
+    }
+
+
+class ParcelClient:
+    def __init__(self, session=None):
+        self.session = session or requests.Session()
+        self.session.headers["User-Agent"] = config.USER_AGENT
+
+    def query(self, where, limit=None):
+        params = {
+            "where": where,
+            "outFields": ",".join(FIELDS),
+            "returnGeometry": "false",
+            "f": "json",
+        }
+        if limit:
+            params["resultRecordCount"] = limit
+        resp = self.session.get(f"{PARCEL_LAYER}/query", params=params,
+                                timeout=config.HTTP_TIMEOUT)
+        resp.raise_for_status()
+        payload = resp.json()
+        if "error" in payload:
+            raise RuntimeError(f"ArcGIS error: {payload['error']}")
+        return [f.get("attributes") or {} for f in payload.get("features") or []]
+
+    def by_parcels(self, parcels):
+        found = {}
+        parcels = sorted({p for p in parcels if p})
+        for i in range(0, len(parcels), BATCH):
+            chunk = parcels[i:i + BATCH]
+            where = f"PARCEL IN ({','.join(_sql_str(p) for p in chunk)})"
+            for attrs in self.query(where):
+                found.setdefault(attrs.get("PARCEL"), attrs)
+        return found
+
+    def by_site_address(self, address):
+        """Best-effort match of a street address to a parcel."""
+        norm = normalize_address(address)
+        if not norm:
+            return None
+        street = norm.split(" UNIT ")[0]
+        rows = self.query(f"SITE_ADDRESS = {_sql_str(street)}", limit=5)
+        return rows[0] if rows else None
+
+    def by_owner(self, name, limit=200):
+        """Parcels whose owner name starts with ``name`` (for landlords)."""
+        name = re.sub(r"\s+", " ", (name or "").upper()).strip()
+        if len(name) < 4:
+            return []
+        return self.query(f"ADDRESSEE LIKE {_sql_str(name + '%')}", limit=limit)
+
+
+def enrich(conn, client=None, limit=None, refresh=False):
+    """Fill owner_* columns. Returns counts by outcome."""
+    client = client or ParcelClient()
+    sql = "SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL"
+    if not refresh:
+        sql += " AND enriched_at IS NULL"
+    sql += " ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    rows = conn.execute(sql).fetchall()
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
+    counts = {"found": 0, "not_found": 0}
+    for r in rows:
+        attrs = by_parcel.get(r["parcel"]) if r["parcel"] else None
+        if attrs is None and r["address"]:
+            try:
+                attrs = client.by_site_address(r["address"])
+            except Exception:
+                attrs = None
+        if attrs:
+            fields = owner_fields(attrs)
+            if not r["parcel"] and attrs.get("PARCEL"):
+                fields["parcel"] = attrs["PARCEL"]
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            conn.execute(f"UPDATE leads SET {sets}, enriched_at = ? WHERE id = ?",
+                         [*fields.values(), now, r["id"]])
+            counts["found"] += 1
+        else:
+            conn.execute("UPDATE leads SET enriched_at = ? WHERE id = ?", (now, r["id"]))
+            counts["not_found"] += 1
+    conn.commit()
+    return counts

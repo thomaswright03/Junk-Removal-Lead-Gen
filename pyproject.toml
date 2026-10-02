@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leadgen"
+version = "0.1.0"
+description = "Pima County eviction and clean-out lead list for a junk-removal business"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28",
+    "beautifulsoup4>=4.11",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+leadgen = "leadgen.cli:main"
+
+[tool.setuptools]
+packages = ["leadgen", "leadgen.sources"]
+
+[tool.setuptools.package-data]
+leadgen = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

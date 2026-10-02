@@ -1,0 +1,385 @@
+"""Local web app for working the leads: ``leadgen serve``.
+
+Runs on http://127.0.0.1:8765 by default and only listens on this computer.
+Everything is stored in the same SQLite file the CLI uses.
+"""
+
+import json
+import os
+import sys
+import tempfile
+import threading
+import traceback
+import webbrowser
+from datetime import date, datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from . import db, outreach
+from .contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
+from .enrich import ParcelClient, enrich, owner_fields
+from .geocode import CensusGeocoder
+from .lookup import find_contacts, providers_from
+from .sources import AUTOMATIC, SOURCES
+from .tucson_codes import CODE_LABELS, code_of
+
+STATIC = Path(__file__).parent / "static"
+
+LEAD_FIELDS = (
+    "id", "source", "source_id", "lead_type", "event_date", "address", "city", "zip",
+    "lat", "lon", "parcel", "plaintiff", "defendant", "description", "url", "status",
+    "notes", "first_seen", "owner_name", "owner_address", "owner_city", "owner_state",
+    "owner_zip", "owner_absentee", "owner_entity", "property_use", "year_built",
+    "enriched_at", "channel", "assigned_at", "responded_at", "quote_amount", "job_revenue",
+    "owner_phone", "owner_email", "owner_website", "contact_source", "contact_name",
+    "contact_checked_at",
+)
+EDITABLE = {"status", "channel", "notes", "quote_amount", "job_revenue", "responded_at",
+            "owner_phone", "owner_email"}
+
+
+def _now():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+class App:
+    def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None):
+        self.db_path = db_path
+        self.stale_days = stale_days
+        self.parcel_client = parcel_client
+        self.geocoder = geocoder
+        self.lock = threading.Lock()
+        with self.conn() as conn:
+            outreach.retire_channels(conn)
+
+    def conn(self):
+        return db.connect(self.db_path)
+
+    # ---- reads -------------------------------------------------------------
+
+    def settings(self, conn):
+        return outreach.merged_settings(db.get_settings(conn))
+
+    def leads(self, conn, settings=None):
+        settings = settings or self.settings(conn)
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE duplicate_of IS NULL "
+            "AND (in_pima = 1 OR in_pima IS NULL) ORDER BY event_date DESC, id DESC"
+        ).fetchall()
+        owner_counts = {}
+        for r in rows:
+            if r["owner_name"]:
+                owner_counts[r["owner_name"]] = owner_counts.get(r["owner_name"], 0) + 1
+        touches = {}
+        for t in conn.execute("SELECT * FROM touches ORDER BY id"):
+            touches.setdefault(t["lead_id"], []).append(dict(t))
+        out = []
+        for r in rows:
+            d = {k: r[k] for k in LEAD_FIELDS}
+            code = code_of(r["description"]) if r["lead_type"] == "code_violation" else None
+            d["code"] = code
+            d["code_label"] = CODE_LABELS.get(code) or (
+                "Vacant / nuisance building" if "VACANT/NUISANCE" in (r["description"] or "").upper()
+                else None)
+            d["score"] = outreach.score(r, owner_counts)
+            d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
+            d["eligible"] = outreach.eligible_channels(r)
+            d["miles"] = outreach.miles_between(settings.get("base_lat"), settings.get("base_lon"),
+                                                r["lat"], r["lon"])
+            d["touches"] = touches.get(r["id"], [])
+            out.append(d)
+        return out
+
+    def state(self):
+        with self.conn() as conn:
+            settings = self.settings(conn)
+            public = dict(settings)
+            key = public.pop("google_places_api_key", "") or ""
+            public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
+            return {
+                "leads": self.leads(conn, settings),
+                "settings": public,
+                "channels": outreach.CHANNELS,
+                "results": outreach.results(conn),
+                "statuses": db.STATUSES,
+                "stale_days": self.stale_days,
+                "today": date.today().isoformat(),
+            }
+
+    # ---- writes ------------------------------------------------------------
+
+    def update_lead(self, body):
+        fields = {k: v for k, v in (body.get("fields") or {}).items() if k in EDITABLE}
+        if "status" in fields and fields["status"] not in db.STATUSES:
+            raise ValueError("bad status")
+        if "channel" in fields and fields["channel"] not in (None, "", *outreach.CHANNELS):
+            raise ValueError("bad channel")
+        if fields.get("channel") == "":
+            fields["channel"] = None
+        if "owner_phone" in fields:
+            raw = (fields["owner_phone"] or "").strip()
+            fields["owner_phone"] = clean_phone(raw) if raw else None
+            if raw and not fields["owner_phone"]:
+                raise ValueError("phone number needs 10 digits")
+        if "owner_email" in fields:
+            raw = (fields["owner_email"] or "").strip()
+            fields["owner_email"] = clean_email(raw) if raw else None
+            if raw and not fields["owner_email"]:
+                raise ValueError("that email address doesn't look right")
+        if "owner_phone" in fields or "owner_email" in fields:
+            fields["contact_source"] = "manual"
+        if fields.get("status") in ("responded", "quoted", "won") and "responded_at" not in fields:
+            fields["responded_at"] = _now()
+        with self.conn() as conn:
+            row = conn.execute("SELECT * FROM leads WHERE id = ?", (body["id"],)).fetchone()
+            if not row:
+                raise KeyError("no such lead")
+            if fields.get("responded_at") and row["responded_at"]:
+                fields.pop("responded_at")  # keep the first response time
+            if "channel" in fields and fields["channel"] and not row["assigned_at"]:
+                fields["assigned_at"] = _now()
+            if fields:
+                sets = ", ".join(f"{k} = ?" for k in fields)
+                conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), body["id"]])
+        return {"ok": True}
+
+    def add_touches(self, body):
+        ids = body.get("lead_ids") or [body["lead_id"]]
+        kind = body.get("kind") or "contact"
+        with self.conn() as conn:
+            settings = self.settings(conn)
+            for lead_id in ids:
+                row = conn.execute("SELECT channel, status FROM leads WHERE id = ?",
+                                   (lead_id,)).fetchone()
+                if not row:
+                    continue
+                channel = body.get("channel") or row["channel"]
+                if not channel:
+                    raise ValueError("assign a channel before logging outreach")
+                cost = body.get("cost")
+                if cost is None:
+                    cost = float(settings["costs"].get(channel) or 0)
+                conn.execute(
+                    "INSERT INTO touches (lead_id, channel, kind, cost, notes, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (lead_id, channel, kind, cost, body.get("notes"), _now()),
+                )
+                updates = {}
+                if not row["channel"]:
+                    updates.update(channel=channel, assigned_at=_now())
+                if row["status"] == "new":
+                    updates["status"] = "contacted"
+                if updates:
+                    sets = ", ".join(f"{k} = ?" for k in updates)
+                    conn.execute(f"UPDATE leads SET {sets} WHERE id = ?",
+                                 [*updates.values(), lead_id])
+        return {"ok": True, "logged": len(ids)}
+
+    def assign(self, body):
+        with self.conn() as conn:
+            leads = self.leads(conn)
+            counts = outreach.assign(conn, leads, int(body.get("count") or 40),
+                                     body.get("channels") or list(outreach.CHANNELS))
+        return {"assigned": counts}
+
+    def save_settings(self, body):
+        allowed = set(outreach.DEFAULT_SETTINGS)
+        with self.conn() as conn:
+            current = self.settings(conn)
+            values = {k: v for k, v in body.items() if k in allowed}
+            if not values.get("google_places_api_key"):
+                values.pop("google_places_api_key", None)  # blank field keeps the saved key
+            if body.get("clear_google_key"):
+                values["google_places_api_key"] = ""
+            if values.get("base_address") and values["base_address"] != current["base_address"]:
+                values["base_lat"] = values["base_lon"] = None
+            db.put_settings(conn, values)
+        self._ensure_base()
+        return {"ok": True}
+
+    def _ensure_base(self):
+        with self.conn() as conn:
+            s = self.settings(conn)
+            if s.get("base_lat") is not None:
+                return
+            try:
+                r = (self.geocoder or CensusGeocoder()).geocode(s["base_address"])
+            except Exception:
+                return
+            if r:
+                db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})
+
+    def refresh(self, body):
+        days = int(body.get("days") or 30)
+        since = (date.today() - timedelta(days=days)).isoformat()
+        until = date.today().isoformat()
+        summary = {}
+        with self.lock, self.conn() as conn:
+            for name in AUTOMATIC:
+                counts = {"new": 0, "updated": 0}
+                for lead in SOURCES[name]().fetch(since, until):
+                    counts[db.upsert(conn, lead)] += 1
+                conn.commit()
+                summary[name] = counts
+            summary["owners"] = enrich(conn, self.parcel_client or ParcelClient())
+            summary["stale"] = db.mark_stale(conn, self.stale_days)
+        self._ensure_base()
+        return summary
+
+    def find_contacts(self, body):
+        with self.lock, self.conn() as conn:
+            settings = self.settings(conn)
+            log = []
+            counts = find_contacts(conn, providers_from(settings),
+                                   limit=int(body.get("limit") or 0) or None,
+                                   refresh=bool(body.get("refresh")), log=log.append)
+            counts["google_used"] = any(p.name == "google" for p in providers_from(settings))
+            counts["messages"] = log[:10]
+            return counts
+
+    def run_enrich(self, body):
+        with self.lock, self.conn() as conn:
+            return enrich(conn, self.parcel_client or ParcelClient(),
+                          refresh=bool(body.get("refresh")))
+
+    def import_file(self, source, filename, data, lead_type="eviction"):
+        if source == "contacts":
+            with self.lock, self.conn() as conn:
+                return import_contacts(conn, data.decode("utf-8-sig", errors="replace"))
+        if source not in ("pima_jp_calendar", "csv_import"):
+            raise ValueError("source must be pima_jp_calendar or csv_import")
+        suffix = Path(filename or "upload").suffix or ".txt"
+        with tempfile.NamedTemporaryFile("wb", suffix=suffix, delete=False) as fh:
+            fh.write(data)
+            path = fh.name
+        try:
+            since = (date.today() - timedelta(days=365)).isoformat()
+            counts = {"new": 0, "updated": 0}
+            with self.lock, self.conn() as conn:
+                for lead in SOURCES[source]().fetch(since, date.today().isoformat(),
+                                                   paths=[path], assume_eviction=False,
+                                                   lead_type=lead_type):
+                    counts[db.upsert(conn, lead)] += 1
+                conn.commit()
+                counts["owners"] = enrich(conn, self.parcel_client or ParcelClient())
+            return counts
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def owner_properties(self, name):
+        rows = (self.parcel_client or ParcelClient()).by_owner(name)
+        return [
+            {"parcel": a.get("PARCEL"), "site_address": a.get("SITE_ADDRESS"),
+             "site_zip": a.get("SITE_ZIP"), **owner_fields(a)}
+            for a in rows
+        ]
+
+
+def render_template(settings, channel, lead):
+    owner = (lead.get("owner_name") or lead.get("plaintiff") or "").strip()
+    # Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
+    words = owner.split("&")[0].split(",")[0].split()
+    first = (words[1].title() if len(words) > 1 and words[1].isalpha() and len(words[1]) > 1
+             and not lead.get("owner_entity") else "")
+    phone = (settings["tracking_numbers"].get(channel) or settings.get("business_phone")
+             or "[phone]")
+    text = settings["templates"].get(channel, "")
+    for k, v in {
+        "{owner}": owner.title() or "Property Owner",
+        "{owner_first}": first or "there",
+        "{address}": (lead.get("address") or "your property").title(),
+        "{phone}": phone,
+        "{business}": settings.get("business_name") or "",
+    }.items():
+        text = text.replace(k, v)
+    return text
+
+
+class Handler(BaseHTTPRequestHandler):
+    app = None
+
+    def log_message(self, fmt, *args):  # keep the terminal quiet
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else (
+            body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode())
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(n) if n else b""
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        q = parse_qs(url.query)
+        try:
+            if url.path in ("/", "/index.html"):
+                return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if url.path == "/api/state":
+                return self._send(200, self.app.state())
+            if url.path == "/api/skiptrace.csv":
+                with self.app.conn() as conn:
+                    leads = [l for l in self.app.leads(conn)
+                             if l["status"] not in ("stale", "skip", "lost", "won")]
+                return self._send(200, skiptrace_csv(leads), "text/csv; charset=utf-8")
+            if url.path == "/api/owner":
+                return self._send(200, self.app.owner_properties(q.get("name", [""])[0]))
+            return self._send(404, {"error": "not found"})
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+
+    def do_POST(self):
+        url = urlparse(self.path)
+        q = parse_qs(url.query)
+        # Only accept requests from this app's own page.
+        origin = self.headers.get("Origin")
+        if origin and urlparse(origin).netloc != self.headers.get("Host"):
+            return self._send(403, {"error": "cross-origin request refused"})
+        try:
+            if url.path == "/api/import":
+                return self._send(200, self.app.import_file(
+                    q.get("source", ["pima_jp_calendar"])[0], q.get("filename", [""])[0],
+                    self._body(), q.get("lead_type", ["eviction"])[0]))
+            body = json.loads(self._body() or b"{}")
+            routes = {
+                "/api/lead": self.app.update_lead,
+                "/api/touch": self.app.add_touches,
+                "/api/assign": self.app.assign,
+                "/api/settings": self.app.save_settings,
+                "/api/refresh": self.app.refresh,
+                "/api/enrich": self.app.run_enrich,
+                "/api/find-contacts": self.app.find_contacts,
+            }
+            if url.path not in routes:
+                return self._send(404, {"error": "not found"})
+            return self._send(200, routes[url.path](body))
+        except (ValueError, KeyError) as e:
+            return self._send(400, {"error": str(e)})
+        except Exception as e:
+            traceback.print_exc(file=sys.stderr)
+            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+
+
+def serve(db_path, host="127.0.0.1", port=8765, stale_days=30, open_browser=True):
+    app = App(db_path, stale_days)
+    app._ensure_base()
+    handler = type("BoundHandler", (Handler,), {"app": app})
+    server = ThreadingHTTPServer((host, port), handler)
+    url = f"http://{host}:{port}/"
+    print(f"Lead desk running at {url}  (Ctrl+C to stop)")
+    if open_browser:
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
