@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lead Desk</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --fg: #1c1c1e; --muted: #6b6b70; --line: #e4e4e0;
+  --accent: #1f6feb; --accent-soft: #e8f0fe; --good: #1a7f37; --good-soft: #e6f4ea;
+  --warn: #9a6700; --warn-soft: #fff4d6; --bad: #c62828; --bad-soft: #fdecea; --chip: #f0f0ec;
+  --c-postcard: #1f6feb; --c-door_hanger: #8250df; --c-phone: #bf5700; --c-property_manager: #1a7f37;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121214; --panel: #1b1b1e; --fg: #ececee; --muted: #9b9ba3; --line: #2c2c31;
+    --accent: #6ea8ff; --accent-soft: #1d2a40; --good: #4cc26b; --good-soft: #17301f;
+    --warn: #e0b341; --warn-soft: #33290f; --bad: #ff6b6b; --bad-soft: #3a1a1a; --chip: #26262b;
+    --c-postcard: #6ea8ff; --c-door_hanger: #b18cff; --c-phone: #ff9f4a; --c-property_manager: #4cc26b;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 17px; margin: 0; }
+header .sub { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 4px; margin-left: 12px; }
+nav button { background: none; border: 0; padding: 7px 12px; border-radius: 8px; color: var(--muted); font: inherit; cursor: pointer; }
+nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.spacer { flex: 1; }
+main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+button.btn, label.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 7px 12px; border-radius: 8px; font: inherit; cursor: pointer; white-space: nowrap; }
+button.btn:hover, label.btn:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.small { padding: 3px 8px; font-size: 12px; }
+button:disabled { opacity: .5; cursor: default; }
+input, select, textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+textarea { width: 100%; min-height: 110px; resize: vertical; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.card h3 { font-size: 14px; margin: 14px 0 6px; }
+.card p.hint, .hint { color: var(--muted); font-size: 13px; margin: 2px 0 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel); }
+tbody tr.click { cursor: pointer; }
+tbody tr.click:hover { background: var(--accent-soft); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--chip); font-size: 12px; white-space: nowrap; }
+.chip.good { background: var(--good-soft); color: var(--good); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.acc { background: var(--accent-soft); color: var(--accent); }
+.ch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.score { display: inline-block; min-width: 30px; text-align: center; font-weight: 650; border-radius: 6px; padding: 1px 6px; font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+a { color: var(--accent); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.filters input[type=search] { flex: 1; min-width: 200px; }
+.drawer { position: fixed; top: 0; right: 0; width: min(520px, 100%); height: 100%; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.12); overflow-y: auto; padding: 20px; z-index: 20; display: none; }
+.drawer.open { display: block; }
+.drawer h2 { margin: 0 32px 4px 0; font-size: 17px; }
+.drawer .close { position: absolute; top: 14px; right: 14px; }
+dl { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; margin: 12px 0; }
+dt { color: var(--muted); font-size: 13px; } dd { margin: 0; }
+.script { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 13px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.pc { border: 1px dashed var(--line); border-radius: 8px; padding: 12px; background: var(--bg); font-size: 13px; }
+.pc .to { font-weight: 600; margin-bottom: 6px; }
+.pc .msg { white-space: pre-wrap; }
+.bars { display: grid; gap: 10px; }
+.bar { display: grid; grid-template-columns: 210px 1fr 80px; align-items: center; gap: 10px; }
+.bar .track { height: 14px; background: var(--chip); border-radius: 7px; overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 7px; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 8px; display: none; z-index: 50; max-width: 90%; }
+.empty { padding: 28px; text-align: center; color: var(--muted); }
+.tabs2 { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.tabs2 button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px; cursor: pointer; font: inherit; color: var(--fg); }
+.tabs2 button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+#print { display: none; }
+@media (max-width: 720px) { main { padding: 12px; } nav { margin-left: 0; overflow-x: auto; } .bar { grid-template-columns: 120px 1fr 60px; } }
+@media print {
+  body { background: #fff; color: #000; }
+  header, main, .drawer, .toast { display: none !important; }
+  #print { display: block; }
+  .pcard { width: 6in; height: 4in; border: 1px solid #999; padding: .35in; margin: 0 auto .25in; page-break-inside: avoid; font: 13pt/1.4 Georgia, serif; display: flex; flex-direction: column; }
+  .pcard .addr { margin-top: auto; align-self: flex-end; font: 12pt/1.3 Helvetica, sans-serif; text-align: left; min-width: 2.6in; }
+  .pcard .msg { white-space: pre-wrap; }
+  .route { font: 11pt/1.4 Helvetica, sans-serif; }
+  .route table { width: 100%; } .route td, .route th { border-bottom: 1px solid #ccc; padding: 4px 6px; position: static; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Lead Desk</h1>
+    <div class="sub" id="sub">Loading…</div>
+  </div>
+  <nav id="nav">
+    <button data-tab="leads" class="on">Leads</button>
+    <button data-tab="outreach">Outreach</button>
+    <button data-tab="results">Results</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div class="spacer"></div>
+  <label class="btn" title="Saved Justice Court calendar page (.html) or a CSV of leads">
+    Import evictions / CSV
+    <input type="file" id="importFile" accept=".html,.htm,.csv" hidden>
+  </label>
+  <button class="btn primary" id="refreshBtn">Refresh data</button>
+</header>
+
+<main>
+  <section id="tab-leads"></section>
+  <section id="tab-outreach" hidden></section>
+  <section id="tab-results" hidden></section>
+  <section id="tab-settings" hidden></section>
+</main>
+
+<aside class="drawer" id="drawer"></aside>
+<div class="toast" id="toast"></div>
+<div id="print"></div>
+
+<script>
+"use strict";
+let S = null;                 // server state
+const ui = { tab: "leads", q: "", type: "", status: "open", channel: "", sort: "score", outreachTab: "postcard", open: null };
+
+const $ = (s, el = document) => el.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const pct = v => v == null ? "–" : (v * 100).toFixed(v < 0.1 && v > 0 ? 1 : 0) + "%";
+const title = s => String(s ?? "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+  .replace(/\b(Llc|Lllp|Lp|Po|Nw|Ne|Sw|Se|Hoa|Usa|Az)\b/g, w => w.toUpperCase());
+// Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
+const firstName = name => { const w = String(name || "").replace(/[&,].*$/, "").trim().split(/\s+/); return w.length > 1 && /^[A-Za-z]{2,}$/.test(w[1]) ? title(w[1]) : ""; };
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, ms = 3200) {
+  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", ms);
+}
+async function load() {
+  S = await api("/api/state");
+  render();
+}
+async function act(fn, okMsg) {
+  try { const r = await fn(); if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); await load(); return r; }
+  catch (e) { toast("Error: " + e.message, 6000); }
+}
+
+// ---------- helpers ---------------------------------------------------------
+const chName = c => S.channels[c] || "Unassigned";
+const chDot = c => c ? `<span class="ch"><span class="dot" style="background:var(--c-${c})"></span>${esc(chName(c))}</span>` : `<span class="muted">–</span>`;
+function scoreChip(s) {
+  const cls = s >= 60 ? "good" : s >= 40 ? "acc" : s >= 25 ? "warn" : "";
+  return `<span class="score chip ${cls}">${s}</span>`;
+}
+function statusChip(s) {
+  const m = { new: "acc", contacted: "", responded: "warn", quoted: "warn", won: "good", lost: "bad", skip: "", stale: "" };
+  return `<span class="chip ${m[s] || ""}">${esc(s)}</span>`;
+}
+function whatLabel(l) {
+  if (l.lead_type === "eviction") return "Eviction";
+  return l.code_label || (l.description || "").split(" | ")[0] || l.lead_type;
+}
+function mapUrl(l) {
+  if (l.lat != null && l.lon != null) return `https://www.google.com/maps/search/?api=1&query=${l.lat},${l.lon}`;
+  if (l.address) return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(l.address + ", " + (l.city || "Tucson") + ", AZ");
+  return null;
+}
+function ownerLine(l) {
+  const who = l.owner_name || l.plaintiff;
+  if (!who) return `<span class="muted">${l.enriched_at ? "not found" : "lookup pending"}</span>`;
+  let tags = "";
+  if (l.owner_absentee) tags += ` <span class="chip warn" title="Owner's mailing address is somewhere else">absentee</span>`;
+  if (l.owner_entity) tags += ` <span class="chip" title="Company, trust or estate">entity</span>`;
+  if (l.owner_lead_count > 1) tags += ` <span class="chip acc" title="Owner has several leads">${l.owner_lead_count} leads</span>`;
+  return esc(title(who)) + tags;
+}
+function fill(channel, l) {
+  const st = S.settings, owner = (l.owner_name || l.plaintiff || "").trim();
+  const first = owner && !l.owner_entity ? firstName(owner) : "";
+  const phone = (st.tracking_numbers || {})[channel] || st.business_phone || "[phone]";
+  return (st.templates[channel] || "")
+    .replaceAll("{owner}", title(owner) || "Property Owner")
+    .replaceAll("{owner_first}", first || "there")
+    .replaceAll("{address}", title(l.address) || "your property")
+    .replaceAll("{phone}", phone)
+    .replaceAll("{business}", st.business_name || "");
+}
+function activeLeads() {
+  return S.leads.filter(l => l.status !== "stale" && l.status !== "skip");
+}
+function untouched(l) { return !l.touches.length; }
+
+// ---------- header ----------------------------------------------------------
+function renderHeader() {
+  const open = activeLeads();
+  const assigned = open.filter(l => l.channel).length;
+  const pending = S.leads.filter(l => !l.enriched_at).length;
+  $("#sub").textContent = `${open.length} open leads · ${assigned} in outreach` + (pending ? ` · ${pending} owners not looked up yet` : "");
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === ui.tab));
+  for (const t of ["leads", "outreach", "results", "settings"]) $("#tab-" + t).hidden = t !== ui.tab;
+}
+
+// ---------- Leads tab -------------------------------------------------------
+function filteredLeads() {
+  const q = ui.q.toLowerCase();
+  let rows = S.leads.filter(l => {
+    if (ui.status === "open" && ["stale", "skip", "lost", "won"].includes(l.status)) return false;
+    if (ui.status && ui.status !== "open" && l.status !== ui.status) return false;
+    if (ui.type === "eviction" && l.lead_type !== "eviction") return false;
+    if (ui.type === "code_violation" && l.lead_type !== "code_violation") return false;
+    if (ui.type === "absentee" && !l.owner_absentee) return false;
+    if (ui.type === "entity" && !l.owner_entity) return false;
+    if (ui.channel === "none" && l.channel) return false;
+    if (ui.channel && ui.channel !== "none" && l.channel !== ui.channel) return false;
+    if (q && ![l.address, l.owner_name, l.plaintiff, l.defendant, l.source_id, l.description, l.parcel, l.notes].join(" ").toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const key = ui.sort;
+  rows.sort((a, b) => key === "score" ? b.score - a.score || (b.event_date || "").localeCompare(a.event_date || "")
+    : key === "date" ? (b.event_date || "").localeCompare(a.event_date || "")
+    : key === "miles" ? (a.miles ?? 1e9) - (b.miles ?? 1e9) : 0);
+  return rows;
+}
+function renderLeads() {
+  const rows = filteredLeads();
+  const opts = (pairs, cur) => pairs.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
+  $("#tab-leads").innerHTML = `
+    <div class="filters">
+      <input type="search" id="q" placeholder="Search address, owner, landlord, case, parcel…" value="${esc(ui.q)}">
+      <select id="fType">${opts([["", "All leads"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Absentee owners"], ["entity", "Owned by LLC / trust"]], ui.type)}</select>
+      <select id="fStatus">${opts([["open", "Open (not won/lost)"], ["", "Any status"], ...S.statuses.map(s => [s, title(s)])], ui.status)}</select>
+      <select id="fChannel">${opts([["", "Any channel"], ["none", "Not assigned"], ...Object.entries(S.channels)], ui.channel)}</select>
+      <select id="fSort">${opts([["score", "Best first"], ["date", "Newest first"], ["miles", "Closest first"]], ui.sort)}</select>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th class="num">Score</th><th>Date</th><th>What</th><th>Property</th><th>Owner / landlord</th><th class="num">Miles</th><th>Channel</th><th>Status</th></tr></thead>
+      <tbody>${rows.map(l => `<tr class="click" data-id="${l.id}">
+        <td class="num">${scoreChip(l.score)}</td>
+        <td>${esc(l.event_date || "")}</td>
+        <td>${esc(whatLabel(l))}</td>
+        <td>${l.address ? esc(title(l.address)) : '<span class="muted">address needed</span>'}${l.property_use ? `<div class="muted" style="font-size:12px">${esc(title(l.property_use))}</div>` : ""}</td>
+        <td>${ownerLine(l)}</td>
+        <td class="num">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
+        <td>${chDot(l.channel)}</td>
+        <td>${statusChip(l.status)}</td></tr>`).join("") || `<tr><td colspan="8" class="empty">No leads match. Try “Any status”, or press Refresh data.</td></tr>`}
+      </tbody></table></div>
+    <p class="hint">${rows.length} shown. Score adds up how much hauling the case suggests, whether the owner lives elsewhere or is a company, repeat owners, and how recent it is. Miles are straight-line from ${esc(S.settings.base_address)}.</p>`;
+  $("#q").oninput = e => { ui.q = e.target.value; renderLeadsBody(); };
+  $("#fType").onchange = e => { ui.type = e.target.value; renderLeads(); };
+  $("#fStatus").onchange = e => { ui.status = e.target.value; renderLeads(); };
+  $("#fChannel").onchange = e => { ui.channel = e.target.value; renderLeads(); };
+  $("#fSort").onchange = e => { ui.sort = e.target.value; renderLeads(); };
+  bindRows($("#tab-leads"));
+}
+function renderLeadsBody() {
+  // Re-render while keeping focus in the search box.
+  const pos = $("#q").selectionStart; renderLeads(); const q = $("#q"); q.focus(); q.setSelectionRange(pos, pos);
+}
+function bindRows(root) {
+  root.querySelectorAll("tr.click[data-id], [data-open]").forEach(tr => tr.onclick = e => {
+    if (e.target.closest("a,button,input,select")) return;
+    openLead(+(tr.dataset.id || tr.dataset.open));
+  });
+}
+
+// ---------- Lead drawer -----------------------------------------------------
+function openLead(id) { ui.open = id; renderDrawer(); }
+function renderDrawer() {
+  const d = $("#drawer");
+  const l = S.leads.find(x => x.id === ui.open);
+  if (!l) { d.classList.remove("open"); return; }
+  const map = mapUrl(l);
+  const who = l.owner_name || l.plaintiff;
+  const ownerMail = l.owner_address ? `${esc(title(l.owner_address))}<br>${esc(title(l.owner_city))} ${esc(l.owner_state || "")} ${esc(l.owner_zip || "")}` : '<span class="muted">–</span>';
+  const ch = l.channel;
+  d.innerHTML = `
+    <button class="btn small close" id="dClose">Close</button>
+    <h2>${l.address ? esc(title(l.address)) : esc(title(l.plaintiff || l.source_id))}</h2>
+    <div class="row">${scoreChip(l.score)} ${statusChip(l.status)} ${chDot(ch)}</div>
+    <dl>
+      <dt>What</dt><dd>${esc(whatLabel(l))}</dd>
+      <dt>Details</dt><dd>${esc(l.description || "")}</dd>
+      <dt>Date</dt><dd>${esc(l.event_date || "")}</dd>
+      <dt>Case</dt><dd>${esc(l.source_id)}${l.url ? ` · <a href="${esc(l.url)}" target="_blank" rel="noopener">source</a>` : ""}</dd>
+      ${l.lead_type === "eviction" ? `<dt>Landlord</dt><dd>${esc(l.plaintiff || "")}</dd><dt>Tenant</dt><dd>${esc(l.defendant || "")}</dd>` : ""}
+      <dt>Owner</dt><dd>${ownerLine(l)}</dd>
+      <dt>Mailing addr</dt><dd>${ownerMail}</dd>
+      <dt>Property</dt><dd>${esc(title(l.property_use || ""))}${l.year_built ? ` · built ${esc(l.year_built)}` : ""}${l.parcel ? ` · parcel <a href="https://gis.pima.gov/D.HTM?P=${encodeURIComponent(l.parcel)}" target="_blank" rel="noopener">${esc(l.parcel)}</a>` : ""}</dd>
+      <dt>Location</dt><dd>${map ? `<a href="${map}" target="_blank" rel="noopener">Open map</a>` : "–"}${l.miles != null ? ` · ${l.miles.toFixed(1)} mi from base` : ""}</dd>
+      ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (statutory agent)` : ""}</dd>` : ""}
+    </dl>
+    ${who && (l.owner_entity || l.lead_type === "eviction") ? `<div class="row"><button class="btn small" id="dOwnerProps">Other properties this owner has</button></div><div id="ownerProps"></div>` : ""}
+
+    <div class="card" style="margin-top:14px">
+      <h2>Outreach</h2>
+      <div class="row" style="margin:8px 0">
+        <select id="dChannel">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? " (no info)" : ""}</option>`).join("")}</select>
+        <button class="btn small" id="dSaveCh">Set channel</button>
+      </div>
+      ${ch ? `<div class="script">${esc(fill(ch, l))}</div>
+      <div class="row" style="margin-top:8px">
+        ${touchButtons(ch).map(([k, t]) => `<button class="btn small" data-touch="${k}">${t}</button>`).join("")}
+      </div>` : `<p class="hint">Pick a channel to see the message and log outreach.</p>`}
+      ${l.touches.length ? `<h3>History</h3>${l.touches.map(t => `<div class="muted" style="font-size:13px">${esc(t.created_at.slice(0, 10))} · ${esc(chName(t.channel))} · ${esc(t.kind.replaceAll("_", " "))}${t.cost ? " · " + money(t.cost) : ""}${t.notes ? " · " + esc(t.notes) : ""}</div>`).join("")}` : ""}
+    </div>
+
+    <div class="card">
+      <h2>Result</h2>
+      <div class="row" style="margin:8px 0">
+        ${["responded", "quoted", "won", "lost", "skip"].map(s => `<button class="btn small ${l.status === s ? "primary" : ""}" data-status="${s}">${title(s)}</button>`).join("")}
+        ${l.status !== "new" ? `<button class="btn small" data-status="new">Reset</button>` : ""}
+      </div>
+      <div class="row">
+        <label>Quote $ <input id="dQuote" type="number" min="0" step="1" style="width:100px" value="${l.quote_amount ?? ""}"></label>
+        <label>Job revenue $ <input id="dRev" type="number" min="0" step="1" style="width:100px" value="${l.job_revenue ?? ""}"></label>
+      </div>
+      <h3>Notes</h3>
+      <textarea id="dNotes" placeholder="Who you talked to, what they need, next step…">${esc(l.notes || "")}</textarea>
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="dSave">Save result</button></div>
+    </div>`;
+  d.classList.add("open");
+  $("#dClose").onclick = () => { ui.open = null; d.classList.remove("open"); };
+  $("#dSaveCh").onclick = () => act(() => api("/api/lead", { id: l.id, fields: { channel: $("#dChannel").value } }), "Channel saved");
+  d.querySelectorAll("[data-touch]").forEach(b => b.onclick = () =>
+    act(() => api("/api/touch", { lead_id: l.id, kind: b.dataset.touch }), "Logged: " + b.textContent));
+  d.querySelectorAll("[data-status]").forEach(b => b.onclick = () =>
+    act(() => api("/api/lead", { id: l.id, fields: { status: b.dataset.status } }), "Marked " + b.dataset.status));
+  $("#dSave").onclick = () => {
+    const num = v => v === "" ? null : Number(v);
+    act(() => api("/api/lead", { id: l.id, fields: { quote_amount: num($("#dQuote").value), job_revenue: num($("#dRev").value), notes: $("#dNotes").value,
+      ...(num($("#dRev").value) ? { status: "won" } : num($("#dQuote").value) && !["won", "lost"].includes(l.status) ? { status: "quoted" } : {}) } }), "Saved");
+  };
+  const op = $("#dOwnerProps");
+  if (op) op.onclick = async () => {
+    op.disabled = true; $("#ownerProps").innerHTML = '<p class="hint">Looking up the county assessor…</p>';
+    try {
+      const rows = await api("/api/owner?name=" + encodeURIComponent(who));
+      $("#ownerProps").innerHTML = rows.length ? `<p class="hint">${rows.length} parcel${rows.length > 1 ? "s" : ""} owned by names starting “${esc(who)}”.</p>
+        <div class="tablewrap" style="max-height:260px;overflow:auto"><table><tbody>${rows.map(r => `<tr><td>${esc(title(r.site_address || "(no site address)"))}</td><td class="muted">${esc(title(r.property_use || ""))}</td></tr>`).join("")}</tbody></table></div>`
+        : '<p class="hint">No parcels found under that name. Landlords often own through a differently named LLC.</p>';
+    } catch (e) { $("#ownerProps").innerHTML = `<p class="hint">Lookup failed: ${esc(e.message)}</p>`; }
+  };
+}
+function touchButtons(ch) {
+  return {
+    postcard: [["mailed", "Postcard mailed"]],
+    door_hanger: [["visited", "Hanger left"], ["talked", "Talked in person"]],
+    phone: [["no_answer", "No answer"], ["voicemail", "Left voicemail"], ["talked", "Talked"], ["bad_number", "Wrong number"], ["do_not_call", "Asked not to call"]],
+    property_manager: [["emailed", "Emailed"], ["voicemail", "Left voicemail"], ["talked", "Talked"]],
+  }[ch] || [];
+}
+
+// ---------- Outreach tab ----------------------------------------------------
+function renderOutreach() {
+  const open = activeLeads();
+  const unassigned = open.filter(l => !l.channel && l.status === "new");
+  const counts = Object.fromEntries(Object.keys(S.channels).map(c => [c, open.filter(l => l.channel === c).length]));
+  const queue = c => open.filter(l => l.channel === c && untouched(l) && l.status === "new").sort((a, b) => b.score - a.score);
+  const t = ui.outreachTab;
+  $("#tab-outreach").innerHTML = `
+    <div class="card">
+      <h2>Run the experiment</h2>
+      <p class="hint">Deals the best unassigned leads evenly across the channels you tick, so every channel gets a similar mix of strong and weak leads. Work each channel's queue below, log results on each lead, and the Results tab shows which one wins. ${unassigned.length} leads are unassigned.</p>
+      <div class="row">
+        <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, unassigned.length) || 40}" min="1" style="width:80px"></label>
+        ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" checked><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
+        <button class="btn primary" id="aGo" ${unassigned.length ? "" : "disabled"}>Assign leads</button>
+      </div>
+    </div>
+    <div class="tabs2">${Object.entries(S.channels).map(([c, n]) => `<button data-otab="${c}" class="${c === t ? "on" : ""}"><span class="dot" style="background:var(--c-${c})"></span> ${esc(n)} · ${queue(c).length} to do / ${counts[c]}</button>`).join("")}</div>
+    <div id="oBody"></div>`;
+  $("#aGo").onclick = () => {
+    const chans = [...document.querySelectorAll(".aCh:checked")].map(x => x.value);
+    if (!chans.length) return toast("Tick at least one channel");
+    act(() => api("/api/assign", { count: +$("#aCount").value, channels: chans }),
+      r => "Assigned: " + Object.entries(r.assigned).map(([c, n]) => `${chName(c)} ${n}`).join(", "));
+  };
+  document.querySelectorAll("[data-otab]").forEach(b => b.onclick = () => { ui.outreachTab = b.dataset.otab; renderOutreach(); });
+  const body = $("#oBody");
+  const q = queue(t);
+  if (t === "postcard") renderPostcards(body, q);
+  else if (t === "door_hanger") renderRoute(body, q);
+  else if (t === "phone") renderCalls(body, q, "phone");
+  else renderManagers(body, open.filter(l => l.channel === "property_manager"));
+  bindRows(body);
+}
+function renderPostcards(el, q) {
+  el.innerHTML = `<div class="card">
+    <h2>Postcards: ${q.length} ready to mail</h2>
+    <p class="hint">Printing makes one 6×4 card per lead with the owner's mailing address. Or download the list for a mailing service such as Lob, PostGrid or a local printer. After they go in the mail, mark them mailed so cost and timing are tracked.</p>
+    <div class="row">
+      <button class="btn" id="pPrint" ${q.length ? "" : "disabled"}>Print cards</button>
+      <a class="btn" href="/api/mailing.csv?channel=postcard" download="postcards.csv" style="text-decoration:none">Download mailing list (CSV)</a>
+      <button class="btn primary" id="pMailed" ${q.length ? "" : "disabled"}>Mark ${q.length} as mailed</button>
+    </div></div>
+    ${q.length ? `<div class="cards">${q.map(l => `<div class="pc" data-open="${l.id}" style="cursor:pointer">
+      <div class="to">${esc(title(l.owner_name))}<br><span class="muted">${esc(title(l.owner_address))}, ${esc(title(l.owner_city))} ${esc(l.owner_state || "")} ${esc(l.owner_zip || "")}</span></div>
+      <div class="msg">${esc(fill("postcard", l))}</div></div>`).join("")}</div>` : emptyQueue()}`;
+  if (q.length) {
+    $("#pPrint").onclick = () => {
+      $("#print").innerHTML = q.map(l => `<div class="pcard"><div class="msg">${esc(fill("postcard", l))}</div>
+        <div class="addr">${esc(title(l.owner_name))}<br>${esc(title(l.owner_address))}<br>${esc(title(l.owner_city))} ${esc(l.owner_state || "")} ${esc(l.owner_zip || "")}</div></div>`).join("");
+      window.print();
+    };
+    $("#pMailed").onclick = () => act(() => api("/api/touch", { lead_ids: q.map(l => l.id), kind: "mailed" }), `Logged ${q.length} postcards`);
+  }
+}
+function routeOrder(q) {
+  // Nearest-neighbour walk starting from Steve's base.
+  const left = q.filter(l => l.lat != null), out = [];
+  let cur = { lat: S.settings.base_lat, lon: S.settings.base_lon };
+  if (cur.lat == null && left.length) cur = left[0];
+  const d = (a, b) => Math.hypot(a.lat - b.lat, (a.lon - b.lon) * Math.cos(a.lat * Math.PI / 180));
+  while (left.length) {
+    let bi = 0; left.forEach((l, i) => { if (d(cur, l) < d(cur, left[bi])) bi = i; });
+    cur = left.splice(bi, 1)[0]; out.push(cur);
+  }
+  return out.concat(q.filter(l => l.lat == null));
+}
+function renderRoute(el, q) {
+  const r = routeOrder(q);
+  const gmaps = r.filter(l => l.lat != null).slice(0, 9);
+  const dirUrl = gmaps.length ? "https://www.google.com/maps/dir/" + encodeURIComponent(S.settings.base_address) + "/" + gmaps.map(l => `${l.lat},${l.lon}`).join("/") : null;
+  el.innerHTML = `<div class="card">
+    <h2>Door hangers: ${r.length} stops</h2>
+    <p class="hint">Ordered as a drive starting from ${esc(S.settings.base_address)}. Google Maps directions take up to 9 stops at a time. Log each stop as you go, from this list or the lead.</p>
+    <div class="row">
+      ${dirUrl ? `<a class="btn" href="${dirUrl}" target="_blank" rel="noopener" style="text-decoration:none">Directions for first ${gmaps.length}</a>` : ""}
+      <button class="btn" id="rPrint" ${r.length ? "" : "disabled"}>Print route sheet</button>
+    </div></div>
+    ${r.length ? `<div class="tablewrap"><table><thead><tr><th>#</th><th>Address</th><th>What</th><th class="num">Miles</th><th></th></tr></thead><tbody>
+      ${r.map((l, i) => `<tr class="click" data-id="${l.id}"><td>${i + 1}</td><td>${esc(title(l.address))}</td><td>${esc(whatLabel(l))}</td><td class="num">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
+      <td><button class="btn small" data-quick="${l.id}" data-kind="visited">Hanger left</button></td></tr>`).join("")}</tbody></table></div>` : emptyQueue()}`;
+  if (r.length) $("#rPrint").onclick = () => {
+    $("#print").innerHTML = `<div class="route"><h2>Door hanger route · ${esc(S.today)}</h2><p>${esc(fill("door_hanger", {}))}</p><table><tr><th>#</th><th>Address</th><th>What</th><th>Done</th></tr>
+      ${r.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(title(l.address))}</td><td>${esc(whatLabel(l))}</td><td>☐</td></tr>`).join("")}</table></div>`;
+    window.print();
+  };
+  bindQuick(el);
+}
+function bindQuick(el) {
+  el.querySelectorAll("[data-quick]").forEach(b => b.onclick = () =>
+    act(() => api("/api/touch", { lead_id: +b.dataset.quick, kind: b.dataset.kind }), "Logged"));
+}
+function renderCalls(el, q, ch) {
+  el.innerHTML = `<div class="card">
+    <h2>Calls: ${q.length} to make</h2>
+    <p class="hint">Look up a number with the search link, check it against the Do Not Call registry before cold-calling a cell phone, and log every attempt. Never auto-dial or mass-text.</p>
+    <div class="script">${esc(fill(ch, { address: "[address]" }))}</div></div>
+    ${q.length ? `<div class="tablewrap"><table><thead><tr><th class="num">Score</th><th>Owner</th><th>Property</th><th>Find number</th><th>Log</th></tr></thead><tbody>
+      ${q.map(l => { const who = l.owner_name || l.plaintiff || ""; return `<tr class="click" data-id="${l.id}"><td class="num">${scoreChip(l.score)}</td><td>${ownerLine(l)}</td><td>${esc(title(l.address || ""))}</td>
+      <td><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search</a></td>
+      <td><div class="row">${touchButtons(ch).slice(0, 3).map(([k, t]) => `<button class="btn small" data-quick="${l.id}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
+    </tbody></table></div>` : emptyQueue()}`;
+  bindQuick(el);
+}
+function renderManagers(el, leads) {
+  const groups = {};
+  for (const l of leads) { const k = (l.plaintiff || l.owner_name || "Unknown").toUpperCase(); (groups[k] = groups[k] || []).push(l); }
+  const list = Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+  el.innerHTML = `<div class="card">
+    <h2>Landlords and property managers: ${list.length}</h2>
+    <p class="hint">One pitch per company, not per property: offer a standing move-out clean-out rate. Companies that show up on several leads come first. Use “Other properties this owner has” on a lead to see their portfolio.</p>
+    <div class="script">${esc(fill("property_manager", {}))}</div></div>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Company / owner</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
+      ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
+        return `<tr class="click" data-id="${ls[0].id}"><td><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:12px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
+        <td class="num">${ls.length}</td><td>${ls.slice(0, 3).map(l => l.address ? esc(title(l.address)) : esc(l.source_id)).join("<br>")}${ls.length > 3 ? `<br><span class="muted">+${ls.length - 3} more</span>` : ""}</td>
+        <td>${done ? '<span class="chip good">yes</span>' : '<span class="chip">no</span>'}</td>
+        <td><div class="row"><a class="btn small" style="text-decoration:none" href="https://www.google.com/search?q=${encodeURIComponent(name + " Tucson")}" target="_blank" rel="noopener">Search</a>
+        ${touchButtons("property_manager").map(([k, t]) => `<button class="btn small" data-group="${ids}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
+    </tbody></table></div>` : emptyQueue()}`;
+  el.querySelectorAll("[data-group]").forEach(b => b.onclick = () => {
+    const ids = b.dataset.group.split(",").map(Number);
+    // One contact covers the company; cost is logged once, on the first lead.
+    act(async () => { await api("/api/touch", { lead_id: ids[0], kind: b.dataset.kind });
+      if (ids.length > 1) await api("/api/touch", { lead_ids: ids.slice(1), kind: b.dataset.kind, cost: 0, notes: "same company contact" }); }, "Logged");
+  });
+}
+const emptyQueue = () => `<div class="card empty">Nothing in this queue. Assign leads above, or set a channel on a lead.</div>`;
+
+// ---------- Results tab -----------------------------------------------------
+function renderResults() {
+  const R = S.results;
+  const tot = k => R.reduce((s, r) => s + (r[k] || 0), 0);
+  const touched = tot("touched");
+  const maxRate = Math.max(0.0001, ...R.map(r => r.response_rate || 0));
+  const maxRpd = Math.max(0.0001, ...R.map(r => r.revenue_per_dollar || 0));
+  const ranked = R.filter(r => r.touched).sort((a, b) => (b.won - a.won) || ((b.response_rate || 0) - (a.response_rate || 0)));
+  const small = R.some(r => r.touched && r.touched < 20);
+  const leader = ranked[0];
+  $("#tab-results").innerHTML = `
+    <div class="grid4" style="margin-bottom:16px">
+      <div class="kpi"><div class="v">${touched}</div><div class="l">leads contacted</div></div>
+      <div class="kpi"><div class="v">${tot("responded")}</div><div class="l">responses</div></div>
+      <div class="kpi"><div class="v">${tot("won")}</div><div class="l">jobs won</div></div>
+      <div class="kpi"><div class="v">${money(tot("revenue"))}</div><div class="l">revenue · ${money(tot("cost"))} spent</div></div>
+    </div>
+    <div class="card">
+      <h2>${leader && (leader.won || leader.responded) ? `Leading so far: ${esc(leader.label)}` : "No results yet"}</h2>
+      <p class="hint">${!touched ? "Assign leads on the Outreach tab and log each contact. Results fill in as you mark leads responded, quoted or won."
+        : small ? "Early days: some channels have fewer than 20 contacts, so a single job can swing the ranking. Keep going before deciding."
+        : "Every channel has at least 20 contacts. Compare cost per job and revenue per dollar before shifting effort."}</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Channel</th><th class="num">Assigned</th><th class="num">Contacted</th><th class="num">Responded</th><th class="num">Quoted</th><th class="num">Won</th><th class="num">Response rate</th><th class="num">Win rate</th><th class="num">Spent</th><th class="num">Revenue</th><th class="num">Cost per job</th><th class="num">Revenue per $1</th></tr></thead>
+        <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.assigned}</td><td class="num">${r.touched}</td><td class="num">${r.responded}</td><td class="num">${r.quoted}</td><td class="num">${r.won}</td>
+          <td class="num">${pct(r.response_rate)}</td><td class="num">${pct(r.win_rate)}</td><td class="num">${money(r.cost)}</td><td class="num">${money(r.revenue)}</td>
+          <td class="num">${r.cost_per_win == null ? "–" : money(r.cost_per_win)}</td><td class="num">${r.revenue_per_dollar == null ? (r.revenue ? "free" : "–") : money(r.revenue_per_dollar)}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </div>
+    <div class="card"><h2>Response rate</h2><p class="hint">Share of contacted leads that called back or said yes.</p>
+      <div class="bars">${R.map(r => bar(r, r.response_rate || 0, maxRate, pct(r.response_rate))).join("")}</div></div>
+    <div class="card"><h2>Revenue per dollar spent</h2><p class="hint">Phone and property-manager outreach cost Steve's time, not cash; add a cost per contact in Settings to compare them fairly.</p>
+      <div class="bars">${R.map(r => bar(r, r.revenue_per_dollar || 0, maxRpd, r.revenue_per_dollar == null ? (r.revenue ? "free" : "–") : money(r.revenue_per_dollar))).join("")}</div></div>`;
+}
+const bar = (r, v, max, label) => `<div class="bar"><div>${chDot(r.channel)}</div><div class="track"><div class="fill" style="width:${Math.round(100 * v / max)}%;background:var(--c-${r.channel})"></div></div><div class="num" style="text-align:right">${label}</div></div>`;
+
+// ---------- Settings tab ----------------------------------------------------
+function renderSettings() {
+  const st = S.settings;
+  $("#tab-settings").innerHTML = `
+    <div class="card"><h2>Business</h2>
+      <div class="grid4">
+        <label>Business name<br><input id="sName" value="${esc(st.business_name)}" style="width:100%"></label>
+        <label>Main phone<br><input id="sPhone" value="${esc(st.business_phone)}" placeholder="(520) 555-0100" style="width:100%"></label>
+        <label>Base address (for miles and routes)<br><input id="sBase" value="${esc(st.base_address)}" style="width:100%"></label>
+      </div>
+      <p class="hint">${st.base_lat != null ? `Base located at ${(+st.base_lat).toFixed(4)}, ${(+st.base_lon).toFixed(4)}.` : "Base not located yet; it's looked up when you save or refresh."}</p>
+    </div>
+    <div class="card"><h2>Channels</h2>
+      <p class="hint">A separate tracking phone number per channel (Google Voice, CallRail and similar) is the cleanest way to know which channel a caller came from. Cost is what one contact costs, including printing and postage.</p>
+      <div class="tablewrap"><table><thead><tr><th>Channel</th><th>Cost per contact $</th><th>Tracking number</th></tr></thead><tbody>
+      ${Object.entries(S.channels).map(([c, n]) => `<tr><td>${chDot(c)}</td><td><input type="number" step="0.01" min="0" data-cost="${c}" value="${st.costs[c] ?? 0}" style="width:90px"></td>
+        <td><input data-track="${c}" value="${esc(st.tracking_numbers[c] || "")}" placeholder="uses main phone"></td></tr>`).join("")}</tbody></table></div></div>
+    <div class="card"><h2>Messages</h2><p class="hint">Fields: {owner}, {owner_first}, {address}, {phone}, {business}.</p>
+      ${Object.entries(S.channels).map(([c, n]) => `<h3>${esc(n)}</h3><textarea data-tpl="${c}">${esc(st.templates[c] || "")}</textarea>`).join("")}
+    </div>
+    <button class="btn primary" id="sSave">Save settings</button>`;
+  $("#sSave").onclick = () => {
+    const costs = {}, tracking = {}, templates = {};
+    document.querySelectorAll("[data-cost]").forEach(i => costs[i.dataset.cost] = Number(i.value || 0));
+    document.querySelectorAll("[data-track]").forEach(i => tracking[i.dataset.track] = i.value.trim());
+    document.querySelectorAll("[data-tpl]").forEach(i => templates[i.dataset.tpl] = i.value);
+    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), costs, tracking_numbers: tracking, templates }), "Settings saved");
+  };
+}
+
+// ---------- wiring ----------------------------------------------------------
+function render() {
+  renderHeader();
+  if (ui.tab === "leads") renderLeads();
+  if (ui.tab === "outreach") renderOutreach();
+  if (ui.tab === "results") renderResults();
+  if (ui.tab === "settings") renderSettings();
+  if (ui.open) renderDrawer();
+}
+document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; render(); });
+$("#refreshBtn").onclick = async () => {
+  const b = $("#refreshBtn"); b.disabled = true; b.textContent = "Refreshing…";
+  await act(() => api("/api/refresh", { days: 30 }), r => {
+    const t = r.tucson_code_cases || { new: 0, updated: 0 };
+    return `Tucson cases: ${t.new} new, ${t.updated} updated · owners found for ${r.owners.found}`;
+  });
+  b.disabled = false; b.textContent = "Refresh data";
+};
+$("#importFile").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const source = /\.csv$/i.test(f.name) ? "csv_import" : "pima_jp_calendar";
+  await act(async () => {
+    const r = await fetch(`/api/import?source=${source}&filename=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
+  }, r => `Imported ${r.new} new, ${r.updated} updated`);
+  e.target.value = "";
+};
+document.addEventListener("keydown", e => { if (e.key === "Escape" && ui.open) { ui.open = null; $("#drawer").classList.remove("open"); } });
+load().catch(e => { $("#sub").textContent = "Could not load: " + e.message; });
+</script>
+</body>
+</html>

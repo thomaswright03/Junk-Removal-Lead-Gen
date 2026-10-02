@@ -10,6 +10,7 @@ Researched October 2026. "Built" means there is a working importer in
 | City of Tucson code cases (last 60 days) | Junk/debris, weeds, outdoor storage, dumping, vacant buildings | Yes, plus parcel and lat/lon | Public ArcGIS REST API, no key | **Built, automatic** |
 | Pima County Consolidated Justice Court calendar | Every eviction hearing in the county: case number, landlord, tenant, hearing date | Usually no | Public web form, no CAPTCHA seen | **Built, from saved pages**; automatic fetch is next |
 | Justice Court records request | Eviction filings with property addresses | Yes | Online request form, may cost a fee | Import with `csv_import` once a file arrives |
+| Pima County Assessor parcels (owner lookup) | Owner name and mailing address, property use, year built | n/a (enrichment) | Public ArcGIS REST API, no key | **Built, automatic** |
 | Any CSV (constable lists, Steve's own leads) | Whatever columns it has | Usually | n/a | **Built** (`csv_import`) |
 | Pima County Recorder, notices of trustee sale | Upcoming foreclosures | Yes | Recorder document search | Not built |
 | Superior Court probate filings | Estate clean-outs | Sometimes | eAccess, paid per document or subscription | Not built |
@@ -35,6 +36,22 @@ Researched October 2026. "Built" means there is a working importer in
 - These leads are the property **owner** (look up the parcel on the Pima County
   Assessor site to get the owner's mailing address), who has a city deadline to
   clean up.
+
+## Pima County Assessor parcels (owner lookup, built)
+
+- API: `https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17`
+  (layer `PAREGION`, "all parcels in Pima County", maintained by Pima County
+  GIS and served by the City of Tucson).
+- Fields used: `PARCEL`, `ADDRESSEE` (owner / taxpayer), `ADDRESS`, `CITY`,
+  `STATE_PROVINCE`, `POSTAL_CODE` (mailing address), `SITE_ADDRESS`,
+  `USE_DESC`, `YearBuilt`. Checked on 2026-10-02 with parcel `10610001E`.
+- Tucson code cases carry a parcel number, so the match is exact. Leads with
+  only an address are matched on `SITE_ADDRESS`.
+- An owner is flagged **absentee** when the mailing address differs from the
+  property address, and **entity** when the name looks like a company, trust
+  or estate.
+- "Other properties this owner has" in the app searches `ADDRESSEE` by name
+  prefix, which is how an eviction plaintiff's portfolio can be found.
 
 ## Pima County Consolidated Justice Court (evictions)
 

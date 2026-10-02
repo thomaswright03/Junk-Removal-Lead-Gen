@@ -21,13 +21,47 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-## Daily use
+## Lead Desk (the web app)
+
+```sh
+leadgen serve
+```
+
+Opens http://127.0.0.1:8765 in your browser. It only runs on your computer and
+uses the same database as the commands below.
+
+- **Leads**: every open lead, ranked by score, with the owner of record from
+  the Pima County Assessor (name, mailing address, whether they live
+  elsewhere, whether it's an LLC or trust). Click a lead for details, the
+  owner's other properties, and to log outreach and results.
+- **Outreach**: the experiment. "Assign leads" deals the best unassigned
+  leads evenly across four channels: postcard to the owner, door hanger at
+  the property, phone call to the owner, and landlord / property-manager
+  outreach. Each channel has its own work queue: printable 6x4 postcards and a
+  mailing-list CSV, a driving route for door hangers, a call list with a
+  script, and a list of companies to pitch.
+- **Results**: per channel, how many leads were contacted, responded, were
+  quoted and won, what was spent, revenue, cost per job and revenue per
+  dollar.
+- **Settings**: business name and phone, a tracking phone number and cost
+  per contact for each channel, and the message templates.
+
+**Refresh data** pulls new Tucson cases and looks up owners. **Import
+evictions / CSV** takes a saved Justice Court calendar page or any CSV.
+
+Score: up to 40 points for what the case says (vacant building, dumping and
+trash/debris highest, weeds lowest; evictions 35), +20 if the owner's mailing
+address is elsewhere, +10 for a company/trust owner, +10 if the owner has
+several leads, +15 if under a week old (+8 under two weeks).
+
+## Daily use from the command line
 
 ```sh
 leadgen run
 ```
 
-That pulls new City of Tucson code cases, geocodes addresses and checks they
+That pulls new City of Tucson code cases, looks up each owner from the county
+assessor, geocodes addresses and checks they
 are in Pima County, marks leads older than 30 days as stale, and writes
 `exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`. Open the
 HTML file in a browser to search and filter; open the CSV in Excel or import it
@@ -67,6 +101,7 @@ never overwrites a status or notes.
 |---|---|
 | `leadgen sources` | List the sources and which ones run automatically |
 | `leadgen fetch --days 14` | Fetch only, with a 14-day look-back |
+| `leadgen enrich` | Look up owners for leads that don't have one yet |
 | `leadgen geocode` | Geocode leads that have an address but no coordinates |
 | `leadgen age` | Mark leads older than `--stale-days` (default 30) as stale |
 | `leadgen export --format html --include-stale` | Export everything, old leads too |

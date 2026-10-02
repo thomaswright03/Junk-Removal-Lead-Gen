@@ -10,13 +10,13 @@ that turn into clean-outs. Coverage is City of Tucson only; unincorporated Pima 
 the other towns are not in this layer.
 """
 
-import re
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 from .. import config
 from ..models import Lead
+from ..tucson_codes import code_of
 from .base import Source
 
 LAYER_URL = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PermitsCode/MapServer/103"
@@ -45,9 +45,6 @@ KEYWORDS = (
     "MATTRESS", "BLIGHT", "CLEAN UP", "CLEANUP", "GREEN WASTE", "YARD WASTE",
 )
 
-_CODE_RE = re.compile(r"^\s*([A-Z]{2,8})\s*[/:-]")
-
-
 def _epoch_ms_to_date(value):
     if value in (None, ""):
         return None
@@ -55,8 +52,7 @@ def _epoch_ms_to_date(value):
 
 
 def violation_code(description):
-    m = _CODE_RE.match((description or "").upper())
-    return m.group(1) if m else None
+    return code_of(description)
 
 
 def is_closed(attrs):
@@ -89,6 +85,7 @@ def feature_to_lead(feature):
         lat=lat,
         lon=lon,
         in_pima=True,
+        parcel=(a.get("PARCEL") or "").strip() or None,
         description=" | ".join(
             str(x) for x in (a.get("CaseType"), a.get("status"), a.get("DESCRIPTION")) if x
         ),

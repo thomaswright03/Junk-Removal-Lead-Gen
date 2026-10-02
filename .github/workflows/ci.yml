@@ -16,7 +16,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q
 
-  # Hits the live City of Tucson API so a change in its fields shows up here.
+  # Hits the live City of Tucson and county parcel APIs so a change in its fields shows up here.
   # Prints counts only; no lead data is uploaded (this repository is public).
   live-tucson:
     runs-on: ubuntu-latest
@@ -27,4 +27,12 @@ jobs:
           python-version: "3.11"
       - run: pip install -e .
       - run: leadgen --db /tmp/leads.db fetch --source tucson_code_cases --days 30
+      - run: leadgen --db /tmp/leads.db enrich --limit 50
       - run: leadgen --db /tmp/leads.db list --limit 0
+      - name: Lead Desk state on live data (counts only)
+        run: >
+          python -c "from leadgen.web import App; L=App('/tmp/leads.db').state()['leads'];
+          print(len(L), 'leads;', sum(1 for l in L if l['owner_name']), 'with owner;',
+          sum(1 for l in L if l['owner_absentee']), 'absentee;',
+          sum(1 for l in L if l['owner_entity']), 'company/trust;',
+          sum(1 for l in L if l['score'] >= 60), 'scored 60+')"

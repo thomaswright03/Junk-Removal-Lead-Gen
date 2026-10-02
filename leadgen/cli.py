@@ -2,7 +2,8 @@
 
 Typical daily run::
 
-    leadgen run                      # fetch automatic sources, geocode, age, export
+    leadgen serve                    # open the lead desk in your browser
+    leadgen run                      # fetch automatic sources, owners, geocode, age, export
     leadgen fetch --source pima_jp_calendar --file data/inbox/*.html
     leadgen export --format html --out exports/leads.html
 """
@@ -13,6 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import config, db, export
+from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
 
@@ -64,6 +66,20 @@ def cmd_geocode(args, conn=None):
     print(f"geocoded {ok} in Pima County, {outside} outside, {failed} not found")
 
 
+def cmd_enrich(args, conn=None):
+    conn = conn or _connect(args)
+    counts = enrich(conn, limit=getattr(args, "enrich_limit", None),
+                    refresh=getattr(args, "refresh", False))
+    print(f"owners: {counts['found']} found, {counts['not_found']} not found")
+
+
+def cmd_serve(args):
+    from .web import serve
+
+    serve(args.db, host=args.host, port=args.port, stale_days=args.stale_days,
+          open_browser=not args.no_browser)
+
+
 def cmd_age(args, conn=None):
     conn = conn or _connect(args)
     n = db.mark_stale(conn, args.stale_days)
@@ -103,6 +119,7 @@ def cmd_export(args, conn=None):
 def cmd_run(args):
     conn = _connect(args)
     cmd_fetch(args, conn)
+    cmd_enrich(args, conn)
     if not args.no_geocode:
         cmd_geocode(args, conn)
     cmd_age(args, conn)
@@ -168,6 +185,17 @@ def build_parser():
     sp = sub.add_parser("geocode", help="add coordinates and check the county")
     sp.add_argument("--limit", type=int)
     sp.set_defaults(func=cmd_geocode)
+
+    sp = sub.add_parser("enrich", help="look up each lead's owner from the county assessor")
+    sp.add_argument("--limit", dest="enrich_limit", type=int)
+    sp.add_argument("--refresh", action="store_true", help="look up leads already done too")
+    sp.set_defaults(func=cmd_enrich)
+
+    sp = sub.add_parser("serve", help="open the lead desk web app")
+    sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--no-browser", action="store_true")
+    sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser("age", help="mark old leads stale")
     sp.set_defaults(func=cmd_age)

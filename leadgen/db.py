@@ -43,18 +43,56 @@ CREATE TABLE IF NOT EXISTS leads (
     raw_json      TEXT,
     UNIQUE (source, source_id)
 );
+CREATE TABLE IF NOT EXISTS touches (
+    id         INTEGER PRIMARY KEY,
+    lead_id    INTEGER NOT NULL REFERENCES leads(id),
+    channel    TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    cost       REAL NOT NULL DEFAULT 0,
+    notes      TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS touches_lead ON touches(lead_id);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS leads_address_norm ON leads(address_norm);
 CREATE INDEX IF NOT EXISTS leads_event_date ON leads(event_date);
 CREATE INDEX IF NOT EXISTS leads_status ON leads(status);
 """
 
-STATUSES = ("new", "contacted", "quoted", "won", "lost", "skip", "stale")
+STATUSES = ("new", "contacted", "responded", "quoted", "won", "lost", "skip", "stale")
+
+# Columns added after the first release. ``connect`` adds any that an older
+# database is missing.
+_ADDED_COLUMNS = {
+    "parcel": "TEXT",
+    # Owner of record from the Pima County Assessor (see enrich.py).
+    "owner_name": "TEXT",
+    "owner_address": "TEXT",
+    "owner_city": "TEXT",
+    "owner_state": "TEXT",
+    "owner_zip": "TEXT",
+    "owner_absentee": "INTEGER",
+    "owner_entity": "INTEGER",
+    "property_use": "TEXT",
+    "year_built": "TEXT",
+    "enriched_at": "TEXT",
+    # Outreach experiment (see outreach.py).
+    "channel": "TEXT",
+    "assigned_at": "TEXT",
+    "responded_at": "TEXT",
+    "quote_amount": "REAL",
+    "job_revenue": "REAL",
+}
 
 # Columns a fetch is allowed to refresh on an existing row. A blank value
 # from upstream never wipes out a value we already have.
 _REFRESHABLE = (
     "lead_type", "event_date", "address", "address_norm", "city", "zip",
     "lat", "lon", "in_pima", "plaintiff", "defendant", "description", "url",
+    "parcel",
 )
 
 
@@ -69,7 +107,24 @@ def connect(path):
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn):
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(leads)")}
+    added = [c for c in _ADDED_COLUMNS if c not in have]
+    for col in added:
+        conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {_ADDED_COLUMNS[col]}")
+    if "parcel" in added:
+        # Tucson code cases from before parcels had their own column.
+        for row in conn.execute(
+            "SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'"
+        ).fetchall():
+            parcel = (json.loads(row["raw_json"] or "{}").get("PARCEL") or "").strip()
+            if parcel:
+                conn.execute("UPDATE leads SET parcel = ? WHERE id = ?", (parcel, row["id"]))
+    conn.commit()
 
 
 def upsert(conn, lead):
@@ -103,10 +158,10 @@ def upsert(conn, lead):
     cur = conn.execute(
         """
         INSERT INTO leads (source, source_id, lead_type, event_date, address,
-            address_norm, city, zip, lat, lon, in_pima, plaintiff, defendant,
-            description, url, first_seen, last_seen, raw_json)
+            address_norm, city, zip, lat, lon, in_pima, parcel, plaintiff,
+            defendant, description, url, first_seen, last_seen, raw_json)
         VALUES (:source, :source_id, :lead_type, :event_date, :address,
-            :address_norm, :city, :zip, :lat, :lon, :in_pima, :plaintiff,
+            :address_norm, :city, :zip, :lat, :lon, :in_pima, :parcel, :plaintiff,
             :defendant, :description, :url, :now, :now, :raw)
         """,
         {**d, "now": now, "raw": raw},
@@ -190,3 +245,16 @@ def save_geocode(conn, lead_id, result):
         "zip = COALESCE(zip, ?), city = COALESCE(city, ?) WHERE id = ?",
         (result.lat, result.lon, int(result.in_pima), result.zip, result.city, lead_id),
     )
+
+
+def get_settings(conn):
+    return {r["key"]: json.loads(r["value"]) for r in conn.execute("SELECT * FROM settings")}
+
+
+def put_settings(conn, values):
+    for k, v in values.items():
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (k, json.dumps(v)),
+        )

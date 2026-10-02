@@ -20,6 +20,7 @@ class Lead:
     lat: Optional[float] = None
     lon: Optional[float] = None
     in_pima: Optional[bool] = None
+    parcel: Optional[str] = None  # Pima County Assessor parcel number (APN)
     plaintiff: Optional[str] = None  # landlord / property manager: the likely customer
     defendant: Optional[str] = None
     description: Optional[str] = None
