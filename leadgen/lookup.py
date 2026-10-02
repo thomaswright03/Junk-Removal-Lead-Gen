@@ -131,26 +131,27 @@ class ProviderUnavailable(Exception):
 
 class OsmProvider:
     name = "osm"
-    # After this many lookups in a row where no Overpass server answered,
-    # stop trying for the rest of the run instead of waiting on each company.
+    # A server that fails this many times in a row is dropped for the rest of
+    # the run; once every server is dropped, OSM lookups are skipped instead of
+    # waiting on each company. Worst case is servers x max_failures x timeout.
     max_failures = 2
 
-    def __init__(self, session=None, radius_m=80, delay=1.0, timeout=20):
+    def __init__(self, session=None, radius_m=80, delay=1.0, timeout=15):
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
         self.radius = radius_m
         self.delay = delay
         self.timeout = timeout
-        self.failures = 0
+        self.strikes = {}
         self.urls = list(OVERPASS_URLS)
 
     def find(self, lead, business_name):
         if lead["lat"] is None or lead["lon"] is None:
             return None
-        if self.failures >= self.max_failures:
+        if not self.urls:
             raise ProviderUnavailable("Overpass servers not responding; skipped for this run")
         q = f"""
-        [out:json][timeout:15];
+        [out:json][timeout:10];
         (
           nwr(around:{self.radius},{lead['lat']},{lead['lon']})["phone"];
           nwr(around:{self.radius},{lead['lat']},{lead['lon']})["contact:phone"];
@@ -168,14 +169,16 @@ class OsmProvider:
                 resp.raise_for_status()
             except requests.RequestException as e:
                 last_error = e
+                self.strikes[url] = self.strikes.get(url, 0) + 1
+                if self.strikes[url] >= self.max_failures:
+                    self.urls.remove(url)
                 continue
-            self.failures = 0
+            self.strikes[url] = 0
             if self.urls[0] != url:  # ask the server that answered first next time
                 self.urls.remove(url)
                 self.urls.insert(0, url)
             time.sleep(self.delay)
             return pick_osm(resp.json().get("elements") or [], business_name)
-        self.failures += 1
         raise last_error
 
 

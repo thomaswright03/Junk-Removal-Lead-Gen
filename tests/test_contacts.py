@@ -211,13 +211,14 @@ def test_osm_stops_after_servers_keep_timing_out():
 
     osm = OsmProvider(session=DeadSession(), delay=0)
     lead = {"lat": 32.2, "lon": -110.9}
+    servers = len(osm.urls)
     for _ in range(OsmProvider.max_failures):
         with pytest.raises(requests.ReadTimeout):
             osm.find(lead, "X LLC")
-    tried = DeadSession.calls
+    assert DeadSession.calls == servers * OsmProvider.max_failures
     with pytest.raises(ProviderUnavailable):
         osm.find(lead, "X LLC")
-    assert DeadSession.calls == tried  # no more waiting on dead servers
+    assert DeadSession.calls == servers * OsmProvider.max_failures  # no more waiting
 
 
 def test_osm_prefers_the_server_that_answered():
