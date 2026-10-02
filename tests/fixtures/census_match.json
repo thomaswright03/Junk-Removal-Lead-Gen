@@ -1,0 +1,5 @@
+{"result": {"input": {}, "addressMatches": [
+  {"matchedAddress": "8790 N WELLSIDE DR, TUCSON, AZ, 85704",
+   "coordinates": {"x": -110.98, "y": 32.36},
+   "addressComponents": {"city": "TUCSON", "state": "AZ", "zip": "85704"},
+   "geographies": {"Counties": [{"GEOID": "04019", "NAME": "Pima County"}]}}]}}

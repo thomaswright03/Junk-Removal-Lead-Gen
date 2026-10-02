@@ -1,0 +1,89 @@
+{
+ "features": [
+  {
+   "attributes": {
+    "OBJECTID": 1,
+    "CASENUMBER": "T26CE01001",
+    "status": "Notice of Violation",
+    "OPENEDDATE": 1790251200000,
+    "CLOSEDDATE": null,
+    "DESCRIPTION": "PMMULT / trash and debris, old furniture in front yard",
+    "MainAddress": "1234 E FAKE ST",
+    "DATASOURCE": "ENGOV",
+    "PARCEL": "12345678A",
+    "NHA": "",
+    "LAT": 32.2501,
+    "LON": -110.9301,
+    "CaseType": "Property Maintenance"
+   },
+   "geometry": {
+    "x": -110.9301,
+    "y": 32.2501
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 2,
+    "CASENUMBER": "T26CE01002",
+    "status": "Assigned",
+    "OPENEDDATE": 1790251200000,
+    "CLOSEDDATE": null,
+    "DESCRIPTION": "RWOP / Detached carport placed in front yard",
+    "MainAddress": "99 W SAMPLE RD",
+    "DATASOURCE": "ENGOV",
+    "PARCEL": "",
+    "NHA": "",
+    "LAT": 32.2,
+    "LON": -110.9,
+    "CaseType": "Building"
+   },
+   "geometry": {
+    "x": -110.9,
+    "y": 32.2
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 3,
+    "CASENUMBER": "T26CE01003",
+    "status": "Active",
+    "OPENEDDATE": 1790337600000,
+    "CLOSEDDATE": null,
+    "DESCRIPTION": "Structure open to entry",
+    "MainAddress": "500 S EXAMPLE AVE",
+    "DATASOURCE": "ENGOV",
+    "PARCEL": "",
+    "NHA": "",
+    "LAT": null,
+    "LON": null,
+    "CaseType": "Vacant/Nuisance Buildings"
+   },
+   "geometry": {
+    "x": -110.95,
+    "y": 32.21
+   }
+  },
+  {
+   "attributes": {
+    "OBJECTID": 4,
+    "CASENUMBER": "T26CE01004",
+    "status": "Closed - Resolved",
+    "OPENEDDATE": 1790251200000,
+    "CLOSEDDATE": null,
+    "DESCRIPTION": "REFS / trash accumulation",
+    "MainAddress": "1234 E FAKE ST",
+    "DATASOURCE": "ENGOV",
+    "PARCEL": "12345678A",
+    "NHA": "",
+    "LAT": 32.2501,
+    "LON": -110.9301,
+    "CaseType": "Property Maintenance"
+   },
+   "geometry": {
+    "x": -110.9301,
+    "y": 32.2501
+   }
+  }
+ ],
+ "exceededTransferLimit": false
+}

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  # Hits the live City of Tucson API so a change in its fields shows up here.
+  # Prints counts only; no lead data is uploaded (this repository is public).
+  live-tucson:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - run: leadgen --db /tmp/leads.db fetch --source tucson_code_cases --days 30
+      - run: leadgen --db /tmp/leads.db list --limit 0
