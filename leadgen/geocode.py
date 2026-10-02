@@ -55,7 +55,7 @@ def parse_census_response(payload):
 class CensusGeocoder:
     def __init__(self, session=None, delay=0.5):
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", config.USER_AGENT)
+        self.session.headers["User-Agent"] = config.USER_AGENT
         self.delay = delay
 
     def geocode(self, address, city=None, zip_code=None):

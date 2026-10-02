@@ -69,7 +69,7 @@ def owner_fields(attrs):
 class ParcelClient:
     def __init__(self, session=None):
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", config.USER_AGENT)
+        self.session.headers["User-Agent"] = config.USER_AGENT
 
     def query(self, where, limit=None):
         params = {

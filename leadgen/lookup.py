@@ -36,7 +36,12 @@ from . import config
 from .contacts import clean_email, clean_phone
 from .enrich import is_entity
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Public Overpass servers, tried in order when one refuses or is overloaded.
+OVERPASS_URLS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+)
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 GOOGLE_MAX_AGE_DAYS = 30
 TUCSON = (32.2226, -110.9747)
@@ -79,15 +84,43 @@ def is_multifamily(use):
     return any(k in u for k in ("APART", "MULTI", "MFR", "CONDO", "TOWNHOUSE", "MOBILE HOME PARK"))
 
 
+_BUSINESS_WORDS = {
+    "LLC", "LLLP", "LP", "LTD", "INC", "CORP", "CORPORATION", "CO", "COMPANY", "GROUP",
+    "PROPERTIES", "PROPERTY", "HOLDINGS", "INVESTMENTS", "INVESTMENT", "HOMES", "REALTY",
+    "REAL", "MANAGEMENT", "MGMT", "RESIDENTIAL", "COMMUNITIES", "APARTMENTS", "APARTMENT",
+    "RENTALS", "RENTAL", "CAPITAL", "PARTNERS", "PARTNERSHIP", "VENTURES", "FUND", "ASSOCIATES",
+    "ASSN", "ASSOCIATION", "BANK", "LENDING", "DEVELOPMENT", "ENTERPRISES", "HOUSING", "VILLAGE",
+}
+_SPLIT_RE = re.compile(r"\s*(?:\bATTN\b:?|\bC/O\b|%)\s*", re.I)
+
+
+def split_owner(name):
+    """'SUMMIT RIDGE AZ LLC ATTN: DASMEN RESIDENTIAL' ->
+    ('SUMMIT RIDGE AZ LLC', 'DASMEN RESIDENTIAL')."""
+    parts = _SPLIT_RE.split((name or "").strip(), maxsplit=1)
+    owner = parts[0].strip(" ,") or None
+    attn = parts[1].strip(" ,") if len(parts) > 1 else None
+    return owner, attn or None
+
+
+def is_business(name):
+    """A company, not a person or a family/living trust."""
+    words = set(re.findall(r"[A-Z]+", (name or "").upper()))
+    return bool(words & _BUSINESS_WORDS)
+
+
 def lookup_targets(lead):
-    """What to search for this lead: (business name or None, search the site?)."""
-    name = None
-    if lead["plaintiff"]:
-        name = lead["plaintiff"]
-    elif lead["owner_name"] and (lead["owner_entity"] or is_entity(lead["owner_name"])):
-        name = lead["owner_name"]
-    site = bool(lead["address"]) and (is_multifamily(lead["property_use"]) or name is not None)
-    return name, site
+    """Business names to search for this lead, best first, and whether to
+    look for a business at the property itself (apartment leasing office)."""
+    names = []
+    for raw in (lead["plaintiff"], lead["owner_name"]):
+        owner, attn = split_owner(raw)
+        # "ATTN:" usually names the management company: the one to call.
+        for n in (attn, owner):
+            if n and is_business(n) and n.upper() not in (x.upper() for x in names):
+                names.append(n)
+    site = bool(lead["address"]) and (is_multifamily(lead["property_use"]) or bool(names))
+    return names, site
 
 
 # ---------------------------------------------------------------- providers --
@@ -97,7 +130,7 @@ class OsmProvider:
 
     def __init__(self, session=None, radius_m=80, delay=1.0):
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", config.USER_AGENT)
+        self.session.headers["User-Agent"] = config.USER_AGENT
         self.radius = radius_m
         self.delay = delay
 
@@ -115,10 +148,17 @@ class OsmProvider:
         );
         out tags center 20;
         """
-        resp = self.session.post(OVERPASS_URL, data={"data": q}, timeout=config.HTTP_TIMEOUT)
-        resp.raise_for_status()
-        time.sleep(self.delay)
-        return pick_osm(resp.json().get("elements") or [], business_name)
+        last_error = None
+        for url in OVERPASS_URLS:
+            try:
+                resp = self.session.post(url, data={"data": q}, timeout=config.HTTP_TIMEOUT,
+                                         headers={"Accept": "application/json"})
+                resp.raise_for_status()
+                time.sleep(self.delay)
+                return pick_osm(resp.json().get("elements") or [], business_name)
+            except requests.RequestException as e:
+                last_error = e
+        raise last_error
 
 
 def pick_osm(elements, business_name):
@@ -253,7 +293,7 @@ def scan_html(html, base_url):
 class WebsiteScanner:
     def __init__(self, session=None):
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", config.USER_AGENT)
+        self.session.headers["User-Agent"] = config.USER_AGENT
 
     def _allowed(self, url):
         root = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
@@ -301,6 +341,10 @@ class WebsiteScanner:
 
 # ------------------------------------------------------------------ runner --
 
+def _reach(c):
+    return (bool(c.phone), bool(c.email), bool(c.website))
+
+
 def _now():
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -341,28 +385,31 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
     for lead in rows:
         if limit and counts["checked"] >= limit:
             break
-        name, site = lookup_targets(lead)
-        if not name and not site:
+        names, site = lookup_targets(lead)
+        if not names and not site:
             counts["skipped_people"] += 1
             continue
-        key = (name or "").upper().strip() or f"site:{lead['id']}"
+        key = names[0].upper() if names else f"site:{lead['id']}"
         if key in done:
             contact, failed = done[key]
         else:
             counts["checked"] += 1
             contact, failed = None, False
-            for prov in providers:
-                try:
-                    c = prov.find(lead, name)
-                except Exception as e:  # one provider failing shouldn't stop the run
-                    counts["errors"] += 1
-                    failed = True
-                    log(f"  {prov.name} lookup failed for {name or lead['address']}: {e}")
-                    continue
-                if c and not c.empty():
-                    contact = c
-                    if c.phone and c.email:
+            for name in names or [None]:
+                for prov in providers:
+                    try:
+                        c = prov.find(lead, name)
+                    except Exception as e:  # one provider failing shouldn't stop the run
+                        counts["errors"] += 1
+                        failed = True
+                        log(f"  {prov.name} lookup failed: {type(e).__name__}: {e}")
+                        continue
+                    if c and not c.empty() and (contact is None or _reach(c) > _reach(contact)):
+                        contact = c
+                    if contact and contact.phone and contact.email:
                         break
+                if contact and contact.phone:
+                    break
             if contact and contact.website and not (contact.phone and contact.email):
                 try:
                     w = scanner.scan(contact.website) if scanner else None

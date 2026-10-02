@@ -1,7 +1,7 @@
 from leadgen import db
 from leadgen.contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
 from leadgen.lookup import (Contact, find_contacts, lookup_targets, names_match, pick_osm,
-                            scan_html)
+                            scan_html, split_owner)
 from leadgen.models import Lead
 from leadgen.web import App
 
@@ -66,9 +66,22 @@ def test_names_match():
 def test_lookup_targets_skip_people():
     conn = make_db()
     rows = {r["source_id"]: r for r in conn.execute("SELECT * FROM leads")}
-    assert lookup_targets(rows["1"]) == ("SAGUARO VISTA APARTMENTS LLC", True)
-    assert lookup_targets(rows["2"]) == (None, False)
-    assert lookup_targets(rows["CV26-1"]) == ("DESERT SKY PROPERTY MGMT LLC", False)
+    assert lookup_targets(rows["1"]) == (["SAGUARO VISTA APARTMENTS LLC"], True)
+    assert lookup_targets(rows["2"]) == ([], False)
+    assert lookup_targets(rows["CV26-1"]) == (["DESERT SKY PROPERTY MGMT LLC"], False)
+
+
+def test_owner_names_attn_and_family_trusts():
+    def lead(owner):
+        return {"plaintiff": None, "owner_name": owner, "address": "1 MAIN ST",
+                "property_use": "SFR"}
+    assert split_owner("SUMMIT RIDGE AZ LLC ATTN: DASMEN RESIDENTIAL") == (
+        "SUMMIT RIDGE AZ LLC", "DASMEN RESIDENTIAL")
+    assert lookup_targets(lead("SUMMIT RIDGE AZ LLC ATTN: DASMEN RESIDENTIAL"))[0] == [
+        "DASMEN RESIDENTIAL", "SUMMIT RIDGE AZ LLC"]
+    assert lookup_targets(lead("MARTS FAMILY TR ATTN: DANIEL V & BRENDA L MARTS TR")) == ([], False)
+    assert lookup_targets(lead("BTFD REVOC TR")) == ([], False)
+    assert lookup_targets(lead("ZAZ PROPERTIES ACQ 1"))[0] == ["ZAZ PROPERTIES ACQ 1"]
 
 
 def test_pick_osm_prefers_name_match_then_housing():

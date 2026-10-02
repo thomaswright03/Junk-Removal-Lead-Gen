@@ -19,5 +19,5 @@ PIMA_COUNTY_FIPS = "04019"
 # does not report a county.
 PIMA_BBOX = (-113.34, 31.33, -110.45, 32.52)
 
-USER_AGENT = "leadgen/0.1 (Pima County junk-removal lead list)"
+USER_AGENT = "leadgen/0.1 (+https://github.com/thomaswright03/Junk-Removal-Lead-Gen)"
 HTTP_TIMEOUT = 30

@@ -100,7 +100,7 @@ class TucsonCodeCases(Source):
 
     def __init__(self, session=None):
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", config.USER_AGENT)
+        self.session.headers["User-Agent"] = config.USER_AGENT
 
     def _query(self, where, offset):
         resp = self.session.get(
