@@ -28,6 +28,7 @@ def make_db(path=":memory:"):
                  "property_use='APARTMENTS 25+ UNITS', owner_address='PO BOX 1' WHERE parcel='P1'")
     conn.execute("UPDATE leads SET owner_name='SMITH JOHN', owner_entity=0, "
                  "property_use='SFR GRADE 010-3', owner_address='10 E OWNER LN' WHERE parcel='P2'")
+    db.put_settings(conn, {"lead_view": "all"})
     conn.commit()
     return conn
 

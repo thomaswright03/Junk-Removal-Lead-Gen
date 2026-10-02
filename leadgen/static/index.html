@@ -106,8 +106,8 @@ dt { color: var(--muted); font-size: 13px; } dd { margin: 0; }
     <button data-tab="settings">Settings</button>
   </nav>
   <div class="spacer"></div>
-  <label class="btn" title="Saved Justice Court calendar page (.html) or a CSV of leads">
-    Import evictions / CSV
+  <label class="btn" title="Saved Justice Court case page or calendar page (.html), or a CSV of leads">
+    Import court page / CSV
     <input type="file" id="importFile" accept=".html,.htm,.csv" hidden>
   </label>
   <button class="btn primary" id="refreshBtn">Refresh data</button>
@@ -171,6 +171,7 @@ function statusChip(s) {
 }
 function whatLabel(l) {
   if (l.lead_type === "eviction") return "Eviction";
+  if (l.lead_type === "civil") return "Civil case";
   return l.code_label || (l.description || "").split(" | ")[0] || l.lead_type;
 }
 function mapUrl(l) {
@@ -197,6 +198,28 @@ function fill(channel, l) {
     .replaceAll("{address}", title(l.address) || "your property")
     .replaceAll("{phone}", phone)
     .replaceAll("{business}", st.business_name || "");
+}
+function noticeChip(l) {
+  if (l.lead_type !== "eviction") return "";
+  if (l.eviction_notice === 1) return ` <span class="chip good" title="An eviction notice is filed in the court case">notice filed</span>`;
+  if (l.eviction_notice === 0) return ` <span class="chip" title="No eviction notice in the case documents yet">no notice yet</span>`;
+  return ` <span class="chip warn" title="Case page not read yet. Add the case link or press Update court cases.">case not checked</span>`;
+}
+const courtDate = v => v ? v.replace(/^(\d{4})-(\d\d)-(\d\d)(?: (\d\d:\d\d))?$/, (m, y, mo, d, t) => `${+mo}/${+d}/${y}${t ? " " + t : ""}`) : "";
+const VIEW_LABEL = { eviction_notice: "Evictions with an eviction notice", evictions: "All evictions", all: "All leads (code cases too)" };
+async function addCases(text, btn) {
+  if (!text.trim()) return toast("Paste one or more case page links first.");
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Reading cases…";
+  await act(() => api("/api/cases/add", { text }), r =>
+    `Cases: ${r.new} new, ${r.updated} updated, ${r.with_notice} with an eviction notice` +
+    (r.failed ? `, ${r.failed} could not be read` : "") + (r.skipped.length ? `. Skipped (not case links): ${r.skipped.slice(0, 3).join(", ")}` : ""));
+  btn.disabled = false; btn.textContent = label;
+}
+async function updateCases(btn) {
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Checking cases…";
+  await act(() => api("/api/cases/update", { force: true }), r =>
+    `Re-read ${r.checked} court cases, ${r.with_notice} with an eviction notice` + (r.failed ? `, ${r.failed} failed` : ""));
+  btn.disabled = false; btn.textContent = label;
 }
 function activeLeads() {
   return S.leads.filter(l => l.status !== "stale" && l.status !== "skip");
@@ -260,7 +283,23 @@ function filteredLeads() {
 function renderLeads() {
   const rows = filteredLeads();
   const opts = (pairs, cur) => pairs.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
+  const vc = S.view_counts || {}, view = S.settings.lead_view || "eviction_notice";
+  const emptyMsg = view === "all" ? "No leads match. Try “Any status”, or press Refresh data."
+    : `No ${view === "eviction_notice" ? "eviction cases with an eviction notice" : "eviction cases"} yet. Paste court case links above (from the
+       <a href="https://www.jp.pima.gov/CaseSearch/" target="_blank" rel="noopener">Justice Court case search</a>), or import a saved case page.` +
+      (vc.unchecked ? ` ${vc.unchecked} eviction cases haven't been checked for a notice yet.` : "");
   $("#tab-leads").innerHTML = `
+    <div class="card" style="margin-bottom:12px">
+      <div class="row">
+        <label>Show <select id="fView">${opts(Object.entries(VIEW_LABEL).map(([v, t]) => [v, `${t} (${vc[v] ?? 0})`]), view)}</select></label>
+        <button class="btn" id="cUpdate" title="Re-read every open eviction case page for new documents and court dates">Update court cases</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="cLinks" style="flex:1;min-width:260px" placeholder="Paste Justice Court case links, e.g. https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=1234567">
+        <button class="btn primary" id="cAdd">Add cases</button>
+      </div>
+      <p class="hint" style="margin-bottom:0">Each case page is read once, with a short pause between cases. Lead Desk keeps cases whose documents include an eviction notice.</p>
+    </div>
     <div class="row" style="margin-bottom:10px">
       <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes">Find landlord phones &amp; emails</button>
       <a class="btn" href="/api/skiptrace.csv" download="skiptrace.csv" style="text-decoration:none" title="Owners still missing a phone, formatted for a skip-tracing service">Download skip-trace list</a>
@@ -279,18 +318,22 @@ function renderLeads() {
       <tbody>${rows.map(l => `<tr class="click" data-id="${l.id}">
         <td class="num">${scoreChip(l.score)}</td>
         <td style="white-space:nowrap">${esc(l.event_date || "")}</td>
-        <td>${esc(whatLabel(l))}</td>
+        <td>${esc(whatLabel(l))}${noticeChip(l)}${l.next_court_date ? `<div class="muted" style="font-size:12px">court ${esc(courtDate(l.next_court_date))}</div>` : ""}</td>
         <td>${l.address ? esc(title(l.address)) : '<span class="muted">address needed</span>'}${l.property_use ? `<div class="muted" style="font-size:12px">${esc(title(l.property_use))}</div>` : ""}</td>
         <td>${ownerLine(l)}</td>
         <td style="white-space:nowrap">${phoneCell(l)}</td>
         <td>${emailCell(l)}</td>
         <td class="num">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
         <td>${chDot(l.channel)}</td>
-        <td>${statusChip(l.status)}</td></tr>`).join("") || `<tr><td colspan="10" class="empty">No leads match. Try “Any status”, or press Refresh data.</td></tr>`}
+        <td>${statusChip(l.status)}</td></tr>`).join("") || `<tr><td colspan="10" class="empty">${emptyMsg}</td></tr>`}
       </tbody></table></div>
     <p class="hint">${rows.length} shown. Score adds up how much hauling the case suggests, whether the owner lives elsewhere or is a company, repeat owners, and how recent it is. Miles are straight-line from ${esc(S.settings.base_address)}.</p>`;
   $("#q").oninput = e => { ui.q = e.target.value; renderLeadsBody(); };
   $("#fType").onchange = e => { ui.type = e.target.value; renderLeads(); };
+  $("#fView").onchange = e => act(() => api("/api/settings", { lead_view: e.target.value }));
+  $("#cAdd").onclick = e => addCases($("#cLinks").value, e.currentTarget);
+  $("#cLinks").onkeydown = e => { if (e.key === "Enter") addCases(e.target.value, $("#cAdd")); };
+  $("#cUpdate").onclick = e => updateCases(e.currentTarget);
   $("#fStatus").onchange = e => { ui.status = e.target.value; renderLeads(); };
   $("#fChannel").onchange = e => { ui.channel = e.target.value; renderLeads(); };
   $("#fSort").onchange = e => { ui.sort = e.target.value; renderLeads(); };
@@ -324,10 +367,12 @@ function renderDrawer() {
     <h2>${l.address ? esc(title(l.address)) : esc(title(l.plaintiff || l.source_id))}</h2>
     <div class="row">${scoreChip(l.score)} ${statusChip(l.status)} ${chDot(ch)}</div>
     <dl>
-      <dt>What</dt><dd>${esc(whatLabel(l))}</dd>
+      <dt>What</dt><dd>${esc(whatLabel(l))}${noticeChip(l)}</dd>
+      ${l.case_status ? `<dt>Case status</dt><dd>${esc(l.case_status)}</dd>` : ""}
+      ${l.next_court_date ? `<dt>Next court</dt><dd>${esc(courtDate(l.next_court_date))}</dd>` : ""}
       <dt>Details</dt><dd>${esc(l.description || "")}</dd>
       <dt>Date</dt><dd>${esc(l.event_date || "")}</dd>
-      <dt>Case</dt><dd>${esc(l.source_id)}${l.url ? ` · <a href="${esc(l.url)}" target="_blank" rel="noopener">source</a>` : ""}</dd>
+      <dt>Case</dt><dd>${esc(l.source_id)}${l.url ? ` · <a href="${esc(l.url)}" target="_blank" rel="noopener">${/jcDisplayCase/i.test(l.url) ? "court case page" : "source"}</a>` : ""}</dd>
       ${l.lead_type === "eviction" ? `<dt>Landlord</dt><dd>${esc(l.plaintiff || "")}</dd><dt>Tenant</dt><dd>${esc(l.defendant || "")}</dd>` : ""}
       <dt>Owner</dt><dd>${ownerLine(l)}</dd>
       <dt>Mailing addr</dt><dd>${ownerMail}</dd>
@@ -605,7 +650,9 @@ $("#refreshBtn").onclick = async () => {
   const b = $("#refreshBtn"); b.disabled = true; b.textContent = "Refreshing…";
   await act(() => api("/api/refresh", { days: 30 }), r => {
     const t = r.tucson_code_cases || { new: 0, updated: 0 };
-    return `Tucson cases: ${t.new} new, ${t.updated} updated · owners found for ${r.owners.found}`;
+    const c = r.cases || { checked: 0 };
+    return `Tucson cases: ${t.new} new, ${t.updated} updated · owners found for ${r.owners.found}` +
+      (c.checked ? ` · ${c.checked} court cases re-read` : "");
   });
   b.disabled = false; b.textContent = "Refresh data";
 };
@@ -615,7 +662,7 @@ $("#importFile").onchange = async e => {
   await act(async () => {
     const r = await fetch(`/api/import?source=${source}&filename=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() });
     const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
-  }, r => `Imported ${r.new} new, ${r.updated} updated`);
+  }, r => `Imported ${r.new} new, ${r.updated} updated` + (r.with_notice != null ? (r.with_notice ? " · eviction notice filed" : " · no eviction notice in this case yet") : ""));
   e.target.value = "";
 };
 document.addEventListener("keydown", e => { if (e.key === "Escape" && ui.open) { ui.open = null; $("#drawer").classList.remove("open"); } });

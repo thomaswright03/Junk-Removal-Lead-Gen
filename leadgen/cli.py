@@ -102,6 +102,19 @@ def cmd_contacts(args):
         print(f"wrote owners missing a phone to {out}")
 
 
+def cmd_cases(args):
+    from .sources.pima_jp_case import add_cases, update_cases
+
+    conn = _connect(args)
+    if args.action == "add":
+        if not args.links:
+            sys.exit("cases add needs one or more case links or IDs")
+        counts = add_cases(conn, " ".join(args.links))
+    else:
+        counts = update_cases(conn, limit=args.limit)
+    print(counts)
+
+
 def cmd_serve(args):
     from .web import serve
 
@@ -230,6 +243,15 @@ def build_parser():
     sp.add_argument("--google-key", help="find: Google Places API key "
                     "(or set GOOGLE_PLACES_API_KEY)")
     sp.set_defaults(func=cmd_contacts)
+
+    sp = sub.add_parser(
+        "cases",
+        help="read Justice Court case pages: add cases by link, or update eviction cases")
+    sp.add_argument("action", choices=("add", "update"))
+    sp.add_argument("links", nargs="*",
+                    help="add: case page links (jcDisplayCase.aspx?ID=...) or IDs")
+    sp.add_argument("--limit", type=int, help="update: max cases to re-read")
+    sp.set_defaults(func=cmd_cases)
 
     sp = sub.add_parser("serve", help="open the lead desk web app")
     sp.add_argument("--port", type=int, default=8765)

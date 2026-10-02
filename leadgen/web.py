@@ -22,6 +22,7 @@ from .enrich import ParcelClient, enrich, owner_fields
 from .geocode import CensusGeocoder
 from .lookup import find_contacts, providers_from
 from .sources import AUTOMATIC, SOURCES
+from .sources.pima_jp_case import add_cases, is_case_page, parse_case_html, update_cases
 from .tucson_codes import CODE_LABELS, code_of
 
 STATIC = Path(__file__).parent / "static"
@@ -33,8 +34,13 @@ LEAD_FIELDS = (
     "owner_zip", "owner_absentee", "owner_entity", "property_use", "year_built",
     "enriched_at", "channel", "assigned_at", "responded_at", "quote_amount", "job_revenue",
     "owner_phone", "owner_email", "owner_website", "contact_source", "contact_name",
-    "contact_checked_at",
+    "contact_checked_at", "eviction_notice", "case_status", "next_court_date", "case_checked_at",
 )
+LEAD_VIEWS = {
+    "eviction_notice": "lead_type = 'eviction' AND eviction_notice = 1",
+    "evictions": "lead_type = 'eviction'",
+    "all": "1=1",
+}
 EDITABLE = {"status", "channel", "notes", "quote_amount", "job_revenue", "responded_at",
             "owner_phone", "owner_email"}
 
@@ -44,8 +50,10 @@ def _now():
 
 
 class App:
-    def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None):
+    def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None,
+                 case_client=None):
         self.db_path = db_path
+        self.case_client = case_client
         self.stale_days = stale_days
         self.parcel_client = parcel_client
         self.geocoder = geocoder
@@ -63,9 +71,11 @@ class App:
 
     def leads(self, conn, settings=None):
         settings = settings or self.settings(conn)
+        view = LEAD_VIEWS.get(settings.get("lead_view")) or LEAD_VIEWS["eviction_notice"]
         rows = conn.execute(
             "SELECT * FROM leads WHERE duplicate_of IS NULL "
-            "AND (in_pima = 1 OR in_pima IS NULL) ORDER BY event_date DESC, id DESC"
+            f"AND (in_pima = 1 OR in_pima IS NULL) AND {view} "
+            "ORDER BY event_date DESC, id DESC"
         ).fetchall()
         owner_counts = {}
         for r in rows:
@@ -97,8 +107,17 @@ class App:
             public = dict(settings)
             key = public.pop("google_places_api_key", "") or ""
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
+            counts = conn.execute(
+                "SELECT COUNT(*) AS all_, SUM(lead_type = 'eviction') AS evictions, "
+                "SUM(lead_type = 'eviction' AND eviction_notice = 1) AS eviction_notice, "
+                "SUM(lead_type = 'eviction' AND eviction_notice IS NULL) AS unchecked "
+                "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
+            ).fetchone()
             return {
                 "leads": self.leads(conn, settings),
+                "view_counts": {"all": counts["all_"] or 0, "evictions": counts["evictions"] or 0,
+                                "eviction_notice": counts["eviction_notice"] or 0,
+                                "unchecked": counts["unchecked"] or 0},
                 "settings": public,
                 "channels": outreach.CHANNELS,
                 "results": outreach.results(conn),
@@ -188,6 +207,8 @@ class App:
         with self.conn() as conn:
             current = self.settings(conn)
             values = {k: v for k, v in body.items() if k in allowed}
+            if "lead_view" in values and values["lead_view"] not in LEAD_VIEWS:
+                raise ValueError("lead_view must be one of " + ", ".join(LEAD_VIEWS))
             if not values.get("google_places_api_key"):
                 values.pop("google_places_api_key", None)  # blank field keeps the saved key
             if body.get("clear_google_key"):
@@ -223,6 +244,7 @@ class App:
                 conn.commit()
                 summary[name] = counts
             summary["owners"] = enrich(conn, self.parcel_client or ParcelClient())
+            summary["cases"] = update_cases(conn, self.case_client, log=lambda m: None)
             summary["stale"] = db.mark_stale(conn, self.stale_days)
         self._ensure_base()
         return summary
@@ -238,6 +260,21 @@ class App:
             counts["messages"] = log[:10]
             return counts
 
+    def add_cases(self, body):
+        log = []
+        with self.lock, self.conn() as conn:
+            counts = add_cases(conn, body.get("text") or "", self.case_client, log=log.append)
+        counts["messages"] = log[:10]
+        return counts
+
+    def update_cases(self, body):
+        log = []
+        with self.lock, self.conn() as conn:
+            counts = update_cases(conn, self.case_client, limit=int(body.get("limit") or 0) or None,
+                                  max_age_hours=0 if body.get("force") else 12, log=log.append)
+        counts["messages"] = log[:10]
+        return counts
+
     def run_enrich(self, body):
         with self.lock, self.conn() as conn:
             return enrich(conn, self.parcel_client or ParcelClient(),
@@ -249,6 +286,16 @@ class App:
                 return import_contacts(conn, data.decode("utf-8-sig", errors="replace"))
         if source not in ("pima_jp_calendar", "csv_import"):
             raise ValueError("source must be pima_jp_calendar or csv_import")
+        text = data.decode("utf-8", errors="replace")
+        if source == "pima_jp_calendar" and is_case_page(text):
+            lead = parse_case_html(text)
+            if not lead:
+                raise ValueError("that case page isn't a civil (CV) case")
+            with self.lock, self.conn() as conn:
+                result = db.upsert(conn, lead)
+                conn.commit()
+            return {"new": int(result == "new"), "updated": int(result == "updated"),
+                    "with_notice": int(bool(lead.eviction_notice))}
         suffix = Path(filename or "upload").suffix or ".txt"
         with tempfile.NamedTemporaryFile("wb", suffix=suffix, delete=False) as fh:
             fh.write(data)
@@ -357,6 +404,8 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/refresh": self.app.refresh,
                 "/api/enrich": self.app.run_enrich,
                 "/api/find-contacts": self.app.find_contacts,
+                "/api/cases/add": self.app.add_cases,
+                "/api/cases/update": self.app.update_cases,
             }
             if url.path not in routes:
                 return self._send(404, {"error": "not found"})

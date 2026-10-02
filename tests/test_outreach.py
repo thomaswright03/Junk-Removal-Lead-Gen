@@ -50,6 +50,7 @@ def seed(conn):
     ]
     for l in leads:
         db.upsert(conn, l)
+    db.put_settings(conn, {"lead_view": "all"})  # these tests use code cases too
     conn.commit()
     return FakeParcels([
         PARCEL,
@@ -99,7 +100,7 @@ def test_scores_rank_absentee_vacant_over_owner_occupied_weeds():
     conn = db.connect(":memory:")
     enrich(conn, seed(conn))
     app = App(":memory:")
-    leads = {l["source_id"]: l for l in app.leads(conn, outreach.merged_settings({}))}
+    leads = {l["source_id"]: l for l in app.leads(conn, outreach.merged_settings({"lead_view": "all"}))}
     assert leads["CE-3"]["score"] > leads["CE-2"]["score"]
     assert leads["CE-1"]["score"] > leads["CE-2"]["score"]
     assert leads["CV26-000001-EV"]["eligible"] == ["phone", "property_manager"]
@@ -108,7 +109,7 @@ def test_scores_rank_absentee_vacant_over_owner_occupied_weeds():
 def test_assign_splits_evenly_and_respects_eligibility():
     conn = db.connect(":memory:")
     enrich(conn, seed(conn))
-    leads = App(":memory:").leads(conn, outreach.merged_settings({}))
+    leads = App(":memory:").leads(conn, outreach.merged_settings({"lead_view": "all"}))
     counts = outreach.assign(conn, leads, 4, list(outreach.CHANNELS), seed=1)
     assert sum(counts.values()) == 4
     assert max(counts.values()) - min(counts.values()) <= 1

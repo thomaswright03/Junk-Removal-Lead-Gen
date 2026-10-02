@@ -31,6 +31,7 @@ once the form's fields can be inspected.
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -38,6 +39,11 @@ from ..models import Lead
 from .base import Source
 
 CALENDAR_URL = "https://www.jp.pima.gov/NewCalendar2018/"
+CASE_PAGE_BASE = "https://www.jp.pima.gov/CaseSearch/"
+
+# Calendar rows and case pages describe the same cases, keyed by case number,
+# so both are stored under one source name and update the same row.
+JP_SOURCE = "pima_jp_calendar"
 
 CASE_RE = re.compile(r"\b([A-Z]{2}\d{2}-\d{4,7}(?:-[A-Z]{1,3})?)\b")
 DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
@@ -81,6 +87,7 @@ def parse_calendar_html(html, assume_eviction=False):
     for table in soup.find_all("table"):
         header = {}
         for tr in table.find_all("tr"):
+            link = tr.find("a", href=re.compile(r"jcDisplayCase", re.IGNORECASE))
             cells = [_clean(c.get_text(" ")) for c in tr.find_all(["th", "td"])]
             if not cells:
                 continue
@@ -113,7 +120,7 @@ def parse_calendar_html(html, assume_eviction=False):
             if not case.startswith("CV"):
                 continue
             leads[case] = Lead(
-                source="pima_jp_calendar",
+                source=JP_SOURCE,
                 source_id=case,
                 lead_type="eviction",
                 event_date=_iso(date_m) if date_m else None,
@@ -122,7 +129,7 @@ def parse_calendar_html(html, assume_eviction=False):
                 plaintiff=plaintiff,
                 defendant=defendant,
                 description=_clean(col("event") or "Eviction Action hearing"),
-                url=CALENDAR_URL,
+                url=urljoin(CASE_PAGE_BASE, link["href"]) if link else CALENDAR_URL,
                 raw={"cells": cells},
             )
     return list(leads.values())

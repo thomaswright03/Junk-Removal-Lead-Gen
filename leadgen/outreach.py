@@ -31,6 +31,9 @@ DEFAULT_SETTINGS = {
     "base_address": "8790 N Wellside Dr, Tucson, AZ",
     "base_lat": None,
     "base_lon": None,
+    # Which leads Lead Desk shows and assigns: "eviction_notice" (eviction
+    # cases with an eviction notice filed), "evictions" or "all".
+    "lead_view": "eviction_notice",
     # Optional. Google Maps Platform key for the business phone lookup.
     "google_places_api_key": "",
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
