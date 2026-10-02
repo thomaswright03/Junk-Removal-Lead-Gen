@@ -29,6 +29,12 @@ jobs:
       - run: leadgen --db /tmp/leads.db fetch --source tucson_code_cases --days 30
       - run: leadgen --db /tmp/leads.db enrich --limit 50
       - run: leadgen --db /tmp/leads.db list --limit 0
+      - name: Lead Desk refresh button on live data (counts and types only)
+        run: >
+          python -c "from leadgen.web import App; a=App('/tmp/live2.db'); print(a.refresh({'days': 30}));
+          c=a.conn(); print('lat/lon types', c.execute('SELECT typeof(lat), typeof(lon), COUNT(*) FROM leads GROUP BY 1, 2').fetchall());
+          print('settings', {r[0]: type(__import__('json').loads(r[1])).__name__ for r in c.execute('SELECT key, value FROM settings')});
+          print(len(a.state()['leads']), 'leads in state')"
       - name: Lead Desk state on live data (counts only)
         run: >
           python -c "from leadgen.web import App; L=App('/tmp/leads.db').state()['leads'];

@@ -134,6 +134,11 @@ def upsert(conn, lead):
     d["address_norm"] = normalize_address(d["address"])
     if not d["zip"]:
         d["zip"] = extract_zip(d["address"])
+    for col in ("lat", "lon"):
+        try:
+            d[col] = float(d[col]) if d[col] not in (None, "") else None
+        except (TypeError, ValueError):
+            d[col] = None
     if d["in_pima"] is not None:
         d["in_pima"] = int(bool(d["in_pima"]))
     raw = json.dumps(d.pop("raw") or {}, default=str, sort_keys=True)

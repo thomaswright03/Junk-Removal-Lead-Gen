@@ -180,3 +180,8 @@ def test_import_calendar_upload(tmp_path):
     html = (FIX / "jp_calendar.html").read_bytes()
     counts = app.import_file("pima_jp_calendar", "cal.html", html)
     assert counts["new"] == 2  # the small-claims row is not an eviction
+
+
+def test_miles_tolerates_text_coordinates():
+    assert outreach.miles_between("32.36", "-111.12", 32.22, -110.97) > 0
+    assert outreach.miles_between("", -111.0, 32.2, -110.9) is None

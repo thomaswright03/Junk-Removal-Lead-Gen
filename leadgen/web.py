@@ -5,8 +5,10 @@ Everything is stored in the same SQLite file the CLI uses.
 """
 
 import json
+import sys
 import tempfile
 import threading
+import traceback
 import webbrowser
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -287,7 +289,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.app.owner_properties(q.get("name", [""])[0]))
             return self._send(404, {"error": "not found"})
         except Exception as e:
-            return self._send(500, {"error": str(e)})
+            traceback.print_exc(file=sys.stderr)
+            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
     def do_POST(self):
         url = urlparse(self.path)
@@ -316,6 +319,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError) as e:
             return self._send(400, {"error": str(e)})
         except Exception as e:
+            traceback.print_exc(file=sys.stderr)
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
 

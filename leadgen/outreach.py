@@ -109,7 +109,15 @@ def eligible_channels(lead):
     return out
 
 
+def _num(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def miles_between(lat1, lon1, lat2, lon2):
+    lat1, lon1, lat2, lon2 = (_num(v) for v in (lat1, lon1, lat2, lon2))
     if None in (lat1, lon1, lat2, lon2):
         return None
     r = 3958.8
