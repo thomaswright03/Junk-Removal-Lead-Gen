@@ -85,6 +85,14 @@ _ADDED_COLUMNS = {
     "responded_at": "TEXT",
     "quote_amount": "REAL",
     "job_revenue": "REAL",
+    # Looked up by hand or imported from a skip-tracing file (see contacts.py).
+    "owner_phone": "TEXT",
+    "owner_email": "TEXT",
+    "owner_website": "TEXT",
+    # Where the phone/email came from: manual, import, osm, google, website.
+    "contact_source": "TEXT",
+    "contact_name": "TEXT",  # business name the lookup matched
+    "contact_checked_at": "TEXT",
 }
 
 # Columns a fetch is allowed to refresh on an existing row. A blank value

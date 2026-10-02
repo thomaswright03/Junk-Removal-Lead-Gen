@@ -31,6 +31,8 @@ DEFAULT_SETTINGS = {
     "base_address": "8790 N Wellside Dr, Tucson, AZ",
     "base_lat": None,
     "base_lon": None,
+    # Optional. Google Maps Platform key for the business phone lookup.
+    "google_places_api_key": "",
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {

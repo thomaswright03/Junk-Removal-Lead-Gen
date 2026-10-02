@@ -42,3 +42,6 @@ jobs:
           sum(1 for l in L if l['owner_absentee']), 'absentee;',
           sum(1 for l in L if l['owner_entity']), 'company/trust;',
           sum(1 for l in L if l['score'] >= 60), 'scored 60+')"
+      - name: Business phone lookup on live data (counts only)
+        continue-on-error: true
+        run: leadgen --db /tmp/live2.db contacts find --limit 15

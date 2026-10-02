@@ -73,6 +73,35 @@ def cmd_enrich(args, conn=None):
     print(f"owners: {counts['found']} found, {counts['not_found']} not found")
 
 
+def cmd_contacts(args):
+    from . import contacts, outreach
+    from .lookup import find_contacts, providers_from
+    from .web import App
+
+    conn = _connect(args)
+    if args.action == "find":
+        settings = outreach.merged_settings(db.get_settings(conn))
+        providers = providers_from(settings, google_key=args.google_key)
+        names = ", ".join(p.name for p in providers)
+        print(f"looking up business contacts with: {names} (+ company websites)")
+        counts = find_contacts(conn, providers, limit=args.limit, refresh=args.refresh)
+        print(f"companies checked {counts['checked']}; leads with a contact found "
+              f"{counts['found']}, not found {counts['not_found']}; individuals skipped "
+              f"{counts['skipped_people']}; errors {counts['errors']}")
+    elif args.action == "import":
+        if not args.file:
+            sys.exit("contacts import needs --file")
+        text = Path(args.file).read_text(encoding="utf-8-sig", errors="replace")
+        print(contacts.import_contacts(conn, text))
+    else:
+        out = Path(args.file or f"exports/skiptrace-{date.today().isoformat()}.csv")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        leads = [l for l in App(args.db).leads(conn)
+                 if l["status"] not in ("stale", "skip", "lost", "won")]
+        out.write_text(contacts.skiptrace_csv(leads), encoding="utf-8")
+        print(f"wrote owners missing a phone to {out}")
+
+
 def cmd_serve(args):
     from .web import serve
 
@@ -190,6 +219,17 @@ def build_parser():
     sp.add_argument("--limit", dest="enrich_limit", type=int)
     sp.add_argument("--refresh", action="store_true", help="look up leads already done too")
     sp.set_defaults(func=cmd_enrich)
+
+    sp = sub.add_parser(
+        "contacts",
+        help="find business phone/email for landlords and owners; import or export contacts")
+    sp.add_argument("action", choices=("find", "import", "export"))
+    sp.add_argument("--file", help="import: CSV with phone/email; export: output path")
+    sp.add_argument("--limit", type=int, help="find: max companies to look up")
+    sp.add_argument("--refresh", action="store_true", help="find: re-check leads already done")
+    sp.add_argument("--google-key", help="find: Google Places API key "
+                    "(or set GOOGLE_PLACES_API_KEY)")
+    sp.set_defaults(func=cmd_contacts)
 
     sp = sub.add_parser("serve", help="open the lead desk web app")
     sp.add_argument("--port", type=int, default=8765)

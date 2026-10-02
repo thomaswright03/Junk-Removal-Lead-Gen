@@ -53,6 +53,28 @@ Researched October 2026. "Built" means there is a working importer in
 - "Other properties this owner has" in the app searches `ADDRESSEE` by name
   prefix, which is how an eviction plaintiff's portfolio can be found.
 
+## Phone and email lookup (built)
+
+Public records carry no phone or email. `leadgen/lookup.py` finds office
+contacts for **businesses only** (LLC/trust owners, eviction plaintiffs,
+apartment complexes):
+
+- **OpenStreetMap** via the Overpass API (https://overpass-api.de): businesses
+  mapped within 80 m of the property with `phone`, `email` or `website` tags.
+  Free, no key; data is ODbL ("(c) OpenStreetMap contributors"). Coverage of
+  apartment leasing offices in Tucson is partial.
+- **Google Places Text Search (New)**: optional, needs a Google Maps Platform
+  key and is billed per request after the monthly credit. Searches the
+  company name near the property, or "apartments <address>" for multifamily
+  parcels. Google's Maps Platform terms restrict keeping Places content, so
+  Google-sourced contacts are re-fetched after 30 days; read the current
+  terms before relying on stored results.
+- **The company's own website** (from either source): home page plus up to
+  three contact/about/leasing pages, honoring robots.txt.
+
+Individual owners' numbers come only from Steve or a skip-tracing file the
+user buys and imports (`leadgen contacts export` / `import`).
+
 ## Pima County Consolidated Justice Court (evictions)
 
 All residential evictions (forcible/special detainer) in Pima County are filed

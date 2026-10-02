@@ -11,7 +11,7 @@ COLUMNS = (
     "id", "lead_type", "event_date", "status", "address", "city", "zip",
     "plaintiff", "defendant", "description", "source", "source_id", "lat", "lon",
     "in_pima", "parcel", "owner_name", "owner_address", "owner_city", "owner_state",
-    "owner_zip", "owner_absentee", "owner_entity", "property_use", "channel", "notes",
+    "owner_zip", "owner_phone", "owner_email", "owner_absentee", "owner_entity", "property_use", "channel", "notes",
     "first_seen", "url",
 )
 

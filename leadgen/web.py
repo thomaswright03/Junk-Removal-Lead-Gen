@@ -5,6 +5,7 @@ Everything is stored in the same SQLite file the CLI uses.
 """
 
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -16,8 +17,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import db, outreach
+from .contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
 from .enrich import ParcelClient, enrich, owner_fields
 from .geocode import CensusGeocoder
+from .lookup import find_contacts, providers_from
 from .sources import AUTOMATIC, SOURCES
 from .tucson_codes import CODE_LABELS, code_of
 
@@ -29,8 +32,11 @@ LEAD_FIELDS = (
     "notes", "first_seen", "owner_name", "owner_address", "owner_city", "owner_state",
     "owner_zip", "owner_absentee", "owner_entity", "property_use", "year_built",
     "enriched_at", "channel", "assigned_at", "responded_at", "quote_amount", "job_revenue",
+    "owner_phone", "owner_email", "owner_website", "contact_source", "contact_name",
+    "contact_checked_at",
 )
-EDITABLE = {"status", "channel", "notes", "quote_amount", "job_revenue", "responded_at"}
+EDITABLE = {"status", "channel", "notes", "quote_amount", "job_revenue", "responded_at",
+            "owner_phone", "owner_email"}
 
 
 def _now():
@@ -88,9 +94,12 @@ class App:
     def state(self):
         with self.conn() as conn:
             settings = self.settings(conn)
+            public = dict(settings)
+            key = public.pop("google_places_api_key", "") or ""
+            public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
             return {
                 "leads": self.leads(conn, settings),
-                "settings": settings,
+                "settings": public,
                 "channels": outreach.CHANNELS,
                 "results": outreach.results(conn),
                 "statuses": db.STATUSES,
@@ -108,6 +117,18 @@ class App:
             raise ValueError("bad channel")
         if fields.get("channel") == "":
             fields["channel"] = None
+        if "owner_phone" in fields:
+            raw = (fields["owner_phone"] or "").strip()
+            fields["owner_phone"] = clean_phone(raw) if raw else None
+            if raw and not fields["owner_phone"]:
+                raise ValueError("phone number needs 10 digits")
+        if "owner_email" in fields:
+            raw = (fields["owner_email"] or "").strip()
+            fields["owner_email"] = clean_email(raw) if raw else None
+            if raw and not fields["owner_email"]:
+                raise ValueError("that email address doesn't look right")
+        if "owner_phone" in fields or "owner_email" in fields:
+            fields["contact_source"] = "manual"
         if fields.get("status") in ("responded", "quoted", "won") and "responded_at" not in fields:
             fields["responded_at"] = _now()
         with self.conn() as conn:
@@ -167,6 +188,10 @@ class App:
         with self.conn() as conn:
             current = self.settings(conn)
             values = {k: v for k, v in body.items() if k in allowed}
+            if not values.get("google_places_api_key"):
+                values.pop("google_places_api_key", None)  # blank field keeps the saved key
+            if body.get("clear_google_key"):
+                values["google_places_api_key"] = ""
             if values.get("base_address") and values["base_address"] != current["base_address"]:
                 values["base_lat"] = values["base_lon"] = None
             db.put_settings(conn, values)
@@ -202,12 +227,26 @@ class App:
         self._ensure_base()
         return summary
 
+    def find_contacts(self, body):
+        with self.lock, self.conn() as conn:
+            settings = self.settings(conn)
+            log = []
+            counts = find_contacts(conn, providers_from(settings),
+                                   limit=int(body.get("limit") or 0) or None,
+                                   refresh=bool(body.get("refresh")), log=log.append)
+            counts["google_used"] = any(p.name == "google" for p in providers_from(settings))
+            counts["messages"] = log[:10]
+            return counts
+
     def run_enrich(self, body):
         with self.lock, self.conn() as conn:
             return enrich(conn, self.parcel_client or ParcelClient(),
                           refresh=bool(body.get("refresh")))
 
     def import_file(self, source, filename, data, lead_type="eviction"):
+        if source == "contacts":
+            with self.lock, self.conn() as conn:
+                return import_contacts(conn, data.decode("utf-8-sig", errors="replace"))
         if source not in ("pima_jp_calendar", "csv_import"):
             raise ValueError("source must be pima_jp_calendar or csv_import")
         suffix = Path(filename or "upload").suffix or ".txt"
@@ -285,6 +324,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
             if url.path == "/api/state":
                 return self._send(200, self.app.state())
+            if url.path == "/api/skiptrace.csv":
+                with self.app.conn() as conn:
+                    leads = [l for l in self.app.leads(conn)
+                             if l["status"] not in ("stale", "skip", "lost", "won")]
+                return self._send(200, skiptrace_csv(leads), "text/csv; charset=utf-8")
             if url.path == "/api/owner":
                 return self._send(200, self.app.owner_properties(q.get("name", [""])[0]))
             return self._send(404, {"error": "not found"})
@@ -312,6 +356,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/settings": self.app.save_settings,
                 "/api/refresh": self.app.refresh,
                 "/api/enrich": self.app.run_enrich,
+                "/api/find-contacts": self.app.find_contacts,
             }
             if url.path not in routes:
                 return self._send(404, {"error": "not found"})

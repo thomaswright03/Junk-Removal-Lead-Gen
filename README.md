@@ -45,6 +45,29 @@ uses the same database as the commands below.
 - **Settings**: business name and phone, a tracking phone number and cost
   per contact for each channel, and the message templates.
 
+**Owner phone and email.** Public property records have no phone numbers or
+emails, so they come from three places, all shown in the Phone and Email
+columns:
+
+1. **Find landlord phones & emails** (or `leadgen contacts find`) looks up
+   office numbers for businesses only: LLC/trust owners, eviction landlords,
+   and apartment complexes. It checks OpenStreetMap for a business mapped at
+   the property, Google Places when a Google Maps Platform API key is set
+   (Settings, or `GOOGLE_PLACES_API_KEY`), and then the company's own website
+   for a phone and email. One lookup covers every lead with the same company.
+   Owners who are people are never looked up this way.
+2. **Download skip-trace list** (or `leadgen contacts export`) writes the
+   owners still missing a phone in the format skip-tracing services take.
+   Send it to one (BatchSkipTracing, PropStream and similar charge per
+   record), then **Import phones / emails** (or `leadgen contacts import
+   --file ...`) the file they send back. Rows are matched by lead id, parcel,
+   property address or owner name.
+3. Type a number into a lead by hand. Hand-entered contacts are never
+   overwritten by a lookup.
+
+Check found numbers before calling, and scrub personal cell numbers against
+the Do Not Call registry before any cold call.
+
 **Refresh data** pulls new Tucson cases and looks up owners. **Import
 evictions / CSV** takes a saved Justice Court calendar page or any CSV.
 
@@ -100,6 +123,8 @@ never overwrites a status or notes.
 |---|---|
 | `leadgen sources` | List the sources and which ones run automatically |
 | `leadgen fetch --days 14` | Fetch only, with a 14-day look-back |
+| `leadgen contacts find` | Look up business phone/email/website for landlords and LLC owners |
+| `leadgen contacts export` / `import --file x.csv` | Skip-trace list out, phone/email file in |
 | `leadgen enrich` | Look up owners for leads that don't have one yet |
 | `leadgen geocode` | Geocode leads that have an address but no coordinates |
 | `leadgen age` | Mark leads older than `--stale-days` (default 30) as stale |

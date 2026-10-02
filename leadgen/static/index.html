@@ -202,6 +202,27 @@ function activeLeads() {
   return S.leads.filter(l => l.status !== "stale" && l.status !== "skip");
 }
 function untouched(l) { return !l.touches.length; }
+const SOURCE_LABEL = { manual: "entered by hand", import: "imported file", osm: "OpenStreetMap", google: "Google Places",
+  "osm+website": "OpenStreetMap + company website", "google+website": "Google Places + company website", website: "company website" };
+function phoneCell(l) {
+  return l.owner_phone ? `<a href="tel:${esc(l.owner_phone.replace(/\D/g, ""))}">${esc(l.owner_phone)}</a>` : '<span class="muted">–</span>';
+}
+function emailCell(l) {
+  return l.owner_email ? `<a href="mailto:${esc(l.owner_email)}">${esc(l.owner_email)}</a>` : '<span class="muted">–</span>';
+}
+async function findContacts(btn) {
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Looking up…";
+  await act(() => api("/api/find-contacts", {}), r =>
+    `Checked ${r.checked} companies: contacts found for ${r.found} leads, none for ${r.not_found}.` +
+    (r.google_used ? "" : " Add a Google Places key in Settings to find more.") + (r.errors ? ` ${r.errors} lookups failed.` : ""));
+  btn.disabled = false; btn.textContent = label;
+}
+async function importContacts(file) {
+  await act(async () => {
+    const r = await fetch(`/api/import?source=contacts&filename=${encodeURIComponent(file.name)}`, { method: "POST", body: await file.arrayBuffer() });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
+  }, r => `Contacts: ${r.matched} of ${r.rows} rows matched a lead, ${r.updated} leads updated`);
+}
 
 // ---------- header ----------------------------------------------------------
 function renderHeader() {
@@ -223,9 +244,11 @@ function filteredLeads() {
     if (ui.type === "code_violation" && l.lead_type !== "code_violation") return false;
     if (ui.type === "absentee" && !l.owner_absentee) return false;
     if (ui.type === "entity" && !l.owner_entity) return false;
+    if (ui.type === "has_phone" && !l.owner_phone) return false;
+    if (ui.type === "no_phone" && l.owner_phone) return false;
     if (ui.channel === "none" && l.channel) return false;
     if (ui.channel && ui.channel !== "none" && l.channel !== ui.channel) return false;
-    if (q && ![l.address, l.owner_name, l.plaintiff, l.defendant, l.source_id, l.description, l.parcel, l.notes].join(" ").toLowerCase().includes(q)) return false;
+    if (q && ![l.address, l.owner_name, l.plaintiff, l.defendant, l.source_id, l.description, l.parcel, l.notes, l.owner_phone, l.owner_email, l.contact_name].join(" ").toLowerCase().includes(q)) return false;
     return true;
   });
   const key = ui.sort;
@@ -238,24 +261,32 @@ function renderLeads() {
   const rows = filteredLeads();
   const opts = (pairs, cur) => pairs.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
   $("#tab-leads").innerHTML = `
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes">Find landlord phones &amp; emails</button>
+      <a class="btn" href="/api/skiptrace.csv" download="skiptrace.csv" style="text-decoration:none" title="Owners still missing a phone, formatted for a skip-tracing service">Download skip-trace list</a>
+      <label class="btn" title="CSV with phone/email columns (from a skip-tracing service or your own list)">Import phones / emails<input type="file" id="lImport" accept=".csv" hidden></label>
+      <span class="muted" style="font-size:13px">${S.leads.filter(l => l.owner_phone).length} leads have a phone, ${S.leads.filter(l => l.owner_email).length} an email</span>
+    </div>
     <div class="filters">
       <input type="search" id="q" placeholder="Search address, owner, landlord, case, parcel…" value="${esc(ui.q)}">
-      <select id="fType">${opts([["", "All leads"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Absentee owners"], ["entity", "Owned by LLC / trust"]], ui.type)}</select>
+      <select id="fType">${opts([["", "All leads"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Absentee owners"], ["entity", "Owned by LLC / trust"], ["has_phone", "Has a phone"], ["no_phone", "No phone yet"]], ui.type)}</select>
       <select id="fStatus">${opts([["open", "Open (not won/lost)"], ["", "Any status"], ...S.statuses.map(s => [s, title(s)])], ui.status)}</select>
       <select id="fChannel">${opts([["", "Any channel"], ["none", "Not assigned"], ...Object.entries(S.channels)], ui.channel)}</select>
       <select id="fSort">${opts([["score", "Best first"], ["date", "Newest first"], ["miles", "Closest first"]], ui.sort)}</select>
     </div>
     <div class="tablewrap"><table>
-      <thead><tr><th class="num">Score</th><th>Date</th><th>What</th><th>Property</th><th>Owner / landlord</th><th class="num">Miles</th><th>Channel</th><th>Status</th></tr></thead>
+      <thead><tr><th class="num">Score</th><th>Date</th><th>What</th><th>Property</th><th>Owner / landlord</th><th>Phone</th><th>Email</th><th class="num">Miles</th><th>Channel</th><th>Status</th></tr></thead>
       <tbody>${rows.map(l => `<tr class="click" data-id="${l.id}">
         <td class="num">${scoreChip(l.score)}</td>
-        <td>${esc(l.event_date || "")}</td>
+        <td style="white-space:nowrap">${esc(l.event_date || "")}</td>
         <td>${esc(whatLabel(l))}</td>
         <td>${l.address ? esc(title(l.address)) : '<span class="muted">address needed</span>'}${l.property_use ? `<div class="muted" style="font-size:12px">${esc(title(l.property_use))}</div>` : ""}</td>
         <td>${ownerLine(l)}</td>
+        <td style="white-space:nowrap">${phoneCell(l)}</td>
+        <td>${emailCell(l)}</td>
         <td class="num">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
         <td>${chDot(l.channel)}</td>
-        <td>${statusChip(l.status)}</td></tr>`).join("") || `<tr><td colspan="8" class="empty">No leads match. Try “Any status”, or press Refresh data.</td></tr>`}
+        <td>${statusChip(l.status)}</td></tr>`).join("") || `<tr><td colspan="10" class="empty">No leads match. Try “Any status”, or press Refresh data.</td></tr>`}
       </tbody></table></div>
     <p class="hint">${rows.length} shown. Score adds up how much hauling the case suggests, whether the owner lives elsewhere or is a company, repeat owners, and how recent it is. Miles are straight-line from ${esc(S.settings.base_address)}.</p>`;
   $("#q").oninput = e => { ui.q = e.target.value; renderLeadsBody(); };
@@ -263,6 +294,8 @@ function renderLeads() {
   $("#fStatus").onchange = e => { ui.status = e.target.value; renderLeads(); };
   $("#fChannel").onchange = e => { ui.channel = e.target.value; renderLeads(); };
   $("#fSort").onchange = e => { ui.sort = e.target.value; renderLeads(); };
+  $("#lFind").onclick = e => findContacts(e.currentTarget);
+  $("#lImport").onchange = async e => { const f = e.target.files[0]; if (f) await importContacts(f); e.target.value = ""; };
   bindRows($("#tab-leads"));
 }
 function renderLeadsBody() {
@@ -300,11 +333,25 @@ function renderDrawer() {
       <dt>Mailing addr</dt><dd>${ownerMail}</dd>
       <dt>Property</dt><dd>${esc(title(l.property_use || ""))}${l.year_built ? ` · built ${esc(l.year_built)}` : ""}${l.parcel ? ` · parcel <a href="https://gis.pima.gov/D.HTM?P=${encodeURIComponent(l.parcel)}" target="_blank" rel="noopener">${esc(l.parcel)}</a>` : ""}</dd>
       <dt>Location</dt><dd>${map ? `<a href="${map}" target="_blank" rel="noopener">Open map</a>` : "–"}${l.miles != null ? ` · ${l.miles.toFixed(1)} mi from base` : ""}</dd>
+      <dt>Phone</dt><dd>${phoneCell(l)}</dd>
+      <dt>Email</dt><dd>${emailCell(l)}</dd>
+      ${l.owner_website ? `<dt>Website</dt><dd><a href="${esc(/^https?:/i.test(l.owner_website) ? l.owner_website : "https://" + l.owner_website)}" target="_blank" rel="noopener">${esc(l.owner_website.replace(/^https?:\/\//i, ""))}</a></dd>` : ""}
+      ${l.contact_source ? `<dt>Contact from</dt><dd class="muted">${esc(SOURCE_LABEL[l.contact_source] || l.contact_source)}${l.contact_name ? ` · matched “${esc(l.contact_name)}”` : ""}</dd>` : ""}
       ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (statutory agent)` : ""}</dd>` : ""}
     </dl>
     ${who && (l.owner_entity || l.lead_type === "eviction") ? `<div class="row"><button class="btn small" id="dOwnerProps">Other properties this owner has</button></div><div id="ownerProps"></div>` : ""}
 
     <div class="card" style="margin-top:14px">
+      <h2>Contact</h2>
+      <p class="hint">Check that a found number belongs to this owner before calling. Editing here marks it as entered by hand, and lookups won't overwrite it.</p>
+      <div class="row">
+        <input id="dPhone" placeholder="Phone" value="${esc(l.owner_phone || "")}" style="width:150px">
+        <input id="dEmail" placeholder="Email" value="${esc(l.owner_email || "")}" style="flex:1;min-width:180px">
+        <button class="btn small" id="dSaveContact">Save contact</button>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Outreach</h2>
       <div class="row" style="margin:8px 0">
         <select id="dChannel">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? " (no info)" : ""}</option>`).join("")}</select>
@@ -333,6 +380,7 @@ function renderDrawer() {
     </div>`;
   d.classList.add("open");
   $("#dClose").onclick = () => { ui.open = null; d.classList.remove("open"); };
+  $("#dSaveContact").onclick = () => act(() => api("/api/lead", { id: l.id, fields: { owner_phone: $("#dPhone").value, owner_email: $("#dEmail").value } }), "Contact saved");
   $("#dSaveCh").onclick = () => act(() => api("/api/lead", { id: l.id, fields: { channel: $("#dChannel").value } }), "Channel saved");
   d.querySelectorAll("[data-touch]").forEach(b => b.onclick = () =>
     act(() => api("/api/touch", { lead_id: l.id, kind: b.dataset.touch }), "Logged: " + b.textContent));
@@ -435,11 +483,11 @@ function bindQuick(el) {
 function renderCalls(el, q, ch) {
   el.innerHTML = `<div class="card">
     <h2>Calls: ${q.length} to make</h2>
-    <p class="hint">Look up a number with the search link, check it against the Do Not Call registry before cold-calling a cell phone, and log every attempt. Never auto-dial or mass-text.</p>
+    <p class="hint">Numbers found by the lookup or imported show here; otherwise use the search link. Check each number against the Do Not Call registry before cold-calling a cell phone, and log every attempt. Never auto-dial or mass-text.</p>
     <div class="script">${esc(fill(ch, { address: "[address]" }))}</div></div>
-    ${q.length ? `<div class="tablewrap"><table><thead><tr><th class="num">Score</th><th>Owner</th><th>Property</th><th>Find number</th><th>Log</th></tr></thead><tbody>
+    ${q.length ? `<div class="tablewrap"><table><thead><tr><th class="num">Score</th><th>Owner</th><th>Property</th><th>Phone</th><th>Log</th></tr></thead><tbody>
       ${q.map(l => { const who = l.owner_name || l.plaintiff || ""; return `<tr class="click" data-id="${l.id}"><td class="num">${scoreChip(l.score)}</td><td>${ownerLine(l)}</td><td>${esc(title(l.address || ""))}</td>
-      <td><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search</a></td>
+      <td style="white-space:nowrap">${l.owner_phone ? phoneCell(l) : `<a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search</a>`}</td>
       <td><div class="row">${touchButtons(ch).slice(0, 3).map(([k, t]) => `<button class="btn small" data-quick="${l.id}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;
   bindQuick(el);
@@ -452,9 +500,10 @@ function renderManagers(el, leads) {
     <h2>Landlords and property managers: ${list.length}</h2>
     <p class="hint">One pitch per company, not per property: offer a standing move-out clean-out rate. Companies that show up on several leads come first. Use “Other properties this owner has” on a lead to see their portfolio.</p>
     <div class="script">${esc(fill("property_manager", {}))}</div></div>
-    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Company / owner</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
+    ${list.length ? `<div class="tablewrap"><table><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
         return `<tr class="click" data-id="${ls[0].id}"><td><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:12px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
+        <td style="white-space:nowrap">${(() => { const c = ls.find(x => x.owner_phone || x.owner_email); return c ? `${c.owner_phone ? phoneCell(c) : ""}${c.owner_phone && c.owner_email ? "<br>" : ""}${c.owner_email ? emailCell(c) : ""}` : '<span class="muted">–</span>'; })()}</td>
         <td class="num">${ls.length}</td><td>${ls.slice(0, 3).map(l => l.address ? esc(title(l.address)) : esc(l.source_id)).join("<br>")}${ls.length > 3 ? `<br><span class="muted">+${ls.length - 3} more</span>` : ""}</td>
         <td>${done ? '<span class="chip good">yes</span>' : '<span class="chip">no</span>'}</td>
         <td><div class="row"><a class="btn small" style="text-decoration:none" href="https://www.google.com/search?q=${encodeURIComponent(name + " Tucson")}" target="_blank" rel="noopener">Search</a>
@@ -517,6 +566,11 @@ function renderSettings() {
       </div>
       <p class="hint">${st.base_lat != null ? `Base located at ${(+st.base_lat).toFixed(4)}, ${(+st.base_lon).toFixed(4)}.` : "Base not located yet; it's looked up when you save or refresh."}</p>
     </div>
+    <div class="card"><h2>Phone and email lookup</h2>
+      <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>
+      <div class="row"><input id="sGoogle" type="password" placeholder="${st.google_key_set ? "Key saved. Paste a new one to replace it" : "Google Places API key"}" style="flex:1;min-width:260px" autocomplete="off">
+      ${st.google_key_set ? `<span class="chip good">key saved</span> <button class="btn small" id="sGoogleClear">Remove key</button>` : `<span class="chip">no key</span>`}</div>
+    </div>
     <div class="card"><h2>Channels</h2>
       <p class="hint">A separate tracking phone number per channel (Google Voice, CallRail and similar) is the cleanest way to know which channel a caller came from. Cost is what one contact costs, including printing and postage.</p>
       <div class="tablewrap"><table><thead><tr><th>Channel</th><th>Cost per contact $</th><th>Tracking number</th></tr></thead><tbody>
@@ -526,12 +580,14 @@ function renderSettings() {
       ${Object.entries(S.channels).map(([c, n]) => `<h3>${esc(n)}</h3><textarea data-tpl="${c}">${esc(st.templates[c] || "")}</textarea>`).join("")}
     </div>
     <button class="btn primary" id="sSave">Save settings</button>`;
+  const gc = $("#sGoogleClear");
+  if (gc) gc.onclick = () => act(() => api("/api/settings", { clear_google_key: true }), "Google key removed");
   $("#sSave").onclick = () => {
     const costs = {}, tracking = {}, templates = {};
     document.querySelectorAll("[data-cost]").forEach(i => costs[i.dataset.cost] = Number(i.value || 0));
     document.querySelectorAll("[data-track]").forEach(i => tracking[i.dataset.track] = i.value.trim());
     document.querySelectorAll("[data-tpl]").forEach(i => templates[i.dataset.tpl] = i.value);
-    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), costs, tracking_numbers: tracking, templates }), "Settings saved");
+    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), google_places_api_key: $("#sGoogle").value.trim(), costs, tracking_numbers: tracking, templates }), "Settings saved");
   };
 }
 
