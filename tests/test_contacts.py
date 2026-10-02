@@ -193,3 +193,59 @@ def test_network_failure_is_retried_next_run():
     counts = find_contacts(conn, [Broken()], scanner=None, log=lambda *_: None)
     assert counts["errors"] == 2 and counts["not_found"] == 0
     assert conn.execute("SELECT COUNT(*) FROM leads WHERE contact_checked_at IS NOT NULL").fetchone()[0] == 0
+
+
+def test_osm_stops_after_servers_keep_timing_out():
+    import pytest
+    import requests
+
+    from leadgen.lookup import OsmProvider, ProviderUnavailable
+
+    class DeadSession:
+        headers = {}
+        calls = 0
+
+        def post(self, url, **kw):
+            DeadSession.calls += 1
+            raise requests.ReadTimeout("slow")
+
+    osm = OsmProvider(session=DeadSession(), delay=0)
+    lead = {"lat": 32.2, "lon": -110.9}
+    for _ in range(OsmProvider.max_failures):
+        with pytest.raises(requests.ReadTimeout):
+            osm.find(lead, "X LLC")
+    tried = DeadSession.calls
+    with pytest.raises(ProviderUnavailable):
+        osm.find(lead, "X LLC")
+    assert DeadSession.calls == tried  # no more waiting on dead servers
+
+
+def test_osm_prefers_the_server_that_answered():
+    from leadgen.lookup import OsmProvider
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"elements": []}
+
+    class FlakySession:
+        headers = {}
+
+        def __init__(self):
+            self.urls = []
+
+        def post(self, url, **kw):
+            import requests
+            self.urls.append(url)
+            if url == osm_urls[0]:
+                raise requests.ConnectionError("down")
+            return Resp()
+
+    session = FlakySession()
+    osm = OsmProvider(session=session, delay=0)
+    osm_urls = list(osm.urls)
+    osm.find({"lat": 1, "lon": 2}, None)
+    osm.find({"lat": 1, "lon": 2}, None)
+    assert session.urls == [osm_urls[0], osm_urls[1], osm_urls[1]]
