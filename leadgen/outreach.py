@@ -3,14 +3,13 @@ which channel turns leads into paid jobs for the least money.
 
 Channels
 --------
-postcard          Mailed card to the owner's mailing address.
 door_hanger       Steve (or a helper) leaves a hanger at the property.
 phone             Call the owner (number looked up by hand; check Do Not Call).
 property_manager  Call/email the landlord, property manager or LLC that owns
                   it, pitching a standing clean-out rate, not one job.
 
-Each lead gets at most one channel so results are comparable. Touches (a card
-mailed, a visit, a call) carry a cost; the result of the lead (responded,
+Each lead gets at most one channel so results are comparable. Touches (a visit, a
+call, an email) carry a cost; the result of the lead (responded,
 quoted, won and revenue) is credited to its channel.
 """
 
@@ -21,7 +20,6 @@ from datetime import date, datetime, timezone
 from .tucson_codes import code_of
 
 CHANNELS = {
-    "postcard": "Postcard to owner",
     "door_hanger": "Door hanger at property",
     "phone": "Phone call to owner",
     "property_manager": "Landlord / property manager",
@@ -33,16 +31,9 @@ DEFAULT_SETTINGS = {
     "base_address": "8790 N Wellside Dr, Tucson, AZ",
     "base_lat": None,
     "base_lon": None,
-    "costs": {"postcard": 1.00, "door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
-    "tracking_numbers": {"postcard": "", "door_hanger": "", "phone": "", "property_manager": ""},
+    "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
+    "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {
-        "postcard": (
-            "Hi {owner_first},\n\n"
-            "The City of Tucson opened a property case at {address}. If it needs "
-            "junk, furniture, appliances or yard debris hauled away before the "
-            "deadline, we can usually do it this week.\n\n"
-            "Call or text {phone} for a free quote.\n{business}"
-        ),
         "door_hanger": (
             "Need this property cleared? Junk, furniture, appliances, yard debris. "
             "Free quote: {phone}. {business}"
@@ -109,8 +100,6 @@ def score(lead, owner_lead_counts=None, today=None):
 
 def eligible_channels(lead):
     out = []
-    if lead["owner_address"]:
-        out.append("postcard")
     if lead["address"]:
         out.append("door_hanger")
     if lead["owner_name"] or lead["plaintiff"]:
@@ -128,6 +117,21 @@ def miles_between(lat1, lon1, lat2, lon2):
     dp, dl = p2 - p1, math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+# Channels that were tried and dropped. Leads still sitting in one go back to
+# the unassigned pool; their contact history is kept.
+RETIRED_CHANNELS = ("postcard",)
+
+
+def retire_channels(conn):
+    marks = ",".join("?" * len(RETIRED_CHANNELS))
+    cur = conn.execute(
+        f"UPDATE leads SET channel = NULL, assigned_at = NULL WHERE channel IN ({marks})",
+        RETIRED_CHANNELS,
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def assign(conn, leads, count, channels, seed=None):

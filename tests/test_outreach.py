@@ -126,17 +126,13 @@ def test_app_flow_touch_result_and_results(tmp_path):
     state = app.state()
     lead = next(l for l in state["leads"] if l["source_id"] == "CE-1")
 
-    app.update_lead({"id": lead["id"], "fields": {"channel": "postcard"}})
-    app.add_touches({"lead_id": lead["id"], "kind": "mailed"})
+    app.update_lead({"id": lead["id"], "fields": {"channel": "door_hanger"}})
+    app.add_touches({"lead_id": lead["id"], "kind": "visited"})
     app.update_lead({"id": lead["id"], "fields": {"status": "won", "job_revenue": 450}})
 
-    res = {r["channel"]: r for r in app.state()["results"]}["postcard"]
+    res = {r["channel"]: r for r in app.state()["results"]}["door_hanger"]
     assert (res["assigned"], res["touched"], res["responded"], res["won"]) == (1, 1, 1, 1)
-    assert res["cost"] == 1.0 and res["revenue"] == 450
-    assert res["revenue_per_dollar"] == 450
-
-    csv_text = app.mailing_csv("postcard")
-    assert "FRC HOLDINGS OF TUCSON LLC" in csv_text and "3640 W LINCOLN ST" in csv_text
+    assert res["cost"] == 0.35 and res["revenue"] == 450
     assert [p["parcel"] for p in app.owner_properties("FRC HOLDINGS")] == ["10610001E"]
 
 
@@ -153,11 +149,29 @@ def test_touch_requires_channel(tmp_path):
         raise AssertionError("expected ValueError")
 
 
+def test_postcard_channel_is_retired(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed(conn)
+    conn.execute("UPDATE leads SET channel = 'postcard', assigned_at = 'x'")
+    conn.commit()
+    app = App(path)
+    state = app.state()
+    assert "postcard" not in state["channels"]
+    assert all(l["channel"] is None for l in state["leads"])
+
+
+def test_first_name_from_assessor_order():
+    s = outreach.merged_settings({"templates": {"phone": "Hi {owner_first}"}})
+    assert render_template(s, "phone", {"owner_name": "SMITH JOHN A", "owner_entity": 0}) == "Hi John"
+    assert render_template(s, "phone", {"owner_name": "ACME LLC", "owner_entity": 1}) == "Hi there"
+
+
 def test_render_template():
     s = outreach.merged_settings({"business_phone": "520-555-0100"})
-    text = render_template(s, "postcard", {"owner_name": "SMITH JOHN", "owner_entity": 0,
+    text = render_template(s, "phone", {"owner_name": "SMITH JOHN", "owner_entity": 0,
                                            "address": "10 E OWNER LN"})
-    assert "Hi John" in text and "10 E Owner Ln" in text and "520-555-0100" in text
+    assert "10 E Owner Ln" in text and "Steve's Junk Removal" in text
 
 
 def test_import_calendar_upload(tmp_path):

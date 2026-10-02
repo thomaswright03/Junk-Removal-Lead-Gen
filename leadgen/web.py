@@ -4,8 +4,6 @@ Runs on http://127.0.0.1:8765 by default and only listens on this computer.
 Everything is stored in the same SQLite file the CLI uses.
 """
 
-import csv
-import io
 import json
 import tempfile
 import threading
@@ -44,6 +42,8 @@ class App:
         self.parcel_client = parcel_client
         self.geocoder = geocoder
         self.lock = threading.Lock()
+        with self.conn() as conn:
+            outreach.retire_channels(conn)
 
     def conn(self):
         return db.connect(self.db_path)
@@ -234,21 +234,6 @@ class App:
             for a in rows
         ]
 
-    def mailing_csv(self, channel="postcard"):
-        with self.conn() as conn:
-            settings = self.settings(conn)
-            leads = [l for l in self.leads(conn, settings)
-                     if l["channel"] == channel and l["owner_address"]]
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(["lead_id", "owner_name", "mail_address", "mail_city", "mail_state",
-                    "mail_zip", "property_address", "case", "message"])
-        for l in leads:
-            w.writerow([l["id"], l["owner_name"], l["owner_address"], l["owner_city"],
-                        l["owner_state"], l["owner_zip"], l["address"], l["source_id"],
-                        render_template(settings, channel, l)])
-        return buf.getvalue()
-
 
 def render_template(settings, channel, lead):
     owner = (lead.get("owner_name") or lead.get("plaintiff") or "").strip()
@@ -300,9 +285,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.app.state())
             if url.path == "/api/owner":
                 return self._send(200, self.app.owner_properties(q.get("name", [""])[0]))
-            if url.path == "/api/mailing.csv":
-                channel = q.get("channel", ["postcard"])[0]
-                return self._send(200, self.app.mailing_csv(channel), "text/csv; charset=utf-8")
             return self._send(404, {"error": "not found"})
         except Exception as e:
             return self._send(500, {"error": str(e)})

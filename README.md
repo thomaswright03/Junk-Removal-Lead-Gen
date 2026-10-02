@@ -35,10 +35,9 @@ uses the same database as the commands below.
   elsewhere, whether it's an LLC or trust). Click a lead for details, the
   owner's other properties, and to log outreach and results.
 - **Outreach**: the experiment. "Assign leads" deals the best unassigned
-  leads evenly across four channels: postcard to the owner, door hanger at
-  the property, phone call to the owner, and landlord / property-manager
-  outreach. Each channel has its own work queue: printable 6x4 postcards and a
-  mailing-list CSV, a driving route for door hangers, a call list with a
+  leads evenly across three channels: door hanger at the property, phone
+  call to the owner, and landlord / property-manager outreach. Each channel
+  has its own work queue: a driving route for door hangers, a call list with a
   script, and a list of companies to pitch.
 - **Results**: per channel, how many leads were contacted, responded, were
   quoted and won, what was spent, revenue, cost per job and revenue per
