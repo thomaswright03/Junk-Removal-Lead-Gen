@@ -84,6 +84,8 @@ _ADDED_COLUMNS = {
     # Outreach experiment (see outreach.py).
     "channel": "TEXT",
     "assigned_at": "TEXT",
+    # Which "Assign leads" round dealt the lead; empty when set by hand.
+    "assign_round": "TEXT",
     "responded_at": "TEXT",
     "quote_amount": "REAL",
     "job_revenue": "REAL",

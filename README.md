@@ -62,14 +62,23 @@ the limits in Settings.
   the Pima County Assessor (name, mailing address, whether they live
   elsewhere, whether it's an LLC or trust). Click a lead for details, the
   owner's other properties, and to log outreach and results.
-- **Outreach**: the experiment. "Assign leads" deals the best unassigned
-  leads evenly across three channels: door hanger at the property, phone
-  call to the owner, and landlord / property-manager outreach. Each channel
-  has its own work queue: a driving route for door hangers, a call list with a
-  script, and a list of companies to pitch.
-- **Results**: per channel, how many leads were contacted, responded, were
+- **Outreach**: the experiment. "Assign leads" hands out the best
+  unassigned leads across three outreach methods, each reaching someone
+  different or making a different offer: a door hanger at the property
+  (whoever is there), a phone call to the owner about this one job, and a
+  standing-rate pitch to the landlord or property manager. So the methods
+  can be compared fairly, a round only uses leads that every ticked method
+  can work (door hangers need a property address), all of one landlord's
+  leads go to the same method (now and in later rounds), and leads are dealt
+  in small random blocks within each kind (address or not, eviction or code
+  case) so each method gets the same mix and a similar spread of priority.
+  Each method has its own work queue: a driving route for door hangers, a
+  call list with a script, and a list of companies to pitch.
+- **Results**: per method, how many leads were contacted, responded, were
   quoted and won, what was spent, revenue, cost per job and revenue per
-  dollar.
+  dollar, and the mix of leads each method got. Lead Desk names a leader
+  only when the mixes match; otherwise it says why the comparison isn't
+  fair yet.
 - **Settings**: business name and phone, a tracking phone number and cost
   per contact for each channel, and the message templates.
 

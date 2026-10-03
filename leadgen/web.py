@@ -128,6 +128,7 @@ class App:
                 "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
             ).fetchone()
             last = db.get_settings(conn).get("last_daily_summary")
+            results = outreach.results(conn)
             return {
                 "daily": {"running": self.daily_lock.locked(), "message": self.daily_message,
                           "last_run": settings.get("last_daily_run"),
@@ -138,7 +139,8 @@ class App:
                                 "unchecked": counts["unchecked"] or 0},
                 "settings": public,
                 "channels": outreach.CHANNELS,
-                "results": outreach.results(conn),
+                "results": results,
+                "comparison": outreach.comparison(results),
                 "statuses": db.STATUSES,
                 "stale_days": self.stale_days,
                 "today": az_today().isoformat(),
@@ -174,8 +176,12 @@ class App:
                 raise KeyError("no such lead")
             if fields.get("responded_at") and row["responded_at"]:
                 fields.pop("responded_at")  # keep the first response time
-            if "channel" in fields and fields["channel"] and not row["assigned_at"]:
-                fields["assigned_at"] = now_iso()
+            if "channel" in fields and fields["channel"] == row["channel"]:
+                fields.pop("channel")
+            if "channel" in fields:
+                fields["assign_round"] = None  # set by hand, not by an Assign leads round
+                if fields["channel"] and not row["assigned_at"]:
+                    fields["assigned_at"] = now_iso()
             if fields:
                 sets = ", ".join(f"{k} = ?" for k in fields)
                 conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), body["id"]])
@@ -216,9 +222,8 @@ class App:
     def assign(self, body):
         with self.conn() as conn:
             leads = self.leads(conn)
-            counts = outreach.assign(conn, leads, int(body.get("count") or 40),
-                                     body.get("channels") or list(outreach.CHANNELS))
-        return {"assigned": counts}
+            return outreach.assign(conn, leads, int(body.get("count") or 40),
+                                   body.get("channels") or list(outreach.CHANNELS))
 
     def save_settings(self, body):
         allowed = set(outreach.DEFAULT_SETTINGS)

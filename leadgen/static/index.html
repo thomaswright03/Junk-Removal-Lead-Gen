@@ -138,29 +138,41 @@ const title = s => String(s ?? "").toLowerCase().replace(/\b\w/g, c => c.toUpper
 // Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
 const firstName = name => { const w = String(name || "").replace(/[&,].*$/, "").trim().split(/\s+/); return w.length > 1 && /^[A-Za-z]{2,}$/.test(w[1]) ? title(w[1]) : ""; };
 
+const OFFLINE = "Lead Desk didn't answer. Check that it is still running (and your internet connection), then try again.";
 async function api(path, body) {
   const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  const r = await fetch(path, opt);
+  return send(path, opt);
+}
+async function send(path, opt) {
+  let r;
+  try { r = await fetch(path, opt); } catch (e) { throw new Error(OFFLINE); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) throw new Error(j.error || (r.status >= 500 ? "Something went wrong on the Lead Desk server. Try again in a minute." : "That didn't work. Reload the page and try again."));
   return j;
 }
-function toast(msg, ms = 3200) {
-  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
-  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", ms);
+function toast(msg, ms = 3200, undo) {
+  const t = $("#toast");
+  t.innerHTML = esc(msg) + (undo ? ` <button class="btn small" id="toastUndo">Undo</button>` : "");
+  t.style.display = "block";
+  if (undo) $("#toastUndo").onclick = () => { t.style.display = "none"; undo(); };
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", undo ? Math.max(ms, 8000) : ms);
 }
 async function load() {
   S = await api("/api/state");
   render();
 }
-async function act(fn, okMsg) {
+// Run one action: the button is disabled while it runs (so a double click
+// can't log twice), the result is shown in a toast, and the page reloads.
+async function act(fn, okMsg, btn, undo) {
+  if (btn) { if (btn.disabled) return; btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
   try {
     const r = await fn();
     const msg = okMsg && (typeof okMsg === "function" ? okMsg(r) : okMsg);
-    if (msg) toast(msg, Math.max(3200, msg.length * 60));
+    if (msg) toast(msg, Math.max(3200, msg.length * 60), undo);
     await load(); return r;
   }
-  catch (e) { toast("Error: " + e.message, 6000); }
+  catch (e) { toast(e.message, 8000); }
+  finally { if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); } }
 }
 
 // ---------- helpers ---------------------------------------------------------
@@ -476,8 +488,8 @@ function renderOutreach() {
   const t = ui.outreachTab;
   $("#tab-outreach").innerHTML = `
     <div class="card">
-      <h2>Run the experiment</h2>
-      <p class="hint">Deals the best unassigned leads evenly across the channels you tick, so every channel gets a similar mix of strong and weak leads. Work each channel's queue below, log results on each lead, and the Results tab shows which one wins. ${unassigned.length} leads are unassigned.</p>
+      <h2>Split leads between outreach methods</h2>
+      <p class="hint">Hands out the best unassigned leads so each method gets the same kind of leads, and the Results tab can say fairly which one works. Only leads every ticked method can work are used (door hangers need a property address), every lead of one landlord goes to the same method, and each method gets the same mix of strong and weak leads. ${unassigned.length} leads are unassigned.</p>
       <div class="row">
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, unassigned.length) || 40}" min="1" style="width:80px"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" checked><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
@@ -486,11 +498,19 @@ function renderOutreach() {
     </div>
     <div class="tabs2">${Object.entries(S.channels).map(([c, n]) => `<button data-otab="${c}" class="${c === t ? "on" : ""}"><span class="dot" style="background:var(--c-${c})"></span> ${esc(n)} · ${queue(c).length} to do / ${counts[c]}</button>`).join("")}</div>
     <div id="oBody"></div>`;
-  $("#aGo").onclick = () => {
+  $("#aGo").onclick = e => {
     const chans = [...document.querySelectorAll(".aCh:checked")].map(x => x.value);
-    if (!chans.length) return toast("Tick at least one channel");
-    act(() => api("/api/assign", { count: +$("#aCount").value, channels: chans }),
-      r => "Assigned: " + Object.entries(r.assigned).map(([c, n]) => `${chName(c)} ${n}`).join(", "));
+    if (!chans.length) return toast("Tick at least one outreach method.");
+    const n = +$("#aCount").value;
+    if (!confirm(`Hand out up to ${n} leads between ${chans.map(chName).join(", ")}? Each lead then shows up in that method's work list.`)) return;
+    act(() => api("/api/assign", { count: n, channels: chans }), r => {
+      const got = Object.entries(r.assigned).map(([c, k]) => `${chName(c)} ${k}`).join(", ");
+      const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
+      const lo = r.left_out || {};
+      return `Assigned: ${got}.` + (followed ? ` ${followed} more went to the method already working their landlord.` : "")
+        + (lo.needs_address ? ` ${lo.needs_address} leads left out because they have no property address (add one on the lead, or untick Door hanger).` : "")
+        + (lo.no_contact ? ` ${lo.no_contact} left out because a ticked method has no one to contact.` : "");
+    }, e.currentTarget);
   };
   document.querySelectorAll("[data-otab]").forEach(b => b.onclick = () => { ui.outreachTab = b.dataset.otab; renderOutreach(); });
   const body = $("#oBody");
@@ -582,9 +602,10 @@ function renderResults() {
   const touched = tot("touched");
   const maxRate = Math.max(0.0001, ...R.map(r => r.response_rate || 0));
   const maxRpd = Math.max(0.0001, ...R.map(r => r.revenue_per_dollar || 0));
+  const C = S.comparison || { fair: false, ready: false, reasons: [] };
   const ranked = R.filter(r => r.touched).sort((a, b) => (b.won - a.won) || ((b.response_rate || 0) - (a.response_rate || 0)));
-  const small = R.some(r => r.touched && r.touched < 20);
-  const leader = ranked[0];
+  const leader = C.fair ? ranked[0] : null;
+  const share = v => v == null ? "–" : Math.round(v * 100) + "%";
   $("#tab-results").innerHTML = `
     <div class="grid4" style="margin-bottom:16px">
       <div class="kpi"><div class="v">${touched}</div><div class="l">leads contacted</div></div>
@@ -593,10 +614,12 @@ function renderResults() {
       <div class="kpi"><div class="v">${money(tot("revenue"))}</div><div class="l">revenue · ${money(tot("cost"))} spent</div></div>
     </div>
     <div class="card">
-      <h2>${leader && (leader.won || leader.responded) ? `Leading so far: ${esc(leader.label)}` : "No results yet"}</h2>
-      <p class="hint">${!touched ? "Assign leads on the Outreach tab and log each contact. Results fill in as you mark leads responded, quoted or won."
-        : small ? "Early days: some channels have fewer than 20 contacts, so a single job can swing the ranking. Keep going before deciding."
-        : "Every channel has at least 20 contacts. Compare cost per job and revenue per dollar before shifting effort."}</p>
+      <h2>${!touched ? "No results yet" : !C.fair ? "No fair comparison yet" : leader && (leader.won || leader.responded) ? `${C.ready ? "Working best" : "Leading so far"}: ${esc(leader.label)}` : "No responses yet"}</h2>
+      <p class="hint">${!touched ? "Split leads on the Outreach tab and log each contact. Results fill in as you mark leads responded, quoted or won."
+        : !C.fair ? "The methods didn't get the same kind of leads, so a ranking would show which leads each one got, not how well it works. Use Assign leads on the Outreach tab to hand out new leads evenly."
+        : C.ready ? "Every method got the same kind of leads and has at least 20 contacts. Compare cost per job and revenue per dollar before shifting effort."
+        : "Every method got the same kind of leads. Keep going before deciding."}</p>
+      ${C.reasons.length && touched ? `<ul class="hint">${C.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
       <div class="tablewrap"><table>
         <thead><tr><th>Channel</th><th class="num">Assigned</th><th class="num">Contacted</th><th class="num">Responded</th><th class="num">Quoted</th><th class="num">Won</th><th class="num">Response rate</th><th class="num">Win rate</th><th class="num">Spent</th><th class="num">Revenue</th><th class="num">Cost per job</th><th class="num">Revenue per $1</th></tr></thead>
         <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.assigned}</td><td class="num">${r.touched}</td><td class="num">${r.responded}</td><td class="num">${r.quoted}</td><td class="num">${r.won}</td>
@@ -604,6 +627,9 @@ function renderResults() {
           <td class="num">${r.cost_per_win == null ? "–" : money(r.cost_per_win)}</td><td class="num">${r.revenue_per_dollar == null ? (r.revenue ? "free" : "–") : money(r.revenue_per_dollar)}</td></tr>`).join("")}</tbody>
       </table></div>
     </div>
+    <div class="card"><h2>What each method got</h2><p class="hint">For a fair comparison these should be close: the same share of leads with an address, of evictions, and a similar average priority.</p>
+      <div class="tablewrap"><table><thead><tr><th>Method</th><th class="num">Leads</th><th class="num">With an address</th><th class="num">Evictions</th><th class="num">Average priority</th><th class="num">Set by hand</th></tr></thead>
+      <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.mix.leads}</td><td class="num">${share(r.mix.with_address)}</td><td class="num">${share(r.mix.evictions)}</td><td class="num">${r.mix.avg_score ?? "–"}</td><td class="num">${r.mix.set_by_hand}</td></tr>`).join("")}</tbody></table></div></div>
     <div class="card"><h2>Response rate</h2><p class="hint">Share of contacted leads that called back or said yes.</p>
       <div class="bars">${R.map(r => bar(r, r.response_rate || 0, maxRate, pct(r.response_rate))).join("")}</div></div>
     <div class="card"><h2>Revenue per dollar spent</h2><p class="hint">Phone and property-manager outreach cost Steve's time, not cash; add a cost per contact in Settings to compare them fairly.</p>
