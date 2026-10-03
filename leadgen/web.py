@@ -193,6 +193,8 @@ class App(JobRunner):
                 return out
             if params.get("list"):
                 out["list"] = leadlist.page(conn, settings, params)
+            if params.get("samples"):  # the Settings tab's message previews
+                out["samples"] = leadlist.samples(conn, settings)
             if params.get("list") == "queue":  # the Outreach tab
                 out["split"] = self.split_preview(conn, settings)
             lead_id = str(params.get("lead") or "")

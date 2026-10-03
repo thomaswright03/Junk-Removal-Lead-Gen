@@ -47,6 +47,7 @@ function renderLeads() {
     <div class="card mb12">
       <div class="row">
         <label class="wide-pick">Show <select id="fView">${opts(Object.keys(VIEW_LABEL).map(v => [v, viewName(v)]), view)}</select></label>
+        <span class="small-line">${CODE_COVERAGE} Pick “All leads” under Show to see them.</span>
         <button class="btn m-only" id="toolsToggle" aria-expanded="${!!ui.toolsOpen}" aria-controls="leadTools">${ui.toolsOpen ? "Hide" : "Add cases, update cases, find phones"}</button>
       </div>
       <div id="leadTools" class="${ui.toolsOpen ? "open" : ""}">
@@ -55,7 +56,9 @@ function renderLeads() {
         <button class="btn primary" id="cAdd">Add cases</button>
         <button class="btn" id="cUpdate" title="Re-read every open eviction case page for new documents (notice, judgment, writ) and court dates. Runs in the background.">Update court cases</button>
       </div>
-      <p class="hint" style="margin-bottom:0">Every morning Lead Desk searches the Justice Court calendar for eviction hearings, reads each new case page (with a short pause between cases) and keeps cases whose documents include an eviction notice. It re-reads open cases every few days and the day after each hearing, so a judgment or writ (lockout), the moment a unit needs clearing, moves the case to the top. You can also paste case links here. ${CODE_COVERAGE} Pick “All leads” under Show to see them.</p>
+      <p class="hint" style="margin-bottom:0">New evictions come in by themselves every morning; paste case links to add one now.</p>
+      <details class="hint"><summary>How Lead Desk finds evictions</summary>
+        <p>Every morning it searches the Justice Court calendar for eviction hearings, reads each new case page (with a short pause between cases) and keeps cases whose documents include an eviction notice. It re-reads open cases every few days and the day after each hearing, so a judgment or writ, the moment a unit needs clearing, moves the case to the top.</p></details>
     <div class="row mt8">
       <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes">Find landlord phones &amp; emails</button>
       <a class="btn" href="/api/skiptrace.csv" download="phone-lookup-list.csv" title="Owners still missing a phone, in the layout phone-lookup (skip-tracing) services such as BatchSkipTracing take">Download list for a phone-lookup service</a>
@@ -84,7 +87,17 @@ function renderLeads() {
         <button class="btn" id="pNext" ${last < list.total ? "" : "disabled"}>Next ${list.limit}</button>
       </span>
     </div>
-    <p class="hint">Order: evictions with a writ (lockout) first, then those with a judgment, then everything else by priority. Priority adds up how far the eviction has got or how much hauling a code case suggests, whether the owner lives elsewhere or is a company, repeat owners, and how recent the latest court or city event is (an upcoming hearing doesn't count). Miles are straight-line from ${esc(S.settings.base_address)}.</p>`;
+    <p class="hint">Order: writs first, then judgments, then everything else by priority. Hover a priority number to see what it's made of. Miles are straight-line from ${esc(S.settings.base_address)}.</p>
+    <details class="hint" id="glossary"><summary>What the court and property words mean</summary><dl>
+      <dt>Eviction notice</dt><dd>The landlord's written notice to the tenant, filed in the court case: the eviction is under way.</dd>
+      <dt>Judgment</dt><dd>The court ruled for the landlord. A writ usually follows within days.</dd>
+      <dt>Writ (lockout)</dt><dd>A writ of restitution: the court's order to put the tenant out. The unit needs clearing now.</dd>
+      <dt>Hearing</dt><dd>The court date for the case. It hasn't happened yet, so it doesn't make a lead fresher.</dd>
+      <dt>Parcel</dt><dd>The county's number for a piece of property; it tells Lead Desk the owner of record.</dd>
+      <dt>Owner lives elsewhere</dt><dd>The owner's mailing address isn't the property: a landlord, not someone living there.</dd>
+      <dt>Priority</dt><dd>Points for how far the eviction has got (or how much hauling a code case suggests), an owner who lives elsewhere or is a company, an owner with several leads, and how recent the latest court or city event is.</dd>
+      <dt>Phone-lookup service</dt><dd>A paid service (“skip tracing”) that finds phone numbers for a list of owners.</dd>
+    </dl></details>`;
   const filter = (id, key) => $(id).onchange = async e => { ui[key] = e.target.value; ui.offset = 0; syncUrl(); await reloadList(); $(id).focus(); };
   $("#q").oninput = e => { ui.q = e.target.value; ui.offset = 0; syncUrl(); clearTimeout(renderLeads.t); renderLeads.t = setTimeout(searchNow, 250); };
   filter("#fType", "type"); filter("#fStatus", "status"); filter("#fChannel", "channel"); filter("#fSort", "sort");

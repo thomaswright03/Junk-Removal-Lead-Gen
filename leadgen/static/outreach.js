@@ -39,7 +39,12 @@ function renderOutreach() {
   $("#tab-outreach").innerHTML = `
     <div class="card">
       <h2>Split leads between outreach methods</h2>
-      <p class="hint">Hands out the best unassigned leads so each method gets the same kind of leads, and the Results tab can say fairly which one works. Only leads every ticked method can work are used (door hangers need a property address), every lead of one landlord goes to the same method, and each method gets the same mix of strong and weak leads. ${unassignedCount} leads are unassigned.</p>
+      <p class="hint">Assign leads deals the best of your ${unassignedCount} unassigned leads evenly across the ticked methods, so Results can say which one wins jobs.</p>
+      <details class="hint"><summary>How the split works</summary><ul>
+        <li>Only leads every ticked method can work are used: door hangers need a property address (and a unit number at an apartment complex).</li>
+        <li>All of one landlord's leads go to the same method, now and later, so no company hears from you twice.</li>
+        <li>Each method gets the same mix of strong and weak leads, evictions and code cases.</li>
+        <li>Each method reaches someone different or makes a different offer: the lead shows which.</li></ul></details>
       <div class="row">
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}

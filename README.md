@@ -154,7 +154,14 @@ or set its limits to 0.
   changed on the lead. Money is kept in whole cents; a quote or revenue over
   $100,000 (or a contact cost over $1,000) is refused as a likely typo.
 - **Settings**: business name and phone, a tracking phone number and cost
-  per contact for each channel, and the message templates.
+  per contact for each channel, and the message templates. Template fields
+  (owner name, first name, address...) go in from buttons, and each
+  template shows a live preview for one of your leads.
+
+Each tab says what it is for in one line; the longer explanations (how the
+daily check works, how Assign leads splits) are behind a "How..." link, and
+the Leads tab has a short glossary of the court and property words (notice,
+judgment, writ, parcel, phone-lookup service).
 
 **Owner phone and email.** Public property records have no phone numbers or
 emails, so they come from three places, all shown in the Phone and Email

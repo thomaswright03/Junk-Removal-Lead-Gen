@@ -381,3 +381,12 @@ def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -
             "every_days": RECORDS_REQUEST_DAYS,
         },
     }
+
+
+def samples(conn: Conn, settings: dict) -> dict:
+    """The best open lead of each kind in the view, for previews of the
+    message templates: ``{"eviction": lead, "code_violation": lead}``."""
+    out: dict[str, dict] = {}
+    for l in sort_leads([l for l in lead_dicts(conn, settings) if l["status"] not in CLOSED]):
+        out.setdefault(str(l["lead_type"]), l)
+    return {k: out[k] for k in ("eviction", "code_violation") if k in out}

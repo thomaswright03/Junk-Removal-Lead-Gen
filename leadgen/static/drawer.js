@@ -117,7 +117,7 @@ function renderDrawer() {
       <dt>Email</dt><dd>${emailCell(l)}</dd>
       ${l.owner_website ? `<dt>Website</dt><dd><a href="${esc(/^https?:/i.test(l.owner_website) ? l.owner_website : "https://" + l.owner_website)}" target="_blank" rel="noopener">${esc(l.owner_website.replace(/^https?:\/\//i, ""))}</a></dd>` : ""}
       ${l.contact_source ? `<dt>Contact from</dt><dd class="muted">${esc(SOURCE_LABEL[l.contact_source] || l.contact_source)}${l.contact_name ? ` · matched “${esc(l.contact_name)}”` : ""}</dd>` : ""}
-      ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (statutory agent)` : ""}</dd>` : ""}
+      ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (lists the company's registered contact, its “statutory agent”)` : ""}</dd>` : ""}
     </dl>
 
     <div class="card" style="margin-top:16px">

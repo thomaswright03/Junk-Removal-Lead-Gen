@@ -56,6 +56,8 @@ function stateQuery() {
   if (ui.tab === "leads") {
     p.set("list", "leads");
     for (const k of ["q", "type", "status", "channel", "sort", "offset"]) p.set(k, ui[k]);
+  } else if (ui.tab === "settings") {
+    p.set("samples", "1");  // a lead of each kind, for the message previews
   } else if (ui.tab === "outreach") {
     p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", "score"); p.set("limit", QUEUE_LIMIT);
     // Door hangers and calls: the leads still to do. Landlords: everyone in that method.
@@ -142,12 +144,22 @@ function addressNote(l, plain) {
 // Phone calls on eviction cases use the landlord script, code cases the owner one.
 const templateKey = (channel, l) => channel === "phone" && l.lead_type === "eviction" ? "phone_eviction" : channel;
 function fill(channel, l) {
+  const st = S.settings;
+  return fillText(st.templates[templateKey(channel, l)] || st.templates[channel] || "", channel, l);
+}
+// The fields a template can use, with what each becomes (Settings shows them as buttons).
+const TEMPLATE_FIELDS = [["{owner}", "Owner name", "The owner's or landlord's name"],
+  ["{owner_first}", "First name", "The owner's first name, or “there” for a company or trust"],
+  ["{address}", "Address", "The property address, or “your property” when it isn't known"],
+  ["{at_address}", "“at” address", "“ at 123 Main St” when the address is known, otherwise nothing"],
+  ["{phone}", "Your phone", "This method's tracking number, or your main phone"], ["{business}", "Business name", "Your business name"]];
+function fillText(text, channel, l) {
   const st = S.settings, owner = (l.owner_name || l.plaintiff || "").trim();
   // Worked out on the server: blank for companies, trusts and apartments.
   const first = l.owner_first || "";
   const phone = (st.tracking_numbers || {})[channel] || st.business_phone || "[phone]";
   const addr = title(fullAddress(l));
-  return (st.templates[templateKey(channel, l)] || st.templates[channel] || "")
+  return text
     .replaceAll("{owner}", title(owner) || "Property Owner")
     .replaceAll("{owner_first}", first || "there")
     .replaceAll("{at_address}", addr ? ` at ${addr}` : "")

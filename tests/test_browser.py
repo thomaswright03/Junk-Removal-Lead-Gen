@@ -369,6 +369,22 @@ def test_address_work_queue_confirms_a_guess_in_one_click(server, page):
     assert row[0] == "confirmed"
 
 
+def test_message_fields_insert_from_buttons_with_a_live_preview(server, page):
+    url, app, path = server
+    page.goto(url + "#tab=settings")
+    page.wait_for_selector("#pv-phone_eviction")
+    # The preview is filled in for a real lead: the eviction's landlord is a company.
+    page.wait_for_function("document.getElementById('pv-phone_eviction').textContent.startsWith('Hi there,')")
+    box = page.locator("#tpl-door_hanger")
+    box.fill("Hello ")
+    box.evaluate("b => b.setSelectionRange(6, 6)")
+    page.click("[data-for=tpl-door_hanger][data-field='{business}']")
+    assert box.input_value() == "Hello {business}"
+    page.wait_for_function("document.getElementById('pv-door_hanger').textContent === \"Hello Steve's Junk Removal\"")
+    # The code-case call previews with the code case's address.
+    assert "10 E Sample St" in page.inner_text("#pv-phone")
+
+
 def test_reload_keeps_the_filter_and_the_open_lead(server, page):
     url, app, _ = server
     page.goto(url)

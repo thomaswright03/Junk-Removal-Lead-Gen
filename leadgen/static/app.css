@@ -112,6 +112,10 @@ dt { color: var(--muted); font-size: 13px; } dd { margin: 0; overflow-wrap: anyw
 .searchrow { display: flex; gap: 8px; flex: 1; min-width: 200px; }
 .searchrow input[type=search] { flex: 1; min-width: 0; }
 ol.guide { margin: 0 0 12px; padding-left: 20px; }
+details.hint summary { cursor: pointer; color: var(--accent); }
+details.hint dl { grid-template-columns: 160px 1fr; }
+details.hint ul { padding-left: 20px; }
+.row.fields { margin-top: 4px; }
 /* The lead drawer is a dialog: the page behind it doesn't scroll. */
 body:has(.drawer.open) { overflow: hidden; }
 /* The confirm dialog (instead of the browser's OK / Cancel box). */

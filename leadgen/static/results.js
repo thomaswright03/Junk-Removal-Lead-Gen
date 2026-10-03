@@ -22,6 +22,7 @@ function renderResults() {
   const leader = C.fair ? ranked[0] : null;
   const share = v => v == null ? "–" : Math.round(v * 100) + "%";
   $("#tab-results").innerHTML = `
+    <p class="hint">Which outreach method turns leads into paid jobs, for the least money.</p>
     <div class="row mb12"><label class="wide-pick">Compare methods on <select id="rKind">${kinds.map(([v, t]) => `<option value="${v}" ${v === kind ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></div>
     <p class="hint" id="rBasis">${esc((S.comparison_basis || {})[kind] || "")}</p>
     <div class="grid4" style="margin-bottom:16px">
