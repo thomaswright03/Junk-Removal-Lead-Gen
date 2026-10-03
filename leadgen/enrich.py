@@ -18,13 +18,25 @@ from . import config
 from .normalize import normalize_address
 from .util import is_residential, now_iso
 
-PARCEL_LAYER = (
-    "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17"
-)
+PARCEL_LAYER = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17"
 FIELDS = (
-    "PARCEL", "ADDRESSEE", "ADDRESS", "CITY", "STATE_PROVINCE", "POSTAL_CODE",
-    "MAIL1", "MAIL2", "MAIL3", "SITE_ADDRESS", "SITE_ZIP", "SITE_ZIPCITY",
-    "USE_DESC", "PPT_DESC", "YearBuilt", "LAT", "LON",
+    "PARCEL",
+    "ADDRESSEE",
+    "ADDRESS",
+    "CITY",
+    "STATE_PROVINCE",
+    "POSTAL_CODE",
+    "MAIL1",
+    "MAIL2",
+    "MAIL3",
+    "SITE_ADDRESS",
+    "SITE_ZIP",
+    "SITE_ZIPCITY",
+    "USE_DESC",
+    "PPT_DESC",
+    "YearBuilt",
+    "LAT",
+    "LON",
 )
 BATCH = 50
 
@@ -80,8 +92,7 @@ class ParcelClient:
         }
         if limit:
             params["resultRecordCount"] = limit
-        resp = self.session.get(f"{PARCEL_LAYER}/query", params=params,
-                                timeout=config.HTTP_TIMEOUT)
+        resp = self.session.get(f"{PARCEL_LAYER}/query", params=params, timeout=config.HTTP_TIMEOUT)
         resp.raise_for_status()
         payload = resp.json()
         if "error" in payload:
@@ -92,7 +103,7 @@ class ParcelClient:
         found = {}
         parcels = sorted({p for p in parcels if p})
         for i in range(0, len(parcels), BATCH):
-            chunk = parcels[i:i + BATCH]
+            chunk = parcels[i : i + BATCH]
             where = f"PARCEL IN ({','.join(_sql_str(p) for p in chunk)})"
             for attrs in self.query(where):
                 found.setdefault(attrs.get("PARCEL"), attrs)
@@ -137,8 +148,11 @@ def landlord_property(client, plaintiff):
     rows = client.by_owner(name, limit=200)
     if not rows:
         return None, None
-    homes = [r for r in rows if is_residential(r.get("USE_DESC") or r.get("PPT_DESC"))
-             and (r.get("SITE_ADDRESS") or "").strip()]
+    homes = [
+        r
+        for r in rows
+        if is_residential(r.get("USE_DESC") or r.get("PPT_DESC")) and (r.get("SITE_ADDRESS") or "").strip()
+    ]
     sites = {normalize_address(r["SITE_ADDRESS"]).split(" UNIT ")[0] for r in homes}
     return rows[0], (homes[0] if len(sites) == 1 else None)
 
@@ -146,9 +160,11 @@ def landlord_property(client, plaintiff):
 def enrich_landlords(conn, client=None, limit=None):
     """Owner and, when clear, property for eviction leads that have no address."""
     client = client or ParcelClient()
-    sql = ("SELECT id, plaintiff FROM leads WHERE duplicate_of IS NULL AND lead_type = 'eviction' "
-           "AND address IS NULL AND parcel IS NULL AND plaintiff IS NOT NULL "
-           "AND enriched_at IS NULL ORDER BY id")
+    sql = (
+        "SELECT id, plaintiff FROM leads WHERE duplicate_of IS NULL AND lead_type = 'eviction' "
+        "AND address IS NULL AND parcel IS NULL AND plaintiff IS NOT NULL "
+        "AND enriched_at IS NULL ORDER BY id"
+    )
     if limit:
         sql += f" LIMIT {int(limit)}"
     now = now_iso()
@@ -167,8 +183,11 @@ def enrich_landlords(conn, client=None, limit=None):
             counts["not_found"] += 1
         if site:
             fields.update(owner_fields(site))
-            fields.update(address=site["SITE_ADDRESS"].strip(), parcel=site.get("PARCEL"),
-                          zip=(str(site.get("SITE_ZIP") or "").strip() or None))
+            fields.update(
+                address=site["SITE_ADDRESS"].strip(),
+                parcel=site.get("PARCEL"),
+                zip=(str(site.get("SITE_ZIP") or "").strip() or None),
+            )
             fields["address_norm"] = normalize_address(fields["address"])
             if site.get("LAT") and site.get("LON"):
                 fields.update(lat=float(site["LAT"]), lon=float(site["LON"]))
@@ -196,8 +215,7 @@ def enrich_lead(conn, client, row, attrs=None, now=None):
     if not row["parcel"] and attrs.get("PARCEL"):
         fields["parcel"] = attrs["PARCEL"]
     sets = ", ".join(f"{k} = ?" for k in fields)
-    conn.execute(f"UPDATE leads SET {sets}, enriched_at = ? WHERE id = ?",
-                 [*fields.values(), now, row["id"]])
+    conn.execute(f"UPDATE leads SET {sets}, enriched_at = ? WHERE id = ?", [*fields.values(), now, row["id"]])
     return True
 
 
@@ -205,8 +223,10 @@ def enrich(conn, client=None, limit=None, refresh=False):
     """Fill owner_* columns. Returns counts by outcome."""
     client = client or ParcelClient()
     landlords = enrich_landlords(conn, client, limit=limit)
-    sql = ("SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL "
-           "AND (parcel IS NOT NULL OR address IS NOT NULL)")
+    sql = (
+        "SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL "
+        "AND (parcel IS NOT NULL OR address IS NOT NULL)"
+    )
     if not refresh:
         sql += " AND enriched_at IS NULL"
     sql += " ORDER BY id"
@@ -215,8 +235,11 @@ def enrich(conn, client=None, limit=None, refresh=False):
     rows = conn.execute(sql).fetchall()
     now = now_iso()
     by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
-    counts = {"found": landlords["found"], "not_found": landlords["not_found"],
-              "landlord_property": landlords["with_property"]}
+    counts = {
+        "found": landlords["found"],
+        "not_found": landlords["not_found"],
+        "landlord_property": landlords["with_property"],
+    }
     for r in rows:
         found = enrich_lead(conn, client, r, by_parcel.get(r["parcel"]) if r["parcel"] else None, now)
         counts["found" if found else "not_found"] += 1

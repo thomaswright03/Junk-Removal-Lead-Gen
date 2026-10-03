@@ -9,11 +9,36 @@ from urllib.parse import quote_plus
 from .util import az_today
 
 COLUMNS = (
-    "id", "lead_type", "event_date", "status", "address", "city", "zip",
-    "plaintiff", "defendant", "description", "source", "source_id", "lat", "lon",
-    "in_pima", "parcel", "owner_name", "owner_address", "owner_city", "owner_state",
-    "owner_zip", "owner_phone", "owner_email", "owner_absentee", "owner_entity", "property_use", "channel", "notes",
-    "first_seen", "url",
+    "id",
+    "lead_type",
+    "event_date",
+    "status",
+    "address",
+    "city",
+    "zip",
+    "plaintiff",
+    "defendant",
+    "description",
+    "source",
+    "source_id",
+    "lat",
+    "lon",
+    "in_pima",
+    "parcel",
+    "owner_name",
+    "owner_address",
+    "owner_city",
+    "owner_state",
+    "owner_zip",
+    "owner_phone",
+    "owner_email",
+    "owner_absentee",
+    "owner_entity",
+    "property_use",
+    "channel",
+    "notes",
+    "first_seen",
+    "url",
 )
 
 
@@ -95,9 +120,7 @@ def write_html(rows, path, today=None):
         data.append(d)
     types = sorted({d["lead_type"] for d in data})
     statuses = sorted({d["status"] for d in data})
-    opts = lambda vals: "".join(
-        f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in vals
-    )
+    opts = lambda vals: "".join(f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in vals)
     page = (
         _PAGE.replace("__DATE__", (today or az_today()).isoformat())
         .replace("__TYPES__", opts(types))

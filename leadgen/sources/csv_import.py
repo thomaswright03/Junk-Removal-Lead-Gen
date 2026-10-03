@@ -21,8 +21,7 @@ ALIASES = {
     "city": ("city",),
     "parcel": ("parcel", "apn", "parcel number", "parcel id"),
     "zip": ("zip", "zip code", "zipcode", "postal code"),
-    "event_date": ("date", "filed", "date filed", "filing date", "event date", "hearing date",
-                   "writ date"),
+    "event_date": ("date", "filed", "date filed", "filing date", "event date", "hearing date", "writ date"),
     "plaintiff": ("plaintiff", "landlord", "owner", "property manager"),
     "defendant": ("defendant", "tenant", "occupant"),
     "lead_type": ("type", "lead type", "lead_type"),
@@ -49,9 +48,10 @@ def read_csv_text(text, name="upload.csv", source_name="csv_import", default_typ
         fields = {k: pick(row, a) for k, a in ALIASES.items()}
         if not fields["address"] and not fields["source_id"]:
             continue
-        source_id = fields["source_id"] or hashlib.sha1(
-            f"{fields['address']}|{fields['event_date']}".upper().encode()
-        ).hexdigest()[:16]
+        source_id = (
+            fields["source_id"]
+            or hashlib.sha1(f"{fields['address']}|{fields['event_date']}".upper().encode()).hexdigest()[:16]
+        )
         event_date = _iso_date(fields["event_date"])
         raw = {"file": name, **{k: v for k, v in row.items() if k}}
         if fields["event_date"] and not event_date:

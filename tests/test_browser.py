@@ -38,12 +38,34 @@ class NoParcels:
 def server(tmp_path):
     path = tmp_path / "leads.db"
     conn = db.connect(path)
-    db.upsert(conn, Lead("tucson_code_cases", "CE-1", "code_violation", "2026-09-30", "10 E SAMPLE ST",
-                         lat=32.25, lon=-110.95, in_pima=True,
-                         description="Property Maintenance | Active | REFS / trash in yard"))
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-000001-EA", "eviction", "2026-09-29", None,
-                         plaintiff="EXAMPLE HOMES LLC", defendant="DOE, PAT", in_pima=True,
-                         eviction_notice=True))
+    db.upsert(
+        conn,
+        Lead(
+            "tucson_code_cases",
+            "CE-1",
+            "code_violation",
+            "2026-09-30",
+            "10 E SAMPLE ST",
+            lat=32.25,
+            lon=-110.95,
+            in_pima=True,
+            description="Property Maintenance | Active | REFS / trash in yard",
+        ),
+    )
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000001-EA",
+            "eviction",
+            "2026-09-29",
+            None,
+            plaintiff="EXAMPLE HOMES LLC",
+            defendant="DOE, PAT",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
     conn.execute("UPDATE leads SET owner_name = 'ROE RIVER', owner_entity = 0 WHERE source_id = 'CE-1'")
     conn.execute("UPDATE leads SET owner_phone = '(520) 555-0101' WHERE source_id = 'CV26-000001-EA'")
     db.put_settings(conn, {"lead_view": "all", "base_lat": 32.36, "base_lon": -111.12})
@@ -188,6 +210,7 @@ def _luminance(rgb):
     def ch(c):
         c = c / 255
         return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
     r, g, b = rgb
     return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
 

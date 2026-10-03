@@ -66,6 +66,7 @@ class NoParcels:
 
 # ---- #7 judgment and writ ---------------------------------------------------
 
+
 def test_case_page_records_judgment_and_writ():
     lead = parse_case_html(WRIT_HTML, url=CASE_URL.format("1000099"))
     assert lead.case_stage == "writ"
@@ -89,6 +90,7 @@ def test_writ_case_ranks_above_notice_only_and_shows_its_stage(tmp_path):
 
 # ---- #6 refresh open cases ---------------------------------------------------
 
+
 def test_court_date_passed_case_is_reread_and_closed_case_leaves_the_view(tmp_path):
     path = tmp_path / "l.db"
     conn = db.connect(path)
@@ -101,10 +103,19 @@ def test_court_date_passed_case_is_reread_and_closed_case_leaves_the_view(tmp_pa
     assert [l["source_id"] for l in app.state()["leads"]] == ["CV26-012345-EA"]
     assert len(cases_due(conn)) == 1  # the hearing was yesterday: read it again
 
-    closed = Pages({"1000001": CASE_HTML.replace('<span id="lblStatus">Open</span>',
-                                                  '<span id="lblStatus">Closed</span>')})
-    daily.run_daily(conn, code_cases=Empty(), calendar=Empty(), case_client=closed,
-                    parcel_client=NoParcels(), geocoder=NoGeocode(), providers=[], log=lambda m: None)
+    closed = Pages(
+        {"1000001": CASE_HTML.replace('<span id="lblStatus">Open</span>', '<span id="lblStatus">Closed</span>')}
+    )
+    daily.run_daily(
+        conn,
+        code_cases=Empty(),
+        calendar=Empty(),
+        case_client=closed,
+        parcel_client=NoParcels(),
+        geocoder=NoGeocode(),
+        providers=[],
+        log=lambda m: None,
+    )
     assert closed.calls == ["1000001"]
     row = conn.execute("SELECT case_status FROM leads").fetchone()
     assert row["case_status"] == "Closed"
@@ -129,18 +140,21 @@ class Empty:
 
 # ---- #30 next court date fallback -------------------------------------------
 
+
 def test_fallback_court_date_is_the_next_one_not_the_last():
     html = CASE_HTML.replace("Next Court Date:", "Courtroom Note:").replace(
         "<tr><td>10/14/2026</td>",
         "<tr><td>09/01/2026</td><td>09:00 AM</td><td>Hearing</td><td>Eviction Action</td><td></td></tr>"
         "<tr><td>11/20/2026</td><td>09:00 AM</td><td>Hearing</td><td>Status</td><td></td></tr>"
-        "<tr><td>10/14/2026</td>")
+        "<tr><td>10/14/2026</td>",
+    )
     lead = parse_case_html(html, today=date(2026, 10, 3))
     assert lead.next_court_date == "2026-10-14"
     assert parse_case_html(html, today=date(2026, 12, 1)).next_court_date is None
 
 
 # ---- #5 / #23 imports are visible; unchecked count ----------------------------
+
 
 def test_imported_csv_leads_show_without_changing_the_view(tmp_path):
     app = App(tmp_path / "l.db", parcel_client=NoParcels())
@@ -161,6 +175,7 @@ def test_imported_calendar_page_counts_cases_waiting_to_be_checked(tmp_path):
 
 # ---- #13 / #14 / #31 file imports ---------------------------------------------
 
+
 def test_excel_csv_keeps_accents(tmp_path):
     app = App(tmp_path / "l.db", parcel_client=NoParcels())
     app.import_file("csv_import", "x.csv", "Address\nCalle Ñandú 5\n".encode("cp1252"))
@@ -171,8 +186,7 @@ def test_excel_csv_keeps_accents(tmp_path):
 @pytest.mark.parametrize("data", [b"<html>hello</html>", b"", b"name,color\nx,blue\n"])
 def test_unrecognised_file_says_so(tmp_path, data):
     app = App(tmp_path / "l.db", parcel_client=NoParcels())
-    status, body, _ = handle(app, "POST", "/api/import", "source=pima_jp_calendar&filename=x.html",
-                             {"Host": "x"}, data)
+    status, body, _ = handle(app, "POST", "/api/import", "source=pima_jp_calendar&filename=x.html", {"Host": "x"}, data)
     assert status == 400 and "court calendar" in body["error"] and "CSV" in body["error"]
 
 
@@ -188,18 +202,44 @@ def test_unreadable_csv_date_is_left_empty_and_reported(tmp_path):
 
 # ---- #9 kill switch ------------------------------------------------------------
 
+
 def test_pause_stops_the_daily_check_and_lookups(tmp_path, monkeypatch):
     path = tmp_path / "l.db"
     conn = db.connect(path)
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30", None,
-                         plaintiff="EXAMPLE HOMES LLC", url=CASE_URL.format("1"), in_pima=True))
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-1-EA",
+            "eviction",
+            "2026-09-30",
+            None,
+            plaintiff="EXAMPLE HOMES LLC",
+            url=CASE_URL.format("1"),
+            in_pima=True,
+        ),
+    )
     conn.commit()
-    app = App(path, case_client=NoNetwork(), calendar=NoNetwork(), code_cases=NoNetwork(),
-              parcel_client=NoNetwork(), geocoder=NoNetwork(), providers=[NoNetwork()])
+    app = App(
+        path,
+        case_client=NoNetwork(),
+        calendar=NoNetwork(),
+        code_cases=NoNetwork(),
+        parcel_client=NoNetwork(),
+        geocoder=NoNetwork(),
+        providers=[NoNetwork()],
+    )
     app.save_settings({"paused": True})
-    summary = daily.run_daily(conn, case_client=NoNetwork(), calendar=NoNetwork(), code_cases=NoNetwork(),
-                              parcel_client=NoNetwork(), geocoder=NoNetwork(), providers=[NoNetwork()],
-                              log=lambda m: None)
+    summary = daily.run_daily(
+        conn,
+        case_client=NoNetwork(),
+        calendar=NoNetwork(),
+        code_cases=NoNetwork(),
+        parcel_client=NoNetwork(),
+        geocoder=NoNetwork(),
+        providers=[NoNetwork()],
+        log=lambda m: None,
+    )
     assert summary["paused"] and daily.describe(summary) == "paused: nothing was checked"
     for route in ("/api/find-contacts", "/api/cases/update", "/api/refresh", "/api/cases/add"):
         status, body, _ = handle(app, "POST", route, "", {"Host": "x"}, b'{"text": "1"}')
@@ -216,6 +256,7 @@ def test_pause_stops_the_daily_check_and_lookups(tmp_path, monkeypatch):
 
 # ---- #8 background jobs ----------------------------------------------------------
 
+
 def _wait(app, name, timeout=10):
     end = time.monotonic() + timeout
     while app.jobs[name].running():
@@ -229,11 +270,16 @@ def test_update_court_cases_runs_in_the_background_with_progress(tmp_path):
     conn = db.connect(path)
     ids = [str(1000001 + i) for i in range(40)]
     for i, cid in enumerate(ids):
-        db.upsert(conn, Lead("pima_jp_calendar", f"CV26-{i:06d}-EA", "eviction", "2026-09-30",
-                             url=CASE_URL.format(cid), in_pima=True))
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_calendar", f"CV26-{i:06d}-EA", "eviction", "2026-09-30", url=CASE_URL.format(cid), in_pima=True
+            ),
+        )
     conn.commit()
-    pages = Pages({cid: CASE_HTML.replace("CV26-012345-EA", f"CV26-{i:06d}-EA") for i, cid in enumerate(ids)},
-                  delay=0.02)
+    pages = Pages(
+        {cid: CASE_HTML.replace("CV26-012345-EA", f"CV26-{i:06d}-EA") for i, cid in enumerate(ids)}, delay=0.02
+    )
     app = App(path, case_client=pages, parcel_client=NoParcels())
     started = time.monotonic()
     first = app.update_cases({"force": True})
@@ -259,8 +305,18 @@ def test_find_phones_runs_in_the_background(tmp_path):
 
     path = tmp_path / "l.db"
     conn = db.connect(path)
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30",
-                         plaintiff="EXAMPLE HOMES LLC", in_pima=True, eviction_notice=True))
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-1-EA",
+            "eviction",
+            "2026-09-30",
+            plaintiff="EXAMPLE HOMES LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
     conn.commit()
     app = App(path, providers=[Phones()])
     assert app.find_contacts({})["started"]
@@ -278,6 +334,7 @@ def test_jobs_run_inside_the_request_online(tmp_path):
 
 # ---- #10 / #12 input checks and plain errors ------------------------------------
 
+
 def post(app, route, payload):
     return handle(app, "POST", route, "", {"Host": "x"}, json.dumps(payload).encode())
 
@@ -293,27 +350,34 @@ def desk(tmp_path):
     return app, app.state()["leads"][0]["id"], conn
 
 
-@pytest.mark.parametrize("route,payload,words", [
-    ("/api/lead", {"id": "LEAD", "fields": {"job_revenue": -500}}, "can't be negative"),
-    ("/api/lead", {"id": "LEAD", "fields": {"quote_amount": "abc"}}, "dollar amount"),
-    ("/api/touch", {"lead_id": "LEAD", "channel": "carrier_pigeon", "kind": "visited"}, "outreach method"),
-    ("/api/touch", {"lead_id": "LEAD", "channel": "door_hanger", "kind": "smoke_signal"}, "kind of contact"),
-    ("/api/settings", {"costs": "free"}, "Cost per contact"),
-    ("/api/settings", {"google_daily_limit": -1}, "Google lookups per day"),
-    ("/api/settings", {"templates": {"phone": 5}}, "Messages"),
-])
+@pytest.mark.parametrize(
+    "route,payload,words",
+    [
+        ("/api/lead", {"id": "LEAD", "fields": {"job_revenue": -500}}, "can't be negative"),
+        ("/api/lead", {"id": "LEAD", "fields": {"quote_amount": "abc"}}, "dollar amount"),
+        ("/api/touch", {"lead_id": "LEAD", "channel": "carrier_pigeon", "kind": "visited"}, "outreach method"),
+        ("/api/touch", {"lead_id": "LEAD", "channel": "door_hanger", "kind": "smoke_signal"}, "kind of contact"),
+        ("/api/settings", {"costs": "free"}, "Cost per contact"),
+        ("/api/settings", {"google_daily_limit": -1}, "Google lookups per day"),
+        ("/api/settings", {"templates": {"phone": 5}}, "Messages"),
+    ],
+)
 def test_bad_values_are_refused_with_a_plain_message(desk, route, payload, words):
     app, lead_id, conn = desk
     payload = json.loads(json.dumps(payload).replace('"LEAD"', str(lead_id)))
-    before = [tuple(r) for r in conn.execute("SELECT * FROM leads")] + \
-        [tuple(r) for r in conn.execute("SELECT * FROM touches")] + \
-        [tuple(r) for r in conn.execute("SELECT * FROM settings")]
+    before = (
+        [tuple(r) for r in conn.execute("SELECT * FROM leads")]
+        + [tuple(r) for r in conn.execute("SELECT * FROM touches")]
+        + [tuple(r) for r in conn.execute("SELECT * FROM settings")]
+    )
     status, body, _ = post(app, route, payload)
     assert status == 400 and words in body["error"]
     assert "Error" not in body["error"] and "'" not in body["error"][:1]
-    after = [tuple(r) for r in conn.execute("SELECT * FROM leads")] + \
-        [tuple(r) for r in conn.execute("SELECT * FROM touches")] + \
-        [tuple(r) for r in conn.execute("SELECT * FROM settings")]
+    after = (
+        [tuple(r) for r in conn.execute("SELECT * FROM leads")]
+        + [tuple(r) for r in conn.execute("SELECT * FROM touches")]
+        + [tuple(r) for r in conn.execute("SELECT * FROM settings")]
+    )
     assert before == after
 
 
@@ -337,6 +401,7 @@ def test_unexpected_errors_are_plain(desk, monkeypatch):
 
 # ---- #11 double clicks and removing a contact ----------------------------------
 
+
 def test_double_click_logs_one_contact_and_a_contact_can_be_removed(desk):
     app, lead_id, conn = desk
     app.update_lead({"id": lead_id, "fields": {"channel": "door_hanger"}})
@@ -355,6 +420,7 @@ def test_double_click_logs_one_contact_and_a_contact_can_be_removed(desk):
 
 # ---- #4 property address entered by hand ----------------------------------------
 
+
 def test_typed_address_is_located_and_makes_door_hangers_possible(tmp_path):
     from leadgen.geocode import GeocodeResult
 
@@ -364,14 +430,32 @@ def test_typed_address_is_located_and_makes_door_hangers_possible(tmp_path):
 
     class Parcels(NoParcels):
         def by_site_address(self, address):
-            return {"PARCEL": "999-01-001A", "ADDRESSEE": "EXAMPLE HOMES LLC", "ADDRESS": "PO BOX 1",
-                    "CITY": "PHOENIX", "STATE_PROVINCE": "AZ", "POSTAL_CODE": "85001",
-                    "SITE_ADDRESS": "100 W EXAMPLE DR", "USE_DESC": "APARTMENTS 25+ UNITS"}
+            return {
+                "PARCEL": "999-01-001A",
+                "ADDRESSEE": "EXAMPLE HOMES LLC",
+                "ADDRESS": "PO BOX 1",
+                "CITY": "PHOENIX",
+                "STATE_PROVINCE": "AZ",
+                "POSTAL_CODE": "85001",
+                "SITE_ADDRESS": "100 W EXAMPLE DR",
+                "USE_DESC": "APARTMENTS 25+ UNITS",
+            }
 
     path = tmp_path / "l.db"
     conn = db.connect(path)
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30", None,
-                         plaintiff="EXAMPLE HOMES LLC", in_pima=True, eviction_notice=True))
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-1-EA",
+            "eviction",
+            "2026-09-30",
+            None,
+            plaintiff="EXAMPLE HOMES LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
     conn.commit()
     app = App(path, geocoder=Geo(), parcel_client=Parcels())
     app.save_settings({"base_address": "1 Base St"})
@@ -397,8 +481,19 @@ def test_typed_address_survives_the_map_service_being_down(tmp_path):
 
     path = tmp_path / "l.db"
     conn = db.connect(path)
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30", None,
-                         plaintiff="EXAMPLE HOMES LLC", in_pima=True, eviction_notice=True))
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-1-EA",
+            "eviction",
+            "2026-09-30",
+            None,
+            plaintiff="EXAMPLE HOMES LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
     conn.commit()
     app = App(path, geocoder=Down(), parcel_client=Down())
     lead_id = app.state()["leads"][0]["id"]
@@ -409,6 +504,7 @@ def test_typed_address_survives_the_map_service_being_down(tmp_path):
 
 
 # ---- #3 notes saved with a status change -------------------------------------------
+
 
 def test_status_change_saves_notes_sent_with_it(desk):
     app, lead_id, conn = desk
@@ -434,8 +530,10 @@ def test_channels_list_has_no_postcards():
 def test_simultaneous_presses_start_one_job(tmp_path):
     path = tmp_path / "l.db"
     conn = db.connect(path)
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30",
-                         url=CASE_URL.format("1000001"), in_pima=True))
+    db.upsert(
+        conn,
+        Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30", url=CASE_URL.format("1000001"), in_pima=True),
+    )
     conn.commit()
     app = App(path, case_client=Pages({"1000001": CASE_HTML}, delay=0.3), parcel_client=NoParcels())
     results = []

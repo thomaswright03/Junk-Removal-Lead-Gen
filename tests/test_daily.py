@@ -34,8 +34,10 @@ class FakeCourt:
         self.posts = []
 
     def get(self, url, **kw):
-        return Resp('<form><input type="hidden" name="__VIEWSTATE" value="start"/>'
-                    '<input type="submit" name="ctl00$MainContent$submitFilter" value="submit"/></form>')
+        return Resp(
+            '<form><input type="hidden" name="__VIEWSTATE" value="start"/>'
+            '<input type="submit" name="ctl00$MainContent$submitFilter" value="submit"/></form>'
+        )
 
     def post(self, url, data=None, **kw):
         self.posts.append(dict(data))
@@ -71,9 +73,20 @@ def test_calendar_search_reads_every_page():
 
 
 def parcel(pid, owner, site, use="APARTMENTS 25+ UNITS"):
-    return {"PARCEL": pid, "ADDRESSEE": owner, "ADDRESS": "PO BOX 1", "CITY": "PHOENIX",
-            "STATE_PROVINCE": "AZ", "POSTAL_CODE": "85001", "SITE_ADDRESS": site,
-            "SITE_ZIP": "85705", "USE_DESC": use, "YearBuilt": "1985", "LAT": 32.3, "LON": -110.98}
+    return {
+        "PARCEL": pid,
+        "ADDRESSEE": owner,
+        "ADDRESS": "PO BOX 1",
+        "CITY": "PHOENIX",
+        "STATE_PROVINCE": "AZ",
+        "POSTAL_CODE": "85001",
+        "SITE_ADDRESS": site,
+        "SITE_ZIP": "85705",
+        "USE_DESC": use,
+        "YearBuilt": "1985",
+        "LAT": 32.3,
+        "LON": -110.98,
+    }
 
 
 class FakeParcels:
@@ -91,10 +104,12 @@ class FakeParcels:
 
 
 def test_landlord_property_only_when_unambiguous():
-    rows = [parcel("P1", "SAGUARO VISTA APARTMENTS LLC", "100 W SAGUARO VISTA"),
-            parcel("P2", "SAGUARO VISTA APARTMENTS LLC", "100 W SAGUARO VISTA"),
-            parcel("P3", "DESERT SKY PROPERTY MGMT LLC", "1 A ST"),
-            parcel("P4", "DESERT SKY PROPERTY MGMT LLC", "2 B ST")]
+    rows = [
+        parcel("P1", "SAGUARO VISTA APARTMENTS LLC", "100 W SAGUARO VISTA"),
+        parcel("P2", "SAGUARO VISTA APARTMENTS LLC", "100 W SAGUARO VISTA"),
+        parcel("P3", "DESERT SKY PROPERTY MGMT LLC", "1 A ST"),
+        parcel("P4", "DESERT SKY PROPERTY MGMT LLC", "2 B ST"),
+    ]
     client = FakeParcels(rows)
     owner, site = landlord_property(client, "SAGUARO VISTA APARTMENTS LLC")
     assert owner["PARCEL"] == "P1" and site["SITE_ADDRESS"] == "100 W SAGUARO VISTA"
@@ -128,9 +143,10 @@ class FakeCases:
     def fetch(self, url):
         cid = case_id(url)
         self.fetched.append(cid)
-        html = CASE_HTML.replace("CV26-012345-EA", {"1000001": "CV26-012345-EA",
-                                                   "1000002": "CV26-012346-EA",
-                                                   "1000003": "CV26-012347-EA"}[cid])
+        html = CASE_HTML.replace(
+            "CV26-012345-EA",
+            {"1000001": "CV26-012345-EA", "1000002": "CV26-012346-EA", "1000003": "CV26-012347-EA"}[cid],
+        )
         return parse_case_html(html, url=url)
 
 
@@ -156,9 +172,15 @@ def test_run_daily_end_to_end():
     cal_fetch = cal.fetch
     cal.fetch = lambda since, until, **kw: cal_fetch(since, until, client=CalendarClient(FakeCourt(), delay=0))
     summary = daily.run_daily(
-        conn, today=date(2026, 10, 3), code_cases=NoCodeCases(), calendar=cal, case_client=cases,
+        conn,
+        today=date(2026, 10, 3),
+        code_cases=NoCodeCases(),
+        calendar=cal,
+        case_client=cases,
         parcel_client=FakeParcels([parcel("P1", "SAGUARO VISTA APARTMENTS LLC", "100 W SAGUARO VISTA")]),
-        geocoder=NoGeocode(), providers=[FakePhones()], log=lambda m: None,
+        geocoder=NoGeocode(),
+        providers=[FakePhones()],
+        log=lambda m: None,
     )
     assert summary["evictions"] == {"new": 3, "updated": 0}
     assert summary["cases"]["checked"] == 3 and summary["cases"]["with_notice"] == 3
@@ -169,9 +191,17 @@ def test_run_daily_end_to_end():
     assert db.get_settings(conn)["last_daily_run"] == "2026-10-03"
     # Next day: the cases already confirmed aren't read again.
     cases.fetched.clear()
-    daily.run_daily(conn, today=date(2026, 10, 4), code_cases=NoCodeCases(), calendar=cal,
-                    case_client=cases, parcel_client=FakeParcels([]), geocoder=NoGeocode(),
-                    providers=[], log=lambda m: None)
+    daily.run_daily(
+        conn,
+        today=date(2026, 10, 4),
+        code_cases=NoCodeCases(),
+        calendar=cal,
+        case_client=cases,
+        parcel_client=FakeParcels([]),
+        geocoder=NoGeocode(),
+        providers=[],
+        log=lambda m: None,
+    )
     assert cases.fetched == []
 
 
@@ -181,10 +211,17 @@ def test_one_failing_step_does_not_stop_the_rest():
             raise ConnectionError("court site down")
 
     conn = db.connect(":memory:")
-    summary = daily.run_daily(conn, today=date(2026, 10, 3), code_cases=NoCodeCases(),
-                              calendar=Broken(), case_client=FakeCases(),
-                              parcel_client=FakeParcels([]), geocoder=NoGeocode(), providers=[],
-                              log=lambda m: None)
+    summary = daily.run_daily(
+        conn,
+        today=date(2026, 10, 3),
+        code_cases=NoCodeCases(),
+        calendar=Broken(),
+        case_client=FakeCases(),
+        parcel_client=FakeParcels([]),
+        geocoder=NoGeocode(),
+        providers=[],
+        log=lambda m: None,
+    )
     assert "error" in summary["evictions"]
     assert "stale" in summary and "failed: evictions" in daily.describe(summary)
 

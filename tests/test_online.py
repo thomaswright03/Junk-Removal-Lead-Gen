@@ -13,10 +13,8 @@ from leadgen import pg, wsgi
 
 
 def test_sql_translation():
-    sql, named = pg.translate(
-        "SELECT * FROM leads WHERE a = ? AND url LIKE '%jc%' AND b = :b ORDER BY x DESC, y")
-    assert sql == ("SELECT * FROM leads WHERE a = %s AND url LIKE '%%jc%%' AND b = %(b)s "
-                   "ORDER BY x DESC NULLS LAST, y")
+    sql, named = pg.translate("SELECT * FROM leads WHERE a = ? AND url LIKE '%jc%' AND b = :b ORDER BY x DESC, y")
+    assert sql == ("SELECT * FROM leads WHERE a = %s AND url LIKE '%%jc%%' AND b = %(b)s ORDER BY x DESC NULLS LAST, y")
     assert named
     assert pg.translate("SELECT 'it''s ?' , ':x'")[0] == "SELECT 'it''s ?' , ':x'"
     assert pg.translate("SELECT a::text")[0] == "SELECT a::text"
@@ -38,8 +36,11 @@ def test_insert_reports_new_id():
     class Raw:
         def execute(self, sql, params):
             self.sql = sql
-            return type("C", (), {"description": [type("D", (), {"name": "id"})()],
-                                  "fetchall": lambda s: [(41,)], "rowcount": 1})()
+            return type(
+                "C",
+                (),
+                {"description": [type("D", (), {"name": "id"})()], "fetchall": lambda s: [(41,)], "rowcount": 1},
+            )()
 
     raw = Raw()
     conn = pg.Connection("postgres://x", connect=lambda *a, **kw: raw)
@@ -48,9 +49,14 @@ def test_insert_reports_new_id():
 
 
 def call(environ_extra=None, method="GET", path="/api/state", body=b"", password=None):
-    environ = {"REQUEST_METHOD": method, "PATH_INFO": path, "QUERY_STRING": "",
-               "HTTP_HOST": "lead-desk.vercel.app", "CONTENT_LENGTH": str(len(body)),
-               "wsgi.input": io.BytesIO(body)}
+    environ = {
+        "REQUEST_METHOD": method,
+        "PATH_INFO": path,
+        "QUERY_STRING": "",
+        "HTTP_HOST": "lead-desk.vercel.app",
+        "CONTENT_LENGTH": str(len(body)),
+        "wsgi.input": io.BytesIO(body),
+    }
     if password is not None:
         environ["HTTP_AUTHORIZATION"] = "Basic " + base64.b64encode(f"steve:{password}".encode()).decode()
     environ.update(environ_extra or {})
@@ -87,8 +93,9 @@ def test_password_required(online):
 def test_page_and_settings_online(online):
     status, _, out = call(path="/", password="hauling")
     assert status.startswith("200") and b"Lead Desk" in out
-    status, _, _ = call(method="POST", path="/api/settings", password="hauling",
-                        body=json.dumps({"lead_view": "evictions"}).encode())
+    status, _, _ = call(
+        method="POST", path="/api/settings", password="hauling", body=json.dumps({"lead_view": "evictions"}).encode()
+    )
     assert status.startswith("200")
     state = json.loads(call(password="hauling")[2])
     assert state["settings"]["lead_view"] == "evictions"
@@ -101,13 +108,16 @@ def test_check_button_online_without_github_token(online):
 
 
 def test_cross_site_post_refused(online):
-    status, _, _ = call({"HTTP_ORIGIN": "https://evil.example"}, method="POST",
-                        path="/api/settings", body=b"{}", password="hauling")
+    status, _, _ = call(
+        {"HTTP_ORIGIN": "https://evil.example"}, method="POST", path="/api/settings", body=b"{}", password="hauling"
+    )
     assert status.startswith("403")
 
 
 def test_counts_only_drops_error_details():
     from leadgen.daily import counts_only
-    s = counts_only({"owners": {"error": "HTTPError: 500 for url: ...ADDRESSEE LIKE 'X LLC%'"},
-                     "evictions": {"new": 3}})
+
+    s = counts_only(
+        {"owners": {"error": "HTTPError: 500 for url: ...ADDRESSEE LIKE 'X LLC%'"}, "evictions": {"new": 3}}
+    )
     assert s == {"owners": {"error": "HTTPError"}, "evictions": {"new": 3}}

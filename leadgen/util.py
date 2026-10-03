@@ -76,5 +76,7 @@ def is_paused(settings: dict | None = None) -> bool:
     return bool((settings or {}).get("paused")) or env_flag("LEADDESK_PAUSED")
 
 
-PAUSED_MESSAGE = ("Lead Desk is paused, so nothing was checked or looked up. Turn the pause off "
-                  "in Settings (and remove LEADDESK_PAUSED if it is set) to start again.")
+PAUSED_MESSAGE = (
+    "Lead Desk is paused, so nothing was checked or looked up. Turn the pause off "
+    "in Settings (and remove LEADDESK_PAUSED if it is set) to start again."
+)

@@ -54,8 +54,27 @@ GOOGLE_DAILY_LIMIT = 30
 TUCSON = (32.2226, -110.9747)
 
 _NAME_NOISE = {
-    "LLC", "L", "C", "INC", "CORP", "CO", "COMPANY", "LP", "LLLP", "LTD", "THE", "OF", "AND",
-    "TR", "TRS", "TRUST", "TRUSTEE", "AZ", "ARIZONA", "TUCSON", "&",
+    "LLC",
+    "L",
+    "C",
+    "INC",
+    "CORP",
+    "CO",
+    "COMPANY",
+    "LP",
+    "LLLP",
+    "LTD",
+    "THE",
+    "OF",
+    "AND",
+    "TR",
+    "TRS",
+    "TRUST",
+    "TRUSTEE",
+    "AZ",
+    "ARIZONA",
+    "TUCSON",
+    "&",
 }
 
 
@@ -87,11 +106,46 @@ def names_match(a, b):
 
 
 _BUSINESS_WORDS = {
-    "LLC", "LLLP", "LP", "LTD", "INC", "CORP", "CORPORATION", "CO", "COMPANY", "GROUP",
-    "PROPERTIES", "PROPERTY", "HOLDINGS", "INVESTMENTS", "INVESTMENT", "HOMES", "REALTY",
-    "REAL", "MANAGEMENT", "MGMT", "RESIDENTIAL", "COMMUNITIES", "APARTMENTS", "APARTMENT",
-    "RENTALS", "RENTAL", "CAPITAL", "PARTNERS", "PARTNERSHIP", "VENTURES", "FUND", "ASSOCIATES",
-    "ASSN", "ASSOCIATION", "BANK", "LENDING", "DEVELOPMENT", "ENTERPRISES", "HOUSING", "VILLAGE",
+    "LLC",
+    "LLLP",
+    "LP",
+    "LTD",
+    "INC",
+    "CORP",
+    "CORPORATION",
+    "CO",
+    "COMPANY",
+    "GROUP",
+    "PROPERTIES",
+    "PROPERTY",
+    "HOLDINGS",
+    "INVESTMENTS",
+    "INVESTMENT",
+    "HOMES",
+    "REALTY",
+    "REAL",
+    "MANAGEMENT",
+    "MGMT",
+    "RESIDENTIAL",
+    "COMMUNITIES",
+    "APARTMENTS",
+    "APARTMENT",
+    "RENTALS",
+    "RENTAL",
+    "CAPITAL",
+    "PARTNERS",
+    "PARTNERSHIP",
+    "VENTURES",
+    "FUND",
+    "ASSOCIATES",
+    "ASSN",
+    "ASSOCIATION",
+    "BANK",
+    "LENDING",
+    "DEVELOPMENT",
+    "ENTERPRISES",
+    "HOUSING",
+    "VILLAGE",
 }
 _SPLIT_RE = re.compile(r"\s*(?:\bATTN\b:?|\bC/O\b|%)\s*", re.I)
 
@@ -127,6 +181,7 @@ def lookup_targets(lead):
 
 # ---------------------------------------------------------------- providers --
 
+
 class ProviderUnavailable(Exception):
     pass
 
@@ -155,19 +210,20 @@ class OsmProvider:
         q = f"""
         [out:json][timeout:10];
         (
-          nwr(around:{self.radius},{lead['lat']},{lead['lon']})["phone"];
-          nwr(around:{self.radius},{lead['lat']},{lead['lon']})["contact:phone"];
-          nwr(around:{self.radius},{lead['lat']},{lead['lon']})["email"];
-          nwr(around:{self.radius},{lead['lat']},{lead['lon']})["contact:email"];
-          nwr(around:{self.radius},{lead['lat']},{lead['lon']})["website"];
+          nwr(around:{self.radius},{lead["lat"]},{lead["lon"]})["phone"];
+          nwr(around:{self.radius},{lead["lat"]},{lead["lon"]})["contact:phone"];
+          nwr(around:{self.radius},{lead["lat"]},{lead["lon"]})["email"];
+          nwr(around:{self.radius},{lead["lat"]},{lead["lon"]})["contact:email"];
+          nwr(around:{self.radius},{lead["lat"]},{lead["lon"]})["website"];
         );
         out tags center 20;
         """
         last_error = None
         for url in list(self.urls):
             try:
-                resp = self.session.post(url, data={"data": q}, timeout=self.timeout,
-                                         headers={"Accept": "application/json"})
+                resp = self.session.post(
+                    url, data={"data": q}, timeout=self.timeout, headers={"Accept": "application/json"}
+                )
                 resp.raise_for_status()
             except requests.RequestException as e:
                 last_error = e
@@ -189,12 +245,15 @@ def pick_osm(elements, business_name):
     for el in elements:
         t = el.get("tags") or {}
         name = t.get("name") or t.get("operator") or ""
-        housing = (t.get("building") in ("apartments", "residential")
-                   or t.get("landuse") == "residential"
-                   or t.get("office") in ("property_management", "estate_agent")
-                   or "apartment" in name.lower())
-        matched = bool(business_name) and (names_match(name, business_name)
-                                           or names_match(t.get("operator"), business_name))
+        housing = (
+            t.get("building") in ("apartments", "residential")
+            or t.get("landuse") == "residential"
+            or t.get("office") in ("property_management", "estate_agent")
+            or "apartment" in name.lower()
+        )
+        matched = bool(business_name) and (
+            names_match(name, business_name) or names_match(t.get("operator"), business_name)
+        )
         if not (matched or housing):
             continue
         # Name match beats "some housing nearby"; then prefer the entry with
@@ -285,8 +344,9 @@ class GoogleBudget:
         if self._count(month_key) is None or self._count(day_key) is None:
             old_month, old_day = self._legacy(local)
             for key, start in ((month_key, old_month), (day_key, old_day)):
-                self.conn.execute("INSERT INTO counters (key, n) VALUES (?, ?) "
-                                  "ON CONFLICT(key) DO NOTHING", (key, start))
+                self.conn.execute(
+                    "INSERT INTO counters (key, n) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", (key, start)
+                )
             self.conn.commit()
         if not self._reserve(day_key, self.daily):
             return False
@@ -317,14 +377,13 @@ class GooglePlacesProvider:
             PLACES_URL,
             json={
                 "textQuery": text,
-                "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lon},
-                                            "radius": 50000.0}},
+                "locationBias": {"circle": {"center": {"latitude": lat, "longitude": lon}, "radius": 50000.0}},
                 "maxResultCount": 5,
             },
             headers={
                 "X-Goog-Api-Key": self.key,
                 "X-Goog-FieldMask": "places.id,places.displayName,places.nationalPhoneNumber,"
-                                    "places.websiteUri,places.formattedAddress",
+                "places.websiteUri,places.formattedAddress",
             },
             timeout=config.HTTP_TIMEOUT,
         )
@@ -387,10 +446,8 @@ def scan_html(html, base_url):
     p = _LinkParser()
     p.feed(html)
     text = " ".join(p.text)
-    phones = [clean_phone(t) for t in p.tels] + [
-        clean_phone("".join(m.groups())) for m in _PHONE_RE.finditer(text)]
-    emails = [clean_email(m) for m in p.mails] + [
-        clean_email(m) for m in _EMAIL_RE.findall(text)]
+    phones = [clean_phone(t) for t in p.tels] + [clean_phone("".join(m.groups())) for m in _PHONE_RE.finditer(text)]
+    emails = [clean_email(m) for m in p.mails] + [clean_email(m) for m in _EMAIL_RE.findall(text)]
     host = urlparse(base_url).netloc
     contact_pages = []
     for href in p.links:
@@ -448,11 +505,13 @@ class WebsiteScanner:
         emails = list(dict.fromkeys(emails))
         if not (phones or emails):
             return None
-        return Contact(phone=phones[0] if phones else None, email=emails[0] if emails else None,
-                       website=url, source="website")
+        return Contact(
+            phone=phones[0] if phones else None, email=emails[0] if emails else None, website=url, source="website"
+        )
 
 
 # ------------------------------------------------------------------ runner --
+
 
 def _reach(c):
     return (bool(c.phone), bool(c.email), bool(c.website))
@@ -475,9 +534,11 @@ def providers_from(settings=None, google_key=None, conn=None):
     if key and settings.get("google_enabled", True) is not False:
         limit = settings.get("google_monthly_limit", GOOGLE_MONTHLY_LIMIT)
         daily = settings.get("google_daily_limit", GOOGLE_DAILY_LIMIT)
-        budget = (GoogleBudget(conn, None if limit is None else int(limit),
-                               None if daily is None else int(daily))
-                  if conn is not None else None)
+        budget = (
+            GoogleBudget(conn, None if limit is None else int(limit), None if daily is None else int(daily))
+            if conn is not None
+            else None
+        )
         out.append(GooglePlacesProvider(key, budget=budget))
     return out
 
@@ -486,8 +547,17 @@ def _has_notice(lead):
     return lead["lead_type"] == "eviction" and bool(lead["eviction_notice"])
 
 
-def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print,
-                  lead_types=None, progress=None, should_stop=None):
+def find_contacts(
+    conn,
+    providers,
+    scanner=None,
+    limit=None,
+    refresh=False,
+    log=print,
+    lead_types=None,
+    progress=None,
+    should_stop=None,
+):
     """Look up phone/email/website for business owners and landlords.
 
     One lookup per company: every lead with the same owner/landlord name gets
@@ -497,9 +567,11 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
     """
     scanner = scanner if scanner is not None else WebsiteScanner()
     stale_google = (utc_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
-    due = "" if refresh else (
-        "AND (contact_checked_at IS NULL "
-        "OR (contact_source LIKE 'google%' AND contact_checked_at < ?))")
+    due = (
+        ""
+        if refresh
+        else ("AND (contact_checked_at IS NULL OR (contact_source LIKE 'google%' AND contact_checked_at < ?))")
+    )
     rows = conn.execute(
         f"""
         SELECT * FROM leads
@@ -572,8 +644,7 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
                 "UPDATE leads SET owner_phone = COALESCE(?, owner_phone), "
                 "owner_email = COALESCE(?, owner_email), owner_website = COALESCE(?, owner_website), "
                 "contact_source = ?, contact_name = ?, contact_checked_at = ? WHERE id = ?",
-                (contact.phone, contact.email, contact.website, contact.source,
-                 contact.matched_name, now, lead["id"]),
+                (contact.phone, contact.email, contact.website, contact.source, contact.matched_name, now, lead["id"]),
             )
         else:
             counts["not_found"] += 1

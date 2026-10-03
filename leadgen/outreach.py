@@ -48,8 +48,13 @@ CHANNELS = {
 # The kinds of contact logged for each method, with their button labels.
 TOUCH_KINDS = {
     "door_hanger": [["visited", "Hanger left"], ["talked", "Talked in person"]],
-    "phone": [["no_answer", "No answer"], ["voicemail", "Left voicemail"], ["talked", "Talked"],
-              ["bad_number", "Wrong number"], ["do_not_call", "Asked not to call"]],
+    "phone": [
+        ["no_answer", "No answer"],
+        ["voicemail", "Left voicemail"],
+        ["talked", "Talked"],
+        ["bad_number", "Wrong number"],
+        ["do_not_call", "Asked not to call"],
+    ],
     "property_manager": [["emailed", "Emailed"], ["voicemail", "Left voicemail"], ["talked", "Talked"]],
 }
 
@@ -78,8 +83,7 @@ DEFAULT_SETTINGS = {
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {
         "door_hanger": (
-            "Need this property cleared? Junk, furniture, appliances, yard debris. "
-            "Free quote: {phone}. {business}"
+            "Need this property cleared? Junk, furniture, appliances, yard debris. Free quote: {phone}. {business}"
         ),
         # Phone call to the owner of a property with a City code case.
         "phone": (
@@ -107,8 +111,14 @@ DEFAULT_SETTINGS = {
 # Points by violation code / lead type. Higher means more stuff to haul and a
 # more motivated owner.
 _TYPE_POINTS = {
-    "VACANT": 40, "DUMP": 35, "PMMULT": 35, "REFS": 30, "RSTOR": 30, "DILAP": 30,
-    "TREES": 15, "WEEDS": 15,
+    "VACANT": 40,
+    "DUMP": 35,
+    "PMMULT": 35,
+    "REFS": 30,
+    "RSTOR": 30,
+    "DILAP": 30,
+    "TREES": 15,
+    "WEEDS": 15,
 }
 
 
@@ -237,18 +247,25 @@ def assign(conn, leads, count, channels, seed=None):
     now = now_iso()
 
     taken = {}
-    for r in conn.execute("SELECT id, plaintiff, owner_name, channel FROM leads "
-                          "WHERE channel IS NOT NULL ORDER BY assigned_at, id").fetchall():
+    for r in conn.execute(
+        "SELECT id, plaintiff, owner_name, channel FROM leads WHERE channel IS NOT NULL ORDER BY assigned_at, id"
+    ).fetchall():
         taken.setdefault(landlord_key(r), r["channel"])
 
     pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
     pool.sort(key=lambda l: (-l["score"], l["id"]))
-    out = {"assigned": {c: 0 for c in channels}, "followed": {},
-           "left_out": {"needs_address": 0, "no_contact": 0}, "round": round_id}
+    out = {
+        "assigned": {c: 0 for c in channels},
+        "followed": {},
+        "left_out": {"needs_address": 0, "no_contact": 0},
+        "round": round_id,
+    }
 
     def give(lead, ch, round_):
-        conn.execute("UPDATE leads SET channel = ?, assigned_at = ?, assign_round = ? WHERE id = ?",
-                     (ch, now, round_, lead["id"]))
+        conn.execute(
+            "UPDATE leads SET channel = ?, assigned_at = ?, assign_round = ? WHERE id = ?",
+            (ch, now, round_, lead["id"]),
+        )
 
     picked = 0
     clusters = {}  # landlord -> leads, in score order
@@ -287,7 +304,7 @@ def assign(conn, leads, count, channels, seed=None):
         groups = by_stratum[stratum]
         have = {c: 0 for c in channels}
         for i in range(0, len(groups), len(channels)):
-            block = sorted(groups[i:i + len(channels)], key=len, reverse=True)
+            block = sorted(groups[i : i + len(channels)], key=len, reverse=True)
             free = channels[:]
             rng.shuffle(free)
             for group in block:
@@ -305,8 +322,7 @@ def _mix(rows):
     """What kind of leads a channel got."""
     n = len(rows)
     if not n:
-        return {"leads": 0, "with_address": None, "evictions": None, "avg_score": None,
-                "set_by_hand": 0}
+        return {"leads": 0, "with_address": None, "evictions": None, "avg_score": None, "set_by_hand": 0}
     return {
         "leads": n,
         "with_address": sum(1 for r in rows if r["address"]) / n,
@@ -328,8 +344,10 @@ def results(conn, today=None):
         """
     ).fetchall()
     owner_counts = {}
-    for r in conn.execute("SELECT owner_name, COUNT(*) AS n FROM leads WHERE owner_name IS NOT NULL "
-                          "AND duplicate_of IS NULL GROUP BY owner_name").fetchall():
+    for r in conn.execute(
+        "SELECT owner_name, COUNT(*) AS n FROM leads WHERE owner_name IS NOT NULL "
+        "AND duplicate_of IS NULL GROUP BY owner_name"
+    ).fetchall():
         owner_counts[r["owner_name"]] = r["n"]
     by = {}
     for r in rows:
@@ -345,22 +363,24 @@ def results(conn, today=None):
         won = sum(1 for r in rs if r["status"] == "won")
         revenue = sum(float(r["job_revenue"] or 0) for r in rs)
         cost = sum(float(r["touch_cost"] or 0) for r in rs)
-        out.append({
-            "channel": ch,
-            "label": label,
-            "assigned": len(rs),
-            "touched": touched,
-            "responded": responded,
-            "quoted": quoted,
-            "won": won,
-            "revenue": round(revenue, 2),
-            "cost": round(cost, 2),
-            "response_rate": responded / touched if touched else None,
-            "win_rate": won / touched if touched else None,
-            "cost_per_win": cost / won if won else None,
-            "revenue_per_dollar": revenue / cost if cost else None,
-            "mix": _mix(rs),
-        })
+        out.append(
+            {
+                "channel": ch,
+                "label": label,
+                "assigned": len(rs),
+                "touched": touched,
+                "responded": responded,
+                "quoted": quoted,
+                "won": won,
+                "revenue": round(revenue, 2),
+                "cost": round(cost, 2),
+                "response_rate": responded / touched if touched else None,
+                "win_rate": won / touched if touched else None,
+                "cost_per_win": cost / won if won else None,
+                "revenue_per_dollar": revenue / cost if cost else None,
+                "mix": _mix(rs),
+            }
+        )
     return out
 
 
@@ -378,21 +398,24 @@ def comparison(results_rows):
     if len(active) < 2:
         reasons.append("Only one outreach method has leads so far, so there is nothing to compare.")
     else:
-        names = {"with_address": "share of leads with a property address",
-                 "evictions": "share of evictions vs. code cases",
-                 "avg_score": "average priority"}
+        names = {
+            "with_address": "share of leads with a property address",
+            "evictions": "share of evictions vs. code cases",
+            "avg_score": "average priority",
+        }
         for key, limit in MIX_TOLERANCE.items():
             vals = [r["mix"][key] for r in active if r["mix"][key] is not None]
             if vals and max(vals) - min(vals) > limit:
-                reasons.append(f"The methods got a different {names[key]}, so their results "
-                               "reflect the leads, not the method.")
+                reasons.append(
+                    f"The methods got a different {names[key]}, so their results reflect the leads, not the method."
+                )
         for r in active:
             if r["mix"]["set_by_hand"] > 0.2 * r["assigned"]:
-                reasons.append(f"Many {r['label']} leads were set by hand rather than split "
-                               "with Assign leads.")
+                reasons.append(f"Many {r['label']} leads were set by hand rather than split with Assign leads.")
     fair = not reasons
     thin = [r["label"] for r in active if r["touched"] < MIN_CONTACTS]
     if fair and thin:
-        reasons.append(f"Fewer than {MIN_CONTACTS} contacts logged for: {', '.join(thin)}. "
-                       "One job can still swing the ranking.")
+        reasons.append(
+            f"Fewer than {MIN_CONTACTS} contacts logged for: {', '.join(thin)}. One job can still swing the ranking."
+        )
     return {"fair": fair, "ready": fair and not thin, "reasons": reasons}

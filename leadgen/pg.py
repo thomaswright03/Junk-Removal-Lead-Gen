@@ -99,6 +99,7 @@ def translate(sql):
             named = True
             return f"%({m.group(1)})s"
         return tok + " NULLS LAST"  # DESC
+
     return _TOKEN.sub(sub, sql), named
 
 
@@ -150,7 +151,7 @@ class Cursor:
         return self.rows[self._i - 1]
 
     def fetchall(self):
-        rest, self._i = self.rows[self._i:], len(self.rows)
+        rest, self._i = self.rows[self._i :], len(self.rows)
         return rest
 
     def __iter__(self):
@@ -161,6 +162,7 @@ class Connection:
     def __init__(self, url, connect=None):
         if connect is None:
             import psycopg
+
             connect = psycopg.connect
         # prepare_threshold=None: no server-side prepared statements, which
         # Neon's connection pooler (PgBouncer) may not keep between requests.

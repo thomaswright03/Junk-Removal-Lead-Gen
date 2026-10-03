@@ -32,37 +32,96 @@ from .util import PAUSED_MESSAGE, az_now, az_today, decode_text, env_flag, is_pa
 STATIC = Path(__file__).parent / "static"
 
 LEAD_FIELDS = (
-    "id", "source", "source_id", "lead_type", "event_date", "address", "city", "zip",
-    "lat", "lon", "parcel", "plaintiff", "defendant", "description", "url", "status",
-    "notes", "first_seen", "owner_name", "owner_address", "owner_city", "owner_state",
-    "owner_zip", "owner_absentee", "owner_entity", "property_use", "year_built",
-    "enriched_at", "channel", "assigned_at", "responded_at", "quote_amount", "job_revenue",
-    "owner_phone", "owner_email", "owner_website", "contact_source", "contact_name",
-    "contact_checked_at", "eviction_notice", "case_status", "next_court_date", "case_checked_at",
-    "unit", "address_source", "case_stage", "judgment_date", "writ_date", "added_by_hand",
+    "id",
+    "source",
+    "source_id",
+    "lead_type",
+    "event_date",
+    "address",
+    "city",
+    "zip",
+    "lat",
+    "lon",
+    "parcel",
+    "plaintiff",
+    "defendant",
+    "description",
+    "url",
+    "status",
+    "notes",
+    "first_seen",
+    "owner_name",
+    "owner_address",
+    "owner_city",
+    "owner_state",
+    "owner_zip",
+    "owner_absentee",
+    "owner_entity",
+    "property_use",
+    "year_built",
+    "enriched_at",
+    "channel",
+    "assigned_at",
+    "responded_at",
+    "quote_amount",
+    "job_revenue",
+    "owner_phone",
+    "owner_email",
+    "owner_website",
+    "contact_source",
+    "contact_name",
+    "contact_checked_at",
+    "eviction_notice",
+    "case_status",
+    "next_court_date",
+    "case_checked_at",
+    "unit",
+    "address_source",
+    "case_stage",
+    "judgment_date",
+    "writ_date",
+    "added_by_hand",
 )
 # The default view: eviction cases with a notice filed or further along
 # (judgment, writ), plus cases Steve imported himself whose case page hasn't
 # been read yet (so an import shows up at once, marked "case not checked";
 # once read, the notice rule applies). Dismissed cases, and closed ones that
 # never reached a judgment, drop out.
-_ENDED = ("(COALESCE(case_stage, '') = 'dismissed' OR LOWER(COALESCE(case_status, '')) LIKE 'dismiss%' "
-          "OR (LOWER(COALESCE(case_status, '')) LIKE 'closed%' "
-          "AND COALESCE(case_stage, '') NOT IN ('judgment', 'writ')))")
+_ENDED = (
+    "(COALESCE(case_stage, '') = 'dismissed' OR LOWER(COALESCE(case_status, '')) LIKE 'dismiss%' "
+    "OR (LOWER(COALESCE(case_status, '')) LIKE 'closed%' "
+    "AND COALESCE(case_stage, '') NOT IN ('judgment', 'writ')))"
+)
 LEAD_VIEWS = {
-    "eviction_notice": ("lead_type = 'eviction' AND (eviction_notice = 1 OR case_stage IN ('judgment', 'writ') "
-                        f"OR (added_by_hand = 1 AND eviction_notice IS NULL)) AND NOT {_ENDED}"),
+    "eviction_notice": (
+        "lead_type = 'eviction' AND (eviction_notice = 1 OR case_stage IN ('judgment', 'writ') "
+        f"OR (added_by_hand = 1 AND eviction_notice IS NULL)) AND NOT {_ENDED}"
+    ),
     "evictions": "lead_type = 'eviction'",
     "all": "1=1",
 }
-EDITABLE = {"status", "channel", "notes", "quote_amount", "job_revenue", "responded_at",
-            "owner_phone", "owner_email", "address", "unit"}
+EDITABLE = {
+    "status",
+    "channel",
+    "notes",
+    "quote_amount",
+    "job_revenue",
+    "responded_at",
+    "owner_phone",
+    "owner_email",
+    "address",
+    "unit",
+}
 # A second identical contact logged this soon after the first is a double click.
 DUPLICATE_TOUCH_SECONDS = 10
 
 
-_TEXT_SETTINGS = {"business_name": "Business name", "business_phone": "Main phone",
-                  "base_address": "Base address", "google_places_api_key": "Google key"}
+_TEXT_SETTINGS = {
+    "business_name": "Business name",
+    "business_phone": "Main phone",
+    "base_address": "Base address",
+    "google_places_api_key": "Google key",
+}
 
 
 def _limit(value, label):
@@ -97,8 +156,10 @@ def validate_settings(body):
         if body["lead_view"] not in LEAD_VIEWS:
             raise ValueError("Show must be one of: " + ", ".join(LEAD_VIEWS) + ".")
         values["lead_view"] = body["lead_view"]
-    for key, label in (("google_monthly_limit", "Google lookups per month"),
-                       ("google_daily_limit", "Google lookups per day")):
+    for key, label in (
+        ("google_monthly_limit", "Google lookups per month"),
+        ("google_daily_limit", "Google lookups per day"),
+    ):
         if key in body:
             values[key] = _limit(body[key], label)
     for key, label in (("paused", "Pause"), ("google_enabled", "Use Google")):
@@ -110,18 +171,25 @@ def validate_settings(body):
         costs = body["costs"]
         if not isinstance(costs, dict) or set(costs) - set(outreach.CHANNELS):
             raise ValueError("Cost per contact must list a dollar amount for each outreach method.")
-        values["costs"] = {c: money_value(v, f"Cost per contact for {outreach.CHANNELS[c]}") or 0.0
-                           for c, v in costs.items()}
+        values["costs"] = {
+            c: money_value(v, f"Cost per contact for {outreach.CHANNELS[c]}") or 0.0 for c, v in costs.items()
+        }
     if "tracking_numbers" in body:
         nums = body["tracking_numbers"]
-        if not isinstance(nums, dict) or set(nums) - set(outreach.CHANNELS) or \
-                not all(isinstance(v, str) for v in nums.values()):
+        if (
+            not isinstance(nums, dict)
+            or set(nums) - set(outreach.CHANNELS)
+            or not all(isinstance(v, str) for v in nums.values())
+        ):
             raise ValueError("Tracking numbers must be a phone number (or blank) for each outreach method.")
         values["tracking_numbers"] = {c: v.strip() for c, v in nums.items()}
     if "templates" in body:
         tpl = body["templates"]
-        if not isinstance(tpl, dict) or set(tpl) - set(outreach.DEFAULT_SETTINGS["templates"]) or \
-                not all(isinstance(v, str) and len(v) < 5000 for v in tpl.values()):
+        if (
+            not isinstance(tpl, dict)
+            or set(tpl) - set(outreach.DEFAULT_SETTINGS["templates"])
+            or not all(isinstance(v, str) and len(v) < 5000 for v in tpl.values())
+        ):
             raise ValueError("Messages must be text for each outreach method.")
         values["templates"] = dict(tpl)
     return values
@@ -129,7 +197,8 @@ def validate_settings(body):
 
 UNRECOGNISED_FILE = (
     "Nothing in that file looks like a lead. Lead Desk can import a saved Justice Court case page, "
-    "a saved court calendar results page, or a CSV with an address or case number column.")
+    "a saved court calendar results page, or a CSV with an address or case number column."
+)
 
 # Online, stop a long job this many seconds into a request (Vercel allows 60).
 SERVERLESS_SECONDS = 40
@@ -170,9 +239,17 @@ class Job:
             self._thread_running.clear()
 
     def public(self):
-        return {"name": self.name, "label": self.label, "running": self.running(),
-                "done": self.done, "total": self.total, "result": self.result, "error": self.error,
-                "cancelling": self.cancel.is_set(), "finished_at": self.finished_at}
+        return {
+            "name": self.name,
+            "label": self.label,
+            "running": self.running(),
+            "done": self.done,
+            "total": self.total,
+            "result": self.result,
+            "error": self.error,
+            "cancelling": self.cancel.is_set(),
+            "finished_at": self.finished_at,
+        }
 
 
 class NotFound(LookupError):
@@ -183,8 +260,7 @@ def _lead_id(value, what="lead"):
     try:
         n = int(value)
     except (TypeError, ValueError):
-        raise ValueError(f"Lead Desk didn't say which {what} this is. Reload the page and try again.") \
-            from None
+        raise ValueError(f"Lead Desk didn't say which {what} this is. Reload the page and try again.") from None
     if n <= 0 or isinstance(value, bool):
         raise ValueError(f"Lead Desk didn't say which {what} this is. Reload the page and try again.")
     return n
@@ -218,17 +294,45 @@ def _address_fields(address, unit):
     """Columns to set when Steve types a property address. The location,
     parcel and owner are looked up again from the new address."""
     if not address:
-        return {"address": None, "unit": None, "address_norm": None, "lat": None, "lon": None,
-                "in_pima": None, "geocode_tried": 0, "parcel": None, "address_source": "manual"}
-    return {"address": address.upper(), "unit": unit, "address_norm": normalize_address(address),
-            "zip": extract_zip(address), "lat": None, "lon": None, "in_pima": None,
-            "geocode_tried": 0, "parcel": None, "enriched_at": None, "address_source": "manual"}
+        return {
+            "address": None,
+            "unit": None,
+            "address_norm": None,
+            "lat": None,
+            "lon": None,
+            "in_pima": None,
+            "geocode_tried": 0,
+            "parcel": None,
+            "address_source": "manual",
+        }
+    return {
+        "address": address.upper(),
+        "unit": unit,
+        "address_norm": normalize_address(address),
+        "zip": extract_zip(address),
+        "lat": None,
+        "lon": None,
+        "in_pima": None,
+        "geocode_tried": 0,
+        "parcel": None,
+        "enriched_at": None,
+        "address_source": "manual",
+    }
 
 
 class App:
-    def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None,
-                 case_client=None, calendar=None, code_cases=None, providers=None,
-                 serverless=False):
+    def __init__(
+        self,
+        db_path,
+        stale_days=30,
+        parcel_client=None,
+        geocoder=None,
+        case_client=None,
+        calendar=None,
+        code_cases=None,
+        providers=None,
+        serverless=False,
+    ):
         self.db_path = db_path
         # Online (Vercel): a request can't keep running after it answers, so
         # the daily check runs on GitHub Actions instead (see wsgi.py).
@@ -277,13 +381,12 @@ class App:
             code = code_of(r["description"]) if r["lead_type"] == "code_violation" else None
             d["code"] = code
             d["code_label"] = CODE_LABELS.get(code) or (
-                "Vacant / nuisance building" if "VACANT/NUISANCE" in (r["description"] or "").upper()
-                else None)
+                "Vacant / nuisance building" if "VACANT/NUISANCE" in (r["description"] or "").upper() else None
+            )
             d["score"] = outreach.score(r, owner_counts)
             d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
             d["eligible"] = outreach.eligible_channels(r)
-            d["miles"] = outreach.miles_between(settings.get("base_lat"), settings.get("base_lon"),
-                                                r["lat"], r["lon"])
+            d["miles"] = outreach.miles_between(settings.get("base_lat"), settings.get("base_lon"), r["lat"], r["lon"])
             d["touches"] = touches.get(r["id"], [])
             out.append(d)
         return out
@@ -310,17 +413,23 @@ class App:
             last = db.get_settings(conn).get("last_daily_summary")
             results = outreach.results(conn)
             return {
-                "daily": {"running": self.daily_lock.locked(), "message": self.daily_message,
-                          "last_run": settings.get("last_daily_run"),
-                          "summary": daily.describe(last) if last else None,
-                          "next_run": next_daily_run(settings, self.serverless)},
+                "daily": {
+                    "running": self.daily_lock.locked(),
+                    "message": self.daily_message,
+                    "last_run": settings.get("last_daily_run"),
+                    "summary": daily.describe(last) if last else None,
+                    "next_run": next_daily_run(settings, self.serverless),
+                },
                 "jobs": {name: job.public() for name, job in self.jobs.items()},
                 "paused": is_paused(settings),
                 "paused_by_env": env_flag("LEADDESK_PAUSED"),
                 "leads": self.leads(conn, settings),
-                "view_counts": {"all": counts["all_"] or 0, "evictions": counts["evictions"] or 0,
-                                "eviction_notice": counts["eviction_notice"] or 0,
-                                "unchecked": counts["unchecked"] or 0},
+                "view_counts": {
+                    "all": counts["all_"] or 0,
+                    "evictions": counts["evictions"] or 0,
+                    "eviction_notice": counts["eviction_notice"] or 0,
+                    "unchecked": counts["unchecked"] or 0,
+                },
                 "settings": public,
                 "channels": outreach.CHANNELS,
                 "touch_kinds": outreach.TOUCH_KINDS,
@@ -422,8 +531,10 @@ class App:
                 conn.execute("UPDATE leads SET enriched_at = ? WHERE id = ?", (now_iso(), lead_id))
                 notes.append("No county parcel matches that address, so the owner wasn't updated.")
         if result is None and attrs and attrs.get("LAT") and attrs.get("LON"):
-            conn.execute("UPDATE leads SET lat = ?, lon = ?, in_pima = 1 WHERE id = ?",
-                         (float(attrs["LAT"]), float(attrs["LON"]), lead_id))
+            conn.execute(
+                "UPDATE leads SET lat = ?, lon = ?, in_pima = 1 WHERE id = ?",
+                (float(attrs["LAT"]), float(attrs["LON"]), lead_id),
+            )
             result = True
         conn.commit()
         saved = "Address saved" + (", found on the map" if result else "")
@@ -446,8 +557,7 @@ class App:
             settings = self.settings(conn)
             rows = {}
             for lead_id in ids:
-                row = conn.execute("SELECT id, channel, status FROM leads WHERE id = ?",
-                                   (lead_id,)).fetchone()
+                row = conn.execute("SELECT id, channel, status FROM leads WHERE id = ?", (lead_id,)).fetchone()
                 if not row:
                     raise NotFound("That lead no longer exists. Reload the page.")
                 rows[lead_id] = row
@@ -458,21 +568,22 @@ class App:
                 if channel not in outreach.CHANNELS:
                     raise ValueError("That outreach method doesn't exist. Pick one from the list.")
                 if kind not in dict(outreach.TOUCH_KINDS[channel]):
-                    raise ValueError("That kind of contact isn't one Lead Desk knows for "
-                                     f"{outreach.CHANNELS[channel]}.")
+                    raise ValueError(
+                        f"That kind of contact isn't one Lead Desk knows for {outreach.CHANNELS[channel]}."
+                    )
                 # Two clicks in a row on the same button log one contact.
                 last = conn.execute(
                     "SELECT created_at FROM touches WHERE lead_id = ? AND channel = ? AND kind = ? "
-                    "ORDER BY id DESC LIMIT 1", (lead_id, channel, kind)).fetchone()
+                    "ORDER BY id DESC LIMIT 1",
+                    (lead_id, channel, kind),
+                ).fetchone()
                 now = now_iso()
                 if last and _seconds_between(last["created_at"], now) < DUPLICATE_TOUCH_SECONDS:
                     duplicates += 1
                     continue
-                this_cost = cost if cost is not None else money_value(
-                    settings["costs"].get(channel) or 0, "Cost")
+                this_cost = cost if cost is not None else money_value(settings["costs"].get(channel) or 0, "Cost")
                 conn.execute(
-                    "INSERT INTO touches (lead_id, channel, kind, cost, notes, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO touches (lead_id, channel, kind, cost, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (lead_id, channel, kind, this_cost, notes, now),
                 )
                 logged += 1
@@ -483,8 +594,7 @@ class App:
                     updates["status"] = "contacted"
                 if updates:
                     sets = ", ".join(f"{k} = ?" for k in updates)
-                    conn.execute(f"UPDATE leads SET {sets} WHERE id = ?",
-                                 [*updates.values(), lead_id])
+                    conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*updates.values(), lead_id])
             conn.commit()
         return {"ok": True, "logged": logged, "duplicates": duplicates}
 
@@ -500,8 +610,9 @@ class App:
     def assign(self, body):
         with self.conn() as conn:
             leads = self.leads(conn)
-            return outreach.assign(conn, leads, int(body.get("count") or 40),
-                                   body.get("channels") or list(outreach.CHANNELS))
+            return outreach.assign(
+                conn, leads, int(body.get("count") or 40), body.get("channels") or list(outreach.CHANNELS)
+            )
 
     def save_settings(self, body):
         if not isinstance(body, dict):
@@ -542,13 +653,19 @@ class App:
         """Run the daily check now and wait for it (the CLI and CI use this;
         the page uses ``start_daily``)."""
         with self.daily_lock, self.conn() as conn:
-            summary = run_daily(conn, stale_days=self.stale_days, case_client=self.case_client,
-                                parcel_client=self.parcel_client, calendar=self.calendar,
-                                code_cases=self.code_cases, geocoder=self.geocoder,
-                                providers=self.providers,
-                                case_limit=body.get("case_limit"),
-                                contact_limit=int(body.get("contact_limit") or 60),
-                                log=self._progress)
+            summary = run_daily(
+                conn,
+                stale_days=self.stale_days,
+                case_client=self.case_client,
+                parcel_client=self.parcel_client,
+                calendar=self.calendar,
+                code_cases=self.code_cases,
+                geocoder=self.geocoder,
+                providers=self.providers,
+                case_limit=body.get("case_limit"),
+                contact_limit=int(body.get("contact_limit") or 60),
+                log=self._progress,
+            )
         self._ensure_base()
         return summary
 
@@ -576,8 +693,7 @@ class App:
         if self.serverless:
             return start_github_check()
         if self.daily_lock.locked():
-            return {"started": False, "running": True,
-                    "message": "The daily check is already running."}
+            return {"started": False, "running": True, "message": "The daily check is already running."}
         busy = self._busy()
         if busy:
             return {"started": False, "running": False, "message": busy}
@@ -596,6 +712,7 @@ class App:
 
     def scheduler(self, hour=6, every_seconds=600):
         """While Lead Desk is open, run the daily check once a day after ``hour``."""
+
         def loop():
             while True:
                 try:
@@ -605,6 +722,7 @@ class App:
                 except Exception:
                     traceback.print_exc(file=sys.stderr)
                 time.sleep(every_seconds)
+
         threading.Thread(target=loop, daemon=True, name="scheduler").start()
 
     # ---- long jobs ("Update court cases", "Find landlord phones") -----------
@@ -619,8 +737,7 @@ class App:
         with self.job_lock:  # two presses at once start one job
             job = self.jobs.get(name)
             if job and job.running():
-                return {"started": False, "running": True,
-                        "message": f"{label} is already running ({job.describe()})."}
+                return {"started": False, "running": True, "message": f"{label} is already running ({job.describe()})."}
             busy = self._busy()
             if busy:
                 return {"started": False, "running": False, "message": busy}
@@ -647,13 +764,19 @@ class App:
                 settings = self.settings(conn)
                 provs = self.providers if self.providers is not None else providers_from(settings, conn=conn)
                 log = []
-                counts = find_contacts(conn, provs,
-                                       limit=int(body.get("limit") or 0) or self._cap(25),
-                                       refresh=bool(body.get("refresh")), log=log.append,
-                                       progress=job.progress, should_stop=should_stop)
+                counts = find_contacts(
+                    conn,
+                    provs,
+                    limit=int(body.get("limit") or 0) or self._cap(25),
+                    refresh=bool(body.get("refresh")),
+                    log=log.append,
+                    progress=job.progress,
+                    should_stop=should_stop,
+                )
                 counts["google_used"] = any(p.name == "google" for p in provs)
                 counts["messages"] = log[:10]
                 return counts
+
         return self._run_job("contacts", "Finding landlord phones", work)
 
     def add_cases(self, body):
@@ -669,18 +792,25 @@ class App:
         def work(job, should_stop):
             log = []
             with self.conn() as conn:
-                counts = update_cases(conn, self.case_client,
-                                      limit=int(body.get("limit") or 0) or self._cap(60),
-                                      max_age_hours=0 if body.get("force") else 12, log=log.append,
-                                      progress=job.progress, should_stop=should_stop)
+                counts = update_cases(
+                    conn,
+                    self.case_client,
+                    limit=int(body.get("limit") or 0) or self._cap(60),
+                    max_age_hours=0 if body.get("force") else 12,
+                    log=log.append,
+                    progress=job.progress,
+                    should_stop=should_stop,
+                )
             counts["messages"] = log[:10]
             return counts
+
         return self._run_job("cases", "Checking court cases", work)
 
     def run_enrich(self, body):
         with self.lock, self.conn() as conn:
-            return enrich(conn, self.parcel_client or ParcelClient(), limit=self._cap(150),
-                          refresh=bool(body.get("refresh")))
+            return enrich(
+                conn, self.parcel_client or ParcelClient(), limit=self._cap(150), refresh=bool(body.get("refresh"))
+            )
 
     def import_file(self, source, filename, data, lead_type="eviction"):
         """One uploaded file: a saved Justice Court case or calendar page, a
@@ -692,8 +822,10 @@ class App:
             with self.lock, self.conn() as conn:
                 counts = import_contacts(conn, text)
             if not counts["rows"]:
-                raise ValueError("That file has no rows Lead Desk recognises. Import a CSV with a phone "
-                                 "or email column and a lead_id, parcel, address or owner name column.")
+                raise ValueError(
+                    "That file has no rows Lead Desk recognises. Import a CSV with a phone "
+                    "or email column and a lead_id, parcel, address or owner name column."
+                )
             return counts
         if source not in ("pima_jp_calendar", "csv_import"):
             raise ValueError("Lead Desk can import a saved court page (.html) or a CSV file.")
@@ -715,14 +847,18 @@ class App:
         with self.lock, self.conn() as conn:
             for lead in leads:
                 counts[db.upsert(conn, lead)] += 1
-                conn.execute("UPDATE leads SET added_by_hand = 1 WHERE source = ? AND source_id = ?",
-                             (lead.source, lead.source_id))
+                conn.execute(
+                    "UPDATE leads SET added_by_hand = 1 WHERE source = ? AND source_id = ?",
+                    (lead.source, lead.source_id),
+                )
             conn.commit()
             if len(leads) == 1 and leads[0].eviction_notice is not None:
                 counts["with_notice"] = int(bool(leads[0].eviction_notice))
             counts["waiting_for_case_check"] = sum(
-                1 for l in leads if l.lead_type == "eviction" and l.eviction_notice is None
-                and "jcdisplaycase" in (l.url or "").lower())
+                1
+                for l in leads
+                if l.lead_type == "eviction" and l.eviction_notice is None and "jcdisplaycase" in (l.url or "").lower()
+            )
             if not is_paused(self.settings(conn)):
                 try:
                     counts["owners"] = enrich(conn, self.parcel_client or ParcelClient())
@@ -733,8 +869,12 @@ class App:
     def owner_properties(self, name):
         rows = (self.parcel_client or ParcelClient()).by_owner(name)
         return [
-            {"parcel": a.get("PARCEL"), "site_address": a.get("SITE_ADDRESS"),
-             "site_zip": a.get("SITE_ZIP"), **owner_fields(a)}
+            {
+                "parcel": a.get("PARCEL"),
+                "site_address": a.get("SITE_ADDRESS"),
+                "site_zip": a.get("SITE_ZIP"),
+                **owner_fields(a),
+            }
             for a in rows
         ]
 
@@ -762,18 +902,25 @@ def start_github_check(session=None):
     token = os.environ.get("LEADDESK_GITHUB_TOKEN")
     owner, repo = os.environ.get("VERCEL_GIT_REPO_OWNER"), os.environ.get("VERCEL_GIT_REPO_SLUG")
     if not (token and owner and repo):
-        return {"started": False, "running": False,
-                "message": "The check runs by itself every morning at 6. To start it from here too, "
-                           "add LEADDESK_GITHUB_TOKEN in Vercel (see docs/VERCEL.md)."}
+        return {
+            "started": False,
+            "running": False,
+            "message": "The check runs by itself every morning at 6. To start it from here too, "
+            "add LEADDESK_GITHUB_TOKEN in Vercel (see docs/VERCEL.md).",
+        }
     resp = (session or requests).post(
         f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/daily.yml/dispatches",
         json={"ref": os.environ.get("LEADDESK_GITHUB_REF", "main")},
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-        timeout=30)
+        timeout=30,
+    )
     if resp.status_code >= 300:
         raise ValueError(f"GitHub didn't start the check ({resp.status_code}): {resp.text[:200]}")
-    return {"started": True, "running": False,
-            "message": "Started. The check takes about 15 minutes; reload then to see new leads."}
+    return {
+        "started": True,
+        "running": False,
+        "message": "Started. The check takes about 15 minutes; reload then to see new leads.",
+    }
 
 
 def handle(app, method, path, query, headers, body):
@@ -788,8 +935,7 @@ def handle(app, method, path, query, headers, body):
                 return 200, app.state(), "application/json"
             if path == "/api/skiptrace.csv":
                 with app.conn() as conn:
-                    leads = [l for l in app.leads(conn)
-                             if l["status"] not in ("stale", "skip", "lost", "won")]
+                    leads = [l for l in app.leads(conn) if l["status"] not in ("stale", "skip", "lost", "won")]
                 return 200, skiptrace_csv(leads), "text/csv; charset=utf-8"
             if path == "/api/owner":
                 return 200, app.owner_properties(q.get("name", [""])[0]), "application/json"
@@ -801,9 +947,16 @@ def handle(app, method, path, query, headers, body):
         if origin and urlparse(origin).netloc != headers.get("Host"):
             return 403, {"error": "Requests from other websites are refused."}, "application/json"
         if path == "/api/import":
-            return 200, app.import_file(
-                q.get("source", ["pima_jp_calendar"])[0], q.get("filename", [""])[0],
-                body, q.get("lead_type", ["eviction"])[0]), "application/json"
+            return (
+                200,
+                app.import_file(
+                    q.get("source", ["pima_jp_calendar"])[0],
+                    q.get("filename", [""])[0],
+                    body,
+                    q.get("lead_type", ["eviction"])[0],
+                ),
+                "application/json",
+            )
         data = json.loads(body or b"{}")
         routes = {
             "/api/lead": app.update_lead,
@@ -826,28 +979,44 @@ def handle(app, method, path, query, headers, body):
     except NotFound as e:
         return 404, {"error": str(e)}, "application/json"
     except json.JSONDecodeError:
-        return 400, {"error": "Lead Desk couldn't read that request. Reload the page and try again."}, \
-            "application/json"
+        return (
+            400,
+            {"error": "Lead Desk couldn't read that request. Reload the page and try again."},
+            "application/json",
+        )
     except ValueError as e:
         return 400, {"error": str(e)}, "application/json"
     except Exception:
         # The details go to the server log; the page gets a plain sentence.
         traceback.print_exc(file=sys.stderr)
         action = ACTIONS.get(path, "do that")
-        return 500, {"error": f"Lead Desk couldn't {action} because of an unexpected problem. "
-                              "Try again; if it keeps happening, restart Lead Desk and look at "
-                              "its window (or the Vercel log) for details."}, "application/json"
+        return (
+            500,
+            {
+                "error": f"Lead Desk couldn't {action} because of an unexpected problem. "
+                "Try again; if it keeps happening, restart Lead Desk and look at "
+                "its window (or the Vercel log) for details."
+            },
+            "application/json",
+        )
 
 
 # What each request does, for error messages.
 ACTIONS = {
-    "/api/state": "load the leads", "/api/skiptrace.csv": "make the phone-lookup list",
-    "/api/owner": "look up the owner's other properties", "/api/import": "import that file",
-    "/api/lead": "save the lead", "/api/touch": "log that contact",
-    "/api/touch/delete": "remove that contact", "/api/assign": "split the leads",
-    "/api/settings": "save the settings", "/api/refresh": "start the check for new evictions",
-    "/api/enrich": "look up owners", "/api/find-contacts": "look up landlord phones",
-    "/api/cases/add": "add those cases", "/api/cases/update": "update the court cases",
+    "/api/state": "load the leads",
+    "/api/skiptrace.csv": "make the phone-lookup list",
+    "/api/owner": "look up the owner's other properties",
+    "/api/import": "import that file",
+    "/api/lead": "save the lead",
+    "/api/touch": "log that contact",
+    "/api/touch/delete": "remove that contact",
+    "/api/assign": "split the leads",
+    "/api/settings": "save the settings",
+    "/api/refresh": "start the check for new evictions",
+    "/api/enrich": "look up owners",
+    "/api/find-contacts": "look up landlord phones",
+    "/api/cases/add": "add those cases",
+    "/api/cases/update": "update the court cases",
     "/api/job/cancel": "cancel that",
 }
 

@@ -33,33 +33,72 @@ class FakeParcels:
 
 
 def owner(parcel, name, mail, site, use="SFR GRADE 010-3 URBAN SUBDIVIDED"):
-    return {**PARCEL, "PARCEL": parcel, "ADDRESSEE": name, "ADDRESS": mail, "SITE_ADDRESS": site,
-            "USE_DESC": use}
+    return {**PARCEL, "PARCEL": parcel, "ADDRESSEE": name, "ADDRESS": mail, "SITE_ADDRESS": site, "USE_DESC": use}
 
 
 def seed(conn):
     leads = [
-        Lead("tucson_code_cases", "CE-1", "code_violation", "2026-09-30", "1825 W PRICE ST",
-             city="Tucson", lat=32.279, lon=-111.005, parcel="10610001E", in_pima=True,
-             description="Property Maintenance | Active | PMMULT / trash and debris"),
-        Lead("tucson_code_cases", "CE-2", "code_violation", "2026-09-10", "10 E OWNER LN",
-             city="Tucson", lat=32.25, lon=-110.95, parcel="P2", in_pima=True,
-             description="Property Maintenance | Active | WEEDS / weeds"),
-        Lead("tucson_code_cases", "CE-3", "code_violation", "2026-09-29", "20 S RENTAL AVE",
-             city="Tucson", lat=32.21, lon=-110.97, parcel="P3", in_pima=True,
-             description="Vacant/Nuisance Buildings | Active | open to entry"),
-        Lead("pima_jp_calendar", "CV26-000001-EV", "eviction", "2026-09-30", None,
-             plaintiff="SAGUARO APARTMENTS LLC", defendant="DOE, JANE", in_pima=True),
+        Lead(
+            "tucson_code_cases",
+            "CE-1",
+            "code_violation",
+            "2026-09-30",
+            "1825 W PRICE ST",
+            city="Tucson",
+            lat=32.279,
+            lon=-111.005,
+            parcel="10610001E",
+            in_pima=True,
+            description="Property Maintenance | Active | PMMULT / trash and debris",
+        ),
+        Lead(
+            "tucson_code_cases",
+            "CE-2",
+            "code_violation",
+            "2026-09-10",
+            "10 E OWNER LN",
+            city="Tucson",
+            lat=32.25,
+            lon=-110.95,
+            parcel="P2",
+            in_pima=True,
+            description="Property Maintenance | Active | WEEDS / weeds",
+        ),
+        Lead(
+            "tucson_code_cases",
+            "CE-3",
+            "code_violation",
+            "2026-09-29",
+            "20 S RENTAL AVE",
+            city="Tucson",
+            lat=32.21,
+            lon=-110.97,
+            parcel="P3",
+            in_pima=True,
+            description="Vacant/Nuisance Buildings | Active | open to entry",
+        ),
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000001-EV",
+            "eviction",
+            "2026-09-30",
+            None,
+            plaintiff="SAGUARO APARTMENTS LLC",
+            defendant="DOE, JANE",
+            in_pima=True,
+        ),
     ]
     for l in leads:
         db.upsert(conn, l)
     db.put_settings(conn, {"lead_view": "all"})  # these tests use code cases too
     conn.commit()
-    return FakeParcels([
-        PARCEL,
-        owner("P2", "SMITH JOHN", "10 E OWNER LN", "10 E OWNER LN"),
-        owner("P3", "DESERT RENTALS LLC", "PO BOX 1", "20 S RENTAL AVE"),
-    ])
+    return FakeParcels(
+        [
+            PARCEL,
+            owner("P2", "SMITH JOHN", "10 E OWNER LN", "10 E OWNER LN"),
+            owner("P3", "DESERT RENTALS LLC", "PO BOX 1", "20 S RENTAL AVE"),
+        ]
+    )
 
 
 def test_owner_fields_absentee_and_entity():
@@ -118,19 +157,29 @@ def seed_evictions(conn, with_address=30, without=30):
         for i in range(how_many):
             n += 1
             landlord = f"MESA {'ADDR' if has_address else 'NOADDR'} {i // 3 if i < 9 else i} LLC"
-            db.upsert(conn, Lead(
-                "pima_jp_calendar", f"CV26-{n:06d}-EA", "eviction",
-                f"2026-09-{1 + (i * 7) % 29:02d}",
-                f"{100 + n} W TEST ST" if has_address else None,
-                plaintiff=landlord, defendant="DOE, PAT", in_pima=True, eviction_notice=True))
-            conn.execute("UPDATE leads SET owner_name = ?, owner_absentee = ?, owner_entity = ? "
-                         "WHERE source_id = ?", (landlord, i % 2, int(i % 3 == 0), f"CV26-{n:06d}-EA"))
+            db.upsert(
+                conn,
+                Lead(
+                    "pima_jp_calendar",
+                    f"CV26-{n:06d}-EA",
+                    "eviction",
+                    f"2026-09-{1 + (i * 7) % 29:02d}",
+                    f"{100 + n} W TEST ST" if has_address else None,
+                    plaintiff=landlord,
+                    defendant="DOE, PAT",
+                    in_pima=True,
+                    eviction_notice=True,
+                ),
+            )
+            conn.execute(
+                "UPDATE leads SET owner_name = ?, owner_absentee = ?, owner_entity = ? WHERE source_id = ?",
+                (landlord, i % 2, int(i % 3 == 0), f"CV26-{n:06d}-EA"),
+            )
     conn.commit()
 
 
 def assigned_rows(conn, round_only=True):
-    sql = "SELECT * FROM leads WHERE channel IS NOT NULL" + (" AND assign_round IS NOT NULL"
-                                                              if round_only else "")
+    sql = "SELECT * FROM leads WHERE channel IS NOT NULL" + (" AND assign_round IS NOT NULL" if round_only else "")
     return conn.execute(sql).fetchall()
 
 
@@ -188,8 +237,19 @@ def test_landlord_keeps_its_channel_in_later_rounds(tmp_path):
     app = App(path)
     app.assign({"count": 6, "channels": list(outreach.CHANNELS)})
     first = {r["plaintiff"]: r["channel"] for r in assigned_rows(conn)}
-    db.upsert(conn, Lead("pima_jp_calendar", "CV26-NEW-EA", "eviction", "2026-09-30", "9 W NEW ST",
-                         plaintiff="MESA ADDR 0 LLC", in_pima=True, eviction_notice=True))
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-NEW-EA",
+            "eviction",
+            "2026-09-30",
+            "9 W NEW ST",
+            plaintiff="MESA ADDR 0 LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
     conn.commit()
     out = app.assign({"count": 6, "channels": list(outreach.CHANNELS)})
     new = conn.execute("SELECT channel FROM leads WHERE source_id = 'CV26-NEW-EA'").fetchone()[0]

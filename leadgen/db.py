@@ -121,10 +121,26 @@ _ADDED_COLUMNS = {
 # Columns a fetch is allowed to refresh on an existing row. A blank value
 # from upstream never wipes out a value we already have.
 _REFRESHABLE = (
-    "lead_type", "event_date", "address", "address_norm", "city", "zip",
-    "lat", "lon", "in_pima", "plaintiff", "defendant", "description", "url",
-    "parcel", "eviction_notice", "case_status", "next_court_date",
-    "case_stage", "judgment_date", "writ_date",
+    "lead_type",
+    "event_date",
+    "address",
+    "address_norm",
+    "city",
+    "zip",
+    "lat",
+    "lon",
+    "in_pima",
+    "plaintiff",
+    "defendant",
+    "description",
+    "url",
+    "parcel",
+    "eviction_notice",
+    "case_status",
+    "next_court_date",
+    "case_stage",
+    "judgment_date",
+    "writ_date",
 )
 
 
@@ -139,8 +155,7 @@ def connect(path):
         if str(path) not in _READY_URLS:
             conn.executescript(pg.SCHEMA)
             for col, kind in _ADDED_COLUMNS.items():
-                conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} "
-                             f"{pg.TYPES.get(kind, kind)}")
+                conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             _READY_URLS.add(str(path))
         return conn
     path = Path(path)
@@ -160,9 +175,7 @@ def _migrate(conn):
         conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {_ADDED_COLUMNS[col]}")
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
-        for row in conn.execute(
-            "SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'"
-        ).fetchall():
+        for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
             parcel = (json.loads(row["raw_json"] or "{}").get("PARCEL") or "").strip()
             if parcel:
                 conn.execute("UPDATE leads SET parcel = ? WHERE id = ?", (parcel, row["id"]))
@@ -194,8 +207,7 @@ def upsert(conn, lead):
     ).fetchone()
 
     if existing:
-        if "jcdisplaycase" in (existing["url"] or "").lower() and \
-                "jcdisplaycase" not in (d["url"] or "").lower():
+        if "jcdisplaycase" in (existing["url"] or "").lower() and "jcdisplaycase" not in (d["url"] or "").lower():
             d["url"] = None  # a calendar re-import keeps the case page link
         if existing["case_checked_at"] and not d.get("case_checked_at"):
             # Keep the case page's filing date and summary over calendar rows.
@@ -236,8 +248,7 @@ def upsert(conn, lead):
 
 def _link_duplicate(conn, row_id, address_norm):
     first = conn.execute(
-        "SELECT id FROM leads WHERE address_norm = ? AND id != ? AND duplicate_of IS NULL "
-        "ORDER BY id LIMIT 1",
+        "SELECT id FROM leads WHERE address_norm = ? AND id != ? AND duplicate_of IS NULL ORDER BY id LIMIT 1",
         (address_norm, row_id),
     ).fetchone()
     if first and first["id"] < row_id:
@@ -249,8 +260,7 @@ def mark_stale(conn, days, today=None):
     today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
-        "UPDATE leads SET status = 'stale' WHERE status = 'new' "
-        "AND event_date IS NOT NULL AND event_date < ?",
+        "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ?",
         (cutoff,),
     )
     return cur.rowcount
@@ -262,14 +272,11 @@ def set_status(conn, lead_id, status, notes=None):
     if notes is None:
         cur = conn.execute("UPDATE leads SET status = ? WHERE id = ?", (status, lead_id))
     else:
-        cur = conn.execute(
-            "UPDATE leads SET status = ?, notes = ? WHERE id = ?", (status, notes, lead_id)
-        )
+        cur = conn.execute("UPDATE leads SET status = ?, notes = ? WHERE id = ?", (status, notes, lead_id))
     return cur.rowcount
 
 
-def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=False,
-          only_pima=False):
+def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=False, only_pima=False):
     sql = ["SELECT * FROM leads WHERE 1=1"]
     args = []
     if since:
@@ -290,10 +297,7 @@ def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=F
 
 
 def needs_geocode(conn, limit=None):
-    sql = (
-        "SELECT * FROM leads WHERE address IS NOT NULL AND lat IS NULL "
-        "AND geocode_tried = 0 ORDER BY id"
-    )
+    sql = "SELECT * FROM leads WHERE address IS NOT NULL AND lat IS NULL AND geocode_tried = 0 ORDER BY id"
     if limit:
         sql += f" LIMIT {int(limit)}"
     return conn.execute(sql).fetchall()
@@ -317,7 +321,6 @@ def get_settings(conn):
 def put_settings(conn, values):
     for k, v in values.items():
         conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (k, json.dumps(v)),
         )

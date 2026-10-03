@@ -39,9 +39,13 @@ CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait f
 
 
 STEP_LABELS = {
-    "tucson_code_cases": "Tucson code cases", "evictions": "Justice Court calendar",
-    "cases": "eviction case pages", "owners": "owners and landlords", "geocode": "map locations",
-    "contacts": "landlord phones", "stale": "old leads",
+    "tucson_code_cases": "Tucson code cases",
+    "evictions": "Justice Court calendar",
+    "cases": "eviction case pages",
+    "owners": "owners and landlords",
+    "geocode": "map locations",
+    "contacts": "landlord phones",
+    "stale": "old leads",
 }
 
 
@@ -76,9 +80,21 @@ def geocode_new(conn, geocoder=None, limit=100):
     return counts
 
 
-def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
-              parcel_client=None, geocoder=None, providers=None, contact_limit=60,
-              case_limit=None, days_ahead=CALENDAR_DAYS_AHEAD, code_cases=None, log=print):
+def run_daily(
+    conn,
+    stale_days=30,
+    today=None,
+    calendar=None,
+    case_client=None,
+    parcel_client=None,
+    geocoder=None,
+    providers=None,
+    contact_limit=60,
+    case_limit=None,
+    days_ahead=CALENDAR_DAYS_AHEAD,
+    code_cases=None,
+    log=print,
+):
     """Run every step and return a summary dict. Each step's failure is logged
     and recorded, and the next step still runs."""
     today = today or az_today()
@@ -91,31 +107,37 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
         return summary
 
     since = (today - timedelta(days=30)).isoformat()
-    _step(summary, "tucson_code_cases",
-          lambda: _upsert_all(conn, (code_cases or SOURCES["tucson_code_cases"]()).fetch(
-              since, today.isoformat())),
-          log)
+    _step(
+        summary,
+        "tucson_code_cases",
+        lambda: _upsert_all(conn, (code_cases or SOURCES["tucson_code_cases"]()).fetch(since, today.isoformat())),
+        log,
+    )
 
     def evictions():
         until = (today + timedelta(days=days_ahead)).isoformat()
         if calendar is not None:
             return _upsert_all(conn, calendar.fetch(today.isoformat(), until))
         client = CalendarClient()
-        counts = _upsert_all(conn, SOURCES["pima_jp_calendar"]().fetch(
-            today.isoformat(), until, client=client))
+        counts = _upsert_all(conn, SOURCES["pima_jp_calendar"]().fetch(today.isoformat(), until, client=client))
         counts["pages"] = client.pages
         return counts
+
     _step(summary, "evictions", evictions, log)
 
-    _step(summary, "cases", lambda: update_cases(conn, case_client, limit=case_limit or CASE_PAGES_PER_RUN,
-                                                 scheduled=True, log=log),
-          log)
+    _step(
+        summary,
+        "cases",
+        lambda: update_cases(conn, case_client, limit=case_limit or CASE_PAGES_PER_RUN, scheduled=True, log=log),
+        log,
+    )
     _step(summary, "owners", lambda: enrich(conn, parcel_client or ParcelClient()), log)
     _step(summary, "geocode", lambda: geocode_new(conn, geocoder), log)
 
     def contacts():
         provs = providers if providers is not None else providers_from(settings, conn=conn)
         return find_contacts(conn, provs, limit=contact_limit, lead_types=("eviction",), log=log)
+
     _step(summary, "contacts", contacts, log)
 
     _step(summary, "stale", lambda: db.mark_stale(conn, stale_days, today=today), log)

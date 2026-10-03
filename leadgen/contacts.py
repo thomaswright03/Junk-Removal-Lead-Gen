@@ -13,10 +13,21 @@ import re
 from .normalize import normalize_address
 from .util import pick
 
-_PHONE_KEYS = ("phone", "phone 1", "phone1", "mobile", "cell", "mobile phone", "cell phone",
-               "primary phone", "phone number", "wireless 1", "landline 1", "owner phone")
-_EMAIL_KEYS = ("email", "email 1", "email1", "e-mail", "email address", "primary email",
-               "owner email")
+_PHONE_KEYS = (
+    "phone",
+    "phone 1",
+    "phone1",
+    "mobile",
+    "cell",
+    "mobile phone",
+    "cell phone",
+    "primary phone",
+    "phone number",
+    "wireless 1",
+    "landline 1",
+    "owner phone",
+)
+_EMAIL_KEYS = ("email", "email 1", "email1", "e-mail", "email address", "primary email", "owner email")
 _PARCEL_KEYS = ("parcel", "apn", "parcel number", "parcel id")
 _ADDRESS_KEYS = ("property address", "site address", "address", "property street")
 _NAME_KEYS = ("owner_name", "owner name", "owner", "name", "full name")
@@ -69,16 +80,17 @@ def import_contacts(conn, text):
                 by_name.setdefault(n.upper().strip(), []).append(l["id"])
         if l["owner_name"]:
             by_owner.setdefault(_owner_key(l), []).append(l["id"])
-    counts = {"rows": len(rows), "matched": 0, "updated": 0, "no_match": 0,
-              "skipped_manual": 0, "kept_existing": 0}
+    counts = {"rows": len(rows), "matched": 0, "updated": 0, "no_match": 0, "skipped_manual": 0, "kept_existing": 0}
     for row in rows:
         phone = clean_phone(pick(row, _PHONE_KEYS))
         email = clean_email(pick(row, _EMAIL_KEYS))
         lead_id = pick(row, _ID_KEYS) or ""
-        ids = (([by_id[lead_id]["id"]] if lead_id in by_id else None)
-               or by_parcel.get((pick(row, _PARCEL_KEYS) or "").upper())
-               or by_addr.get(normalize_address(pick(row, _ADDRESS_KEYS)))
-               or by_name.get((pick(row, _NAME_KEYS) or "").upper().strip()))
+        ids = (
+            ([by_id[lead_id]["id"]] if lead_id in by_id else None)
+            or by_parcel.get((pick(row, _PARCEL_KEYS) or "").upper())
+            or by_addr.get(normalize_address(pick(row, _ADDRESS_KEYS)))
+            or by_name.get((pick(row, _NAME_KEYS) or "").upper().strip())
+        )
         if not ids:
             counts["no_match"] += 1
             continue
@@ -89,8 +101,11 @@ def import_contacts(conn, text):
         for i in ids:
             l = by_id[str(i)]
             if l["owner_name"]:
-                targets += [j for j in by_owner.get(_owner_key(l), [])
-                            if j not in targets and by_id[str(j)]["status"] not in CLOSED_STATUSES]
+                targets += [
+                    j
+                    for j in by_owner.get(_owner_key(l), [])
+                    if j not in targets and by_id[str(j)]["status"] not in CLOSED_STATUSES
+                ]
         manual_hit = False
         for i in targets:
             l = by_id[str(i)]
@@ -105,8 +120,9 @@ def import_contacts(conn, text):
                 fill["owner_email"] = email
                 if not (l["owner_phone"] or l["contact_source"]):
                     fill["contact_source"] = "import"
-            if (phone and l["owner_phone"] and l["owner_phone"] != phone) or \
-                    (email and l["owner_email"] and l["owner_email"].lower() != email.lower()):
+            if (phone and l["owner_phone"] and l["owner_phone"] != phone) or (
+                email and l["owner_email"] and l["owner_email"].lower() != email.lower()
+            ):
                 counts["kept_existing"] += 1
             if fill:
                 sets = ", ".join(f"{k} = ?" for k in fill)
@@ -127,9 +143,21 @@ def skiptrace_csv(leads):
     skip-tracing services accept."""
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["lead_id", "owner_name", "mailing_address", "mailing_city", "mailing_state",
-                "mailing_zip", "property_address", "property_city", "property_state",
-                "property_zip", "parcel"])
+    w.writerow(
+        [
+            "lead_id",
+            "owner_name",
+            "mailing_address",
+            "mailing_city",
+            "mailing_state",
+            "mailing_zip",
+            "property_address",
+            "property_city",
+            "property_state",
+            "property_zip",
+            "parcel",
+        ]
+    )
     seen = set()
     for l in leads:
         if l.get("owner_phone") or not l.get("owner_name"):
@@ -138,8 +166,19 @@ def skiptrace_csv(leads):
         if key in seen:
             continue
         seen.add(key)
-        w.writerow([l["id"], l["owner_name"], l.get("owner_address") or "",
-                    l.get("owner_city") or "", l.get("owner_state") or "",
-                    l.get("owner_zip") or "", l.get("address") or "", l.get("city") or "Tucson",
-                    "AZ", l.get("zip") or "", l.get("parcel") or ""])
+        w.writerow(
+            [
+                l["id"],
+                l["owner_name"],
+                l.get("owner_address") or "",
+                l.get("owner_city") or "",
+                l.get("owner_state") or "",
+                l.get("owner_zip") or "",
+                l.get("address") or "",
+                l.get("city") or "Tucson",
+                "AZ",
+                l.get("zip") or "",
+                l.get("parcel") or "",
+            ]
+        )
     return buf.getvalue()

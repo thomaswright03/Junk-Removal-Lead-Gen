@@ -34,13 +34,13 @@ CASE_URL = "https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID={id}"
 
 DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 LONG_DATE_RE = re.compile(r"([A-Z][a-z]+ \d{1,2}, \d{4})(?:\s+at\s+(\d{1,2}:\d{2}\s*[AP]M))?")
-NOTICE_RE = re.compile(r"EVICTION\s+NOTICE|NOTICE\s+TO\s+VACATE|\b(?:5|FIVE|10|TEN|30|THIRTY)[- ]DAY\s+NOTICE",
-                       re.IGNORECASE)
+NOTICE_RE = re.compile(
+    r"EVICTION\s+NOTICE|NOTICE\s+TO\s+VACATE|\b(?:5|FIVE|10|TEN|30|THIRTY)[- ]DAY\s+NOTICE", re.IGNORECASE
+)
 EVICTION_RE = re.compile(r"EVICT|DETAINER", re.IGNORECASE)
 # The clean-out moment: the court rules for the landlord, then a writ of
 # restitution lets the constable lock the tenant out, often leaving belongings.
-JUDGMENT_RE = re.compile(r"\bJUDGMENT\b(?![^|]{0,40}\b(?:DEFENDANT|DENIED|VACATED|SET ASIDE)\b)",
-                         re.IGNORECASE)
+JUDGMENT_RE = re.compile(r"\bJUDGMENT\b(?![^|]{0,40}\b(?:DEFENDANT|DENIED|VACATED|SET ASIDE)\b)", re.IGNORECASE)
 WRIT_RE = re.compile(r"\bWRIT\b|\bLOCK[- ]?OUT\b", re.IGNORECASE)
 DISMISS_RE = re.compile(r"\bDISMISS", re.IGNORECASE)
 # Stages in order; the lead shows the furthest one reached.
@@ -100,8 +100,7 @@ def case_id(text):
 
 
 def is_case_page(html):
-    return "Document SubType" in html or ("Case Number" in html and "Case Status" in html
-                                          and "Matter Type" in html)
+    return "Document SubType" in html or ("Case Number" in html and "Case Status" in html and "Matter Type" in html)
 
 
 def _first_date(rows, regex, date_keys=("FILE DATE", "DATE", "FILED")):
@@ -144,8 +143,11 @@ def parse_case_html(html, url=None, today=None):
                 if not name:
                     continue
                 won_by = (r.get("JUDGMENT FOR") or "").upper()
-                if won_by and ("PLAINTIFF" in won_by or "PETITIONER" in won_by
-                               or ("PLAINTIFF" in role and "DEFENDANT" not in won_by)):
+                if won_by and (
+                    "PLAINTIFF" in won_by
+                    or "PETITIONER" in won_by
+                    or ("PLAINTIFF" in role and "DEFENDANT" not in won_by)
+                ):
                     judgment_for_landlord = _iso(r.get("JUDGMENT DATE")) or ""
                 if "PLAINTIFF" in role or "PETITIONER" in role:
                     plaintiffs.append(name)
@@ -183,8 +185,9 @@ def parse_case_html(html, url=None, today=None):
 
     papers = documents + events
     judgment_date = _first_date(papers, JUDGMENT_RE)
-    if judgment_for_landlord is not None and (judgment_date is None or
-                                              (judgment_for_landlord and judgment_for_landlord < judgment_date)):
+    if judgment_for_landlord is not None and (
+        judgment_date is None or (judgment_for_landlord and judgment_for_landlord < judgment_date)
+    ):
         judgment_date = judgment_for_landlord
     writ_date = _first_date(papers, WRIT_RE)
     dismissed = bool(DISMISS_RE.search(status or "")) or _first_date(papers, DISMISS_RE) is not None
@@ -200,14 +203,17 @@ def parse_case_html(html, url=None, today=None):
         stage = "filed"
 
     hearing = next((e for e in events if EVICTION_RE.search(" ".join(e.values()))), None)
-    stage_text = {"writ": "Writ of restitution issued" + (f" {_human(writ_date)}" if writ_date else ""),
-                  "judgment": "Judgment for the landlord" + (f" {_human(judgment_date)}" if judgment_date else ""),
-                  "dismissed": "Case dismissed"}.get(stage)
-    summary = [f"Case {status.lower()}" if status else None,
-               "Eviction notice filed" if notice else "No eviction notice on file yet",
-               stage_text,
-               f"{hearing.get('EVENT')} {hearing.get('DATE')} {hearing.get('TIME') or ''}".strip()
-               if hearing else None]
+    stage_text = {
+        "writ": "Writ of restitution issued" + (f" {_human(writ_date)}" if writ_date else ""),
+        "judgment": "Judgment for the landlord" + (f" {_human(judgment_date)}" if judgment_date else ""),
+        "dismissed": "Case dismissed",
+    }.get(stage)
+    summary = [
+        f"Case {status.lower()}" if status else None,
+        "Eviction notice filed" if notice else "No eviction notice on file yet",
+        stage_text,
+        f"{hearing.get('EVENT')} {hearing.get('DATE')} {hearing.get('TIME') or ''}".strip() if hearing else None,
+    ]
     return Lead(
         source=JP_SOURCE,
         source_id=case,
@@ -302,8 +308,9 @@ def add_cases(conn, text, client=None, log=print):
             continue
         counts[db.upsert(conn, lead)] += 1
         # Steve added it himself, so it shows in the default view either way.
-        conn.execute("UPDATE leads SET added_by_hand = 1 WHERE source = ? AND source_id = ?",
-                     (lead.source, lead.source_id))
+        conn.execute(
+            "UPDATE leads SET added_by_hand = 1 WHERE source = ? AND source_id = ?", (lead.source, lead.source_id)
+        )
         counts["with_notice"] += int(bool(lead.eviction_notice))
         conn.commit()
     return counts
@@ -315,10 +322,12 @@ def add_cases(conn, text, client=None, log=print):
 RECHECK_DAYS = 3
 UNCONFIRMED_RECHECK_HOURS = 20
 
-_OPEN_CASE_SQL = ("lead_type = 'eviction' AND url LIKE '%jcDisplayCase%' "
-                  "AND LOWER(COALESCE(case_status, '')) NOT LIKE 'closed%' "
-                  "AND LOWER(COALESCE(case_status, '')) NOT LIKE 'dismiss%' "
-                  "AND COALESCE(case_stage, '') != 'dismissed'")
+_OPEN_CASE_SQL = (
+    "lead_type = 'eviction' AND url LIKE '%jcDisplayCase%' "
+    "AND LOWER(COALESCE(case_status, '')) NOT LIKE 'closed%' "
+    "AND LOWER(COALESCE(case_status, '')) NOT LIKE 'dismiss%' "
+    "AND COALESCE(case_stage, '') != 'dismissed'"
+)
 
 
 def cases_due(conn, now=None, limit=None):
@@ -331,7 +340,8 @@ def cases_due(conn, now=None, limit=None):
     unconfirmed = (now - timedelta(hours=UNCONFIRMED_RECHECK_HOURS)).isoformat()
     rows = conn.execute(
         "SELECT id, url, case_checked_at, next_court_date, eviction_notice, case_stage FROM leads "
-        f"WHERE {_OPEN_CASE_SQL} ORDER BY id").fetchall()
+        f"WHERE {_OPEN_CASE_SQL} ORDER BY id"
+    ).fetchall()
     due = []
     for r in rows:
         checked = r["case_checked_at"]
@@ -351,8 +361,9 @@ def cases_due(conn, now=None, limit=None):
     return rows[:limit] if limit else rows
 
 
-def update_cases(conn, client=None, limit=None, max_age_hours=12, log=print, scheduled=False,
-                 progress=None, should_stop=None):
+def update_cases(
+    conn, client=None, limit=None, max_age_hours=12, log=print, scheduled=False, progress=None, should_stop=None
+):
     """Re-read case pages for open eviction leads.
 
     ``scheduled`` (the daily run) picks cases with ``cases_due``; otherwise
@@ -366,8 +377,9 @@ def update_cases(conn, client=None, limit=None, max_age_hours=12, log=print, sch
     if scheduled:
         rows = cases_due(conn, limit=limit)
     else:
-        cutoff = (datetime.now(timezone.utc).replace(microsecond=0)
-                  - timedelta(hours=max_age_hours)).isoformat()  # same format db.upsert writes
+        cutoff = (
+            datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=max_age_hours)
+        ).isoformat()  # same format db.upsert writes
         rows = conn.execute(
             f"SELECT id, url FROM leads WHERE {_OPEN_CASE_SQL} "
             "AND (case_checked_at IS NULL OR case_checked_at <= ?) "

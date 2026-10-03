@@ -23,8 +23,7 @@ class FakeCases:
         self.calls.append(cid)
         if cid not in self.pages:
             raise requests.ConnectionError("offline")
-        return parse_case_html(self.pages[cid],
-                               url=f"https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID={cid}")
+        return parse_case_html(self.pages[cid], url=f"https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID={cid}")
 
 
 def test_parse_case_page():
@@ -58,9 +57,11 @@ def test_case_links_and_ids():
 def test_calendar_row_and_case_page_share_one_row():
     conn = db.connect(":memory:")
     html = CASE_HTML  # reuse parties from the case page in a calendar row
-    cal = ('<table><tr><th>Date</th><th>Case Number</th><th>Case Name</th><th>Event</th></tr>'
-           '<tr><td>10/14/2026</td><td><a href="jcDisplayCase.aspx?ID=1000001">CV26-012345-EA</a></td>'
-           '<td>SAGUARO VISTA APARTMENTS LLC vs. DOE, JANE A</td><td>Eviction Action</td></tr></table>')
+    cal = (
+        "<table><tr><th>Date</th><th>Case Number</th><th>Case Name</th><th>Event</th></tr>"
+        '<tr><td>10/14/2026</td><td><a href="jcDisplayCase.aspx?ID=1000001">CV26-012345-EA</a></td>'
+        "<td>SAGUARO VISTA APARTMENTS LLC vs. DOE, JANE A</td><td>Eviction Action</td></tr></table>"
+    )
     cal_lead = parse_calendar_html(cal)[0]
     assert cal_lead.url == CASE_URL
     assert db.upsert(conn, cal_lead) == "new"
@@ -76,12 +77,25 @@ def test_calendar_row_and_case_page_share_one_row():
 
 def test_lead_desk_shows_only_evictions_with_notice(tmp_path):
     path = tmp_path / "l.db"
-    app = App(path, case_client=FakeCases({"1000001": CASE_HTML, "1000002": NO_NOTICE_HTML.replace(
-        "CV26-012345-EA", "CV26-012346-EA")}))
+    app = App(
+        path,
+        case_client=FakeCases(
+            {"1000001": CASE_HTML, "1000002": NO_NOTICE_HTML.replace("CV26-012345-EA", "CV26-012346-EA")}
+        ),
+    )
     with app.conn() as conn:
         from leadgen.models import Lead
-        db.upsert(conn, Lead(source="tucson_code_cases", source_id="T1", lead_type="code_violation",
-                             address="1 MAIN ST", in_pima=True))
+
+        db.upsert(
+            conn,
+            Lead(
+                source="tucson_code_cases",
+                source_id="T1",
+                lead_type="code_violation",
+                address="1 MAIN ST",
+                in_pima=True,
+            ),
+        )
     counts = app.add_cases({"text": f"{CASE_URL} 1000002 9999999"})
     assert counts["new"] == 2 and counts["with_notice"] == 1 and counts["failed"] == 1
 
