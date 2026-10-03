@@ -1,0 +1,27 @@
+# Is the Justice Court calendar still there and still parsing? Every day an
+# hour after the daily check (14:00 UTC, 7:00 in Tucson), and on demand.
+# `leadgen check-court` fails when the calendar shows no eviction hearings
+# for the next 30 days (there are always some), so a change in the court's
+# page fails this job (GitHub emails the repository owner) instead of the
+# daily check quietly finding nothing. Prints counts only (public repository).
+name: Court calendar check
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+
+jobs:
+  court:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # The kill switch (docs/VERCEL.md): no request to the court while paused.
+      LEADDESK_PAUSED: ${{ vars.LEADDESK_PAUSED }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - run: leadgen --db /tmp/court.db check-court --days 30

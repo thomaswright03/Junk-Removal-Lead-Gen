@@ -245,6 +245,39 @@ def cmd_list(args: argparse.Namespace) -> None:
     print(f"{len(rows)} leads")
 
 
+def cmd_check_court(args: argparse.Namespace) -> None:
+    """Smoke test of the eviction source: the court calendar still answers
+    and still parses. Exits with an error when it finds no eviction hearing
+    in the next ``--days`` days (there are always some), so a change in the
+    court's page shows up as a failed job instead of a quiet day with no
+    new evictions. Prints counts only. ``--file`` checks saved pages."""
+    from .sources.pima_jp_calendar import CalendarClient, PimaJpCalendar, parse_calendar_html
+
+    today = az_today()
+    if args.file:  # saved pages: whatever dates they hold
+        leads = [
+            lead
+            for path in args.file
+            for lead in parse_calendar_html(
+                Path(path).read_text(encoding="utf-8", errors="replace"), assume_eviction=True
+            )
+        ]
+        pages = len(args.file)
+    else:
+        _exit_if_paused(_connect(args))
+        client = CalendarClient()
+        until = (today + timedelta(days=args.days)).isoformat()
+        leads = list(PimaJpCalendar().fetch(today.isoformat(), until, client=client))
+        pages = client.pages
+    with_case = sum(1 for l in leads if l.source_id)
+    print(f"court calendar: {len(leads)} eviction hearings in the next {args.days} days on {pages} page(s)")
+    if not leads or not with_case:
+        sys.exit(
+            "The Justice Court calendar returned no eviction hearings. The court's page has probably "
+            "changed (or the search failed): the daily check would find no new evictions."
+        )
+
+
 def cmd_sources(args: argparse.Namespace) -> None:
     for name, cls in SOURCES.items():
         auto = " (automatic)" if name in AUTOMATIC else ""
@@ -370,6 +403,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("status", choices=db.STATUSES)
     sp.add_argument("--notes")
     sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("check-court", help="fail if the court calendar shows no eviction hearings (the page changed?)")
+    sp.add_argument("--days", type=int, default=30, help="hearings this many days ahead (default 30)")
+    sp.add_argument("--file", nargs="+", help="check saved calendar pages instead of the live site")
+    sp.set_defaults(func=cmd_check_court)
 
     sp = sub.add_parser("sources", help="list available sources")
     sp.set_defaults(func=cmd_sources)

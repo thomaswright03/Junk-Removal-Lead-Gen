@@ -60,6 +60,12 @@ The check is `.github/workflows/daily.yml`. It runs every day at 13:00 UTC
 Actions tab, pick "Daily eviction check" and press "Run workflow". The first
 run fills the database with the next 30 days of eviction hearings.
 
+A second workflow, `.github/workflows/live-court.yml` ("Court calendar
+check"), runs an hour later and fails when the court calendar shows no
+eviction hearings for the next 30 days: the sign that the court changed its
+page and the daily check would quietly find nothing. GitHub emails the
+repository owner when a scheduled run fails. It needs no secrets.
+
 GitHub pauses scheduled workflows in a public repository after 60 days
 without any commits; the Actions tab shows a button to turn it back on.
 

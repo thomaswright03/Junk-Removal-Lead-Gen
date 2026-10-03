@@ -53,6 +53,9 @@ jobs:
       - run: leadgen --db /tmp/leads.db fetch --source tucson_code_cases --days 30
       - run: leadgen --db /tmp/leads.db enrich --limit 50
       - run: leadgen --db /tmp/leads.db list --limit 0
+      # Fails when the court calendar shows no eviction hearings (its page changed?).
+      # Also runs every day on its own: .github/workflows/live-court.yml.
+      - run: leadgen --db /tmp/court.db check-court --days 30
       - name: Daily eviction check on live data (counts only, no names)
         run: |
           python - <<'PY'

@@ -234,6 +234,11 @@ assessor, landlord phones, new Tucson code cases. It prints a one-line
 summary. `leadgen schedule install` runs it every morning (`--hour 7` for a
 different time, `leadgen schedule remove` to stop).
 
+`leadgen check-court` searches the court calendar for the next 30 days and
+fails when it finds no eviction hearings (there are always some), which
+means the court's page has changed. GitHub runs it every day
+(`.github/workflows/live-court.yml`); `--file` checks saved pages instead.
+
 ```sh
 leadgen run
 ```

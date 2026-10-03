@@ -2,6 +2,8 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from leadgen import cli, db, export
 from leadgen.geocode import parse_census_response
 from leadgen.models import Lead
@@ -224,3 +226,16 @@ def test_export_keeps_the_lead_desk_ranking(tmp_path, capsys):
     cli.main(["--db", str(dbfile), "--stale-days", "3650", "list"])
     first = capsys.readouterr().out.splitlines()[-4]
     assert first.split()[1] == rows[0]["id"]
+
+
+def test_check_court_fails_when_the_calendar_has_no_evictions(tmp_path, capsys):
+    """The scheduled live check (.github/workflows/live-court.yml) runs this
+    against the court; here, against saved pages."""
+    db_path = str(tmp_path / "l.db")
+    cli.main(["--db", db_path, "check-court", "--file", str(FIX / "jp_calendar_live_p1.html")])
+    assert "eviction hearings in the next 30 days" in capsys.readouterr().out
+    empty = tmp_path / "empty.html"
+    empty.write_text("<html><body><table id='grid'><tr><th>Case</th></tr></table>No records</body></html>")
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--db", db_path, "check-court", "--file", str(empty)])
+    assert "no eviction hearings" in str(e.value.code)
