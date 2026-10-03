@@ -31,22 +31,58 @@ function pendingResult(l) {
   for (const f of RESULT_FIELDS) if (f in d) out[f] = f === "notes" ? d[f] : moneyField(d[f]);
   return out;
 }
-function leaveDrawer() {
-  if (ui.open != null && hasDraft(ui.open) &&
-      !confirm("This lead has changes you haven't saved (notes, quote, contact or address). Leave it anyway? What you typed stays filled in if you come back to it.")) return false;
-  return true;
+// Before leaving a lead with unsaved typing: ask, in the page's own dialog.
+async function leaveDrawer() {
+  if (ui.open == null || !hasDraft(ui.open)) return true;
+  return confirmBox({ title: "Leave without saving?", body: "This lead has changes you haven't saved (notes, quote, contact or address). What you typed stays filled in if you come back to it.",
+    ok: "Leave without saving" });
 }
-function openLead(id, from) {
-  if (ui.open != null && ui.open !== id && !leaveDrawer()) return;
+async function openLead(id, from) {
+  if (ui.open != null && ui.open !== id && !(await leaveDrawer())) return;
   ui.open = id; ui.returnFocus = from || document.activeElement;
   renderDrawer(); syncUrl(true);
   const h = $("#drawer h2"); if (h) h.focus();
 }
-function closeDrawer() {
-  if (!leaveDrawer()) return;
+async function closeDrawer() {
+  if (!(await leaveDrawer())) return;
   const id = ui.open; ui.open = null; $("#drawer").classList.remove("open"); syncUrl(true);
   const back = document.querySelector(`[data-id="${id}"]`) || ui.returnFocus;
   if (back && back.focus) back.focus();
+}
+// The open drawer is a dialog: Tab and Shift+Tab stay inside it.
+$("#drawer").addEventListener("keydown", e => {
+  if (e.key !== "Tab") return;
+  const items = [...$("#drawer").querySelectorAll("a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])")]
+    .filter(el => !el.disabled && el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !$("#drawer").contains(document.activeElement) || document.activeElement.id === "dTitle")) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+// What the source said about the lead, as readable lines, leaving out what
+// the drawer already shows (case status, notice, stage, the hearing).
+function detailLines(l) {
+  const parts = String(l.description || "").split(" | ").map(p => p.trim()).filter(Boolean);
+  if (l.lead_type === "code_violation") {
+    const [kind, status, ...rest] = parts.length >= 3 ? parts : [null, null, ...parts];
+    return [rest.join(" — "), kind && `City case type: ${kind}`, status && `City status: ${status}`].filter(Boolean);
+  }
+  const hearingShown = !!l.next_court_date || l.date_label === "Hearing";
+  return parts.filter(p => !(
+    (/^case /i.test(p) && l.case_status) || /eviction notice/i.test(p) ||
+    /^(writ of restitution|judgment for the landlord|case dismissed)/i.test(p) ||
+    (hearingShown && /hearing|eviction action/i.test(p))));
+}
+// Court cases list no property address: the ways to find it, in one place.
+function addressGuide(l) {
+  const tenant = (l.defendant || "").split(";")[0].trim();
+  const steps = [
+    l.plaintiff || l.owner_name ? "Check the landlord's other properties (button below) and pick the likely one." : "",
+    tenant ? `Look up the tenant: <a href="https://www.google.com/search?q=${encodeURIComponent(tenant + " Tucson AZ")}" target="_blank" rel="noopener">search “${esc(title(tenant))}”</a>.` : "",
+    "Ask the landlord when you call.",
+    "A Justice Court records request lists property addresses: import its CSV with “Import court page / CSV” and matching cases fill in.",
+  ].filter(Boolean);
+  return `<p class="hint"><strong>Find the address:</strong></p><ol class="hint guide">${steps.map(t => `<li>${t}</li>`).join("")}</ol>`;
 }
 function renderDrawer() {
   const d = $("#drawer");
@@ -63,12 +99,13 @@ function renderDrawer() {
   d.innerHTML = `
     <button class="btn small close" id="dClose">Close</button>
     <h2 tabindex="-1" id="dTitle">${l.address ? esc(title(fullAddress(l))) : esc(title(l.plaintiff || l.source_id))}</h2>
-    <div class="row">${scoreChip(l.score)} ${statusChip(l.status)} ${chDot(ch)}${dirty ? ' <span class="chip warn">unsaved changes</span>' : ""}</div>
+    <div class="row">${scoreChip(l)} ${statusChip(l.status)} ${chDot(ch)}${dirty ? ' <span class="chip warn">unsaved changes</span>' : ""}</div>
+    <p class="small-line" id="dWhy">Priority ${l.score}: ${esc(scoreParts(l) || "no points yet")}</p>
     <dl>
       <dt>What</dt><dd>${esc(whatLabel(l))}${noticeChip(l)}</dd>
       ${l.case_status ? `<dt>Case status</dt><dd>${esc(l.case_status)}</dd>` : ""}
       ${l.next_court_date ? `<dt>Next hearing</dt><dd>${esc(courtDate(l.next_court_date))}</dd>` : ""}
-      <dt>Details</dt><dd>${esc(l.description || "")}</dd>
+      ${(lines => lines.length ? `<dt>Details</dt><dd>${lines.map(t => `<div>${esc(t)}</div>`).join("")}</dd>` : "")(detailLines(l))}
       ${leadDates(l)}
       <dt>Case</dt><dd>${esc(l.source_id)}${l.url ? ` · <a href="${esc(l.url)}" target="_blank" rel="noopener">${/jcDisplayCase/i.test(l.url) ? "court case page" : "source"}</a>` : ""}</dd>
       ${l.lead_type === "eviction" ? `<dt>Landlord</dt><dd>${esc(l.plaintiff || "")}</dd><dt>Tenant</dt><dd>${esc(l.defendant || "")}</dd>` : ""}
@@ -88,7 +125,8 @@ function renderDrawer() {
       ${l.address ? `<p>${esc(title(fullAddress(l)))}${addressNote(l)}</p>` : ""}
       ${l.address && (l.address_source === "landlord" || l.door_hanger_problem === "needs_unit") ? `<div class="row mb12"><button class="btn small" id="dConfirm">Confirm address</button>
         <span class="hint" style="margin:0">${l.address_source === "landlord" ? "Checked that the eviction is at this property?" : "No unit number, but a door hanger at this address is fine (for example at the leasing office)?"}</span></div>` : ""}
-      <p class="hint">${l.address ? "Correct it here if it's wrong." : "Court case pages don't list the property. Ask the landlord when you call, look the tenant up, or check the landlord's other properties below and pick the likely one."} Saving finds it on the map, looks up the parcel and owner, fills in the miles, and makes the lead eligible for door hangers.</p>
+      ${l.lead_type === "eviction" && (!l.address || l.address_source === "landlord") ? addressGuide(l) : ""}
+      <p class="hint">${l.address ? "Correct it here if it's wrong." : "Court case pages don't list the property."} Saving finds it on the map, looks up the parcel and owner, fills in the miles, and makes the lead eligible for door hangers.</p>
       <div class="row">
         <input id="dAddress" data-draft="address" placeholder="Street address, e.g. 123 W Main St" value="${esc(draftOf(l, "address"))}" style="flex:1;min-width:200px" aria-label="Property street address">
         <input id="dUnit" data-draft="unit" placeholder="Unit" value="${esc(draftOf(l, "unit"))}" style="width:80px" aria-label="Unit">

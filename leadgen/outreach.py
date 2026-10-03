@@ -122,6 +122,17 @@ _TYPE_POINTS = {
     "TREES": 15,
     "WEEDS": 15,
 }
+# The same codes in a few words, for the priority breakdown.
+_SHORT_LABELS = {
+    "VACANT": "vacant building",
+    "DUMP": "dumping",
+    "PMMULT": "trash and debris",
+    "REFS": "trash",
+    "RSTOR": "outdoor storage",
+    "DILAP": "dilapidated building",
+    "TREES": "overgrown trees",
+    "WEEDS": "weeds",
+}
 
 
 def _get(row: LeadRow, key: str) -> Any:
@@ -187,36 +198,49 @@ def latest_event(lead: LeadRow, today: Optional[date] = None) -> tuple[Optional[
     return best
 
 
-def score(lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None) -> int:
-    """0-100ish. ``lead`` is a dict/row with the leads table's columns."""
+def score_parts(
+    lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None
+) -> list[tuple[str, int]]:
+    """What a lead's priority is made of, as ``[(plain label, points)]``:
+    the page shows these when the priority number is hovered or focused."""
     today = today or az_today()
-    points = 0
+    parts: list[tuple[str, int]] = []
     if lead["lead_type"] == "eviction":
-        points += 35
+        parts.append(("Eviction", 35))
         # A judgment, and above all a writ of restitution (lockout), means the
         # tenant is out or about to be: the unit needs clearing now.
         stage = _get(lead, "case_stage")
-        points += 25 if stage == "writ" else 15 if stage == "judgment" else 0
+        if stage == "writ":
+            parts.append(("writ issued", 25))
+        elif stage == "judgment":
+            parts.append(("judgment", 15))
     else:
         desc = (lead["description"] or "").upper()
-        if "VACANT/NUISANCE" in desc:
-            points += _TYPE_POINTS["VACANT"]
-        else:
-            points += _TYPE_POINTS.get(code_of(lead["description"]), 20)
+        code = "VACANT" if "VACANT/NUISANCE" in desc else code_of(lead["description"])
+        what = _SHORT_LABELS.get(code or "")
+        parts.append((f"Code case: {what}" if what else "Code case", _TYPE_POINTS.get(code or "", 20)))
     if lead["owner_absentee"]:
-        points += 20
+        parts.append(("owner lives elsewhere", 20))
     if lead["owner_entity"]:
-        points += 10
+        parts.append(("company owner", 10))
     if owner_lead_counts and lead["owner_name"]:
         if owner_lead_counts.get(lead["owner_name"], 0) > 1:
-            points += 10
+            parts.append(("repeat owner", 10))
     # Recency from the latest thing that actually happened (filing, judgment,
     # writ), never from an upcoming hearing or any other future date.
-    _label, when = latest_event(lead, today)
+    label, when = latest_event(lead, today)
     if when:
         age = (today - date.fromisoformat(when)).days
-        points += 15 if age <= 7 else 8 if age <= 14 else 0
-    return points
+        points = 15 if age <= 7 else 8 if age <= 14 else 0
+        if points:
+            ago = "today" if age == 0 else f"{age} day{'' if age == 1 else 's'} ago"
+            parts.append((f"{(label or 'dated').lower()} {ago}", points))
+    return parts
+
+
+def score(lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None) -> int:
+    """0-100ish. ``lead`` is a dict/row with the leads table's columns."""
+    return sum(points for _label, points in score_parts(lead, owner_lead_counts, today))
 
 
 def door_hanger_problem(lead: LeadRow) -> Optional[str]:
@@ -292,6 +316,58 @@ def _stratum(lead: LeadRow) -> tuple[bool, bool]:
     return (door_hanger_problem(lead) is None, lead["lead_type"] == "eviction")
 
 
+# How a lead got its method (``assigned_by``): dealt by an Assign leads
+# round, sent to the method already working its landlord, or set by hand.
+BY_ROUND, FOLLOWED, BY_HAND = "round", "followed", "hand"
+
+
+def _taken(conn: Conn) -> dict[str, str]:
+    """Landlord -> the method already working them."""
+    taken: dict[str, str] = {}
+    for r in conn.execute(
+        "SELECT id, plaintiff, owner_name, channel FROM leads WHERE channel IS NOT NULL ORDER BY assigned_at, id"
+    ).fetchall():
+        taken.setdefault(landlord_key(r), r["channel"])
+    return taken
+
+
+def _pool(leads: list) -> list:
+    pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
+    pool.sort(key=lambda l: (-l["score"], l["id"]))
+    return pool
+
+
+def _combos() -> list[tuple[str, ...]]:
+    names = list(CHANNELS)
+    out = []
+    for mask in range(1, 2 ** len(names)):
+        out.append(tuple(c for i, c in enumerate(names) if mask >> i & 1))
+    return out
+
+
+def split_preview(conn: Conn, leads: list) -> dict:
+    """What Assign leads can hand out before Steve presses it: for each
+    combination of methods, how many unassigned leads every one of them can
+    work (``combos``, keyed "door_hanger+phone"), how many go to the method
+    already working their landlord (``followed``), and the combination to
+    tick by default (``suggested``: the most methods that still have leads,
+    then the most leads)."""
+    taken = _taken(conn)
+    followed = 0
+    eligible_sets = []
+    for lead in _pool(leads):
+        eligible = set(eligible_channels(lead))
+        ch = taken.get(landlord_key(lead))
+        if ch:
+            followed += ch in eligible
+            continue
+        eligible_sets.append(eligible)
+    combos = {"+".join(c): sum(1 for e in eligible_sets if e.issuperset(c)) for c in _combos()}
+    workable = [c for c in _combos() if combos["+".join(c)]]
+    best = max(workable, key=lambda c: (len(c), combos["+".join(c)]), default=())
+    return {"combos": combos, "followed": followed, "suggested": list(best)}
+
+
 def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None) -> dict:
     """Deal up to ``count`` of the best unassigned leads across ``channels``
     so that each channel gets a like-for-like share (see the module notes).
@@ -300,7 +376,9 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     "left_out": {"needs_address": n, "needs_unit": n, "no_contact": n},
     "round": id}``.
     ``followed`` are leads whose landlord already has a channel from an
-    earlier round: they go to that channel, outside the balanced split.
+    earlier round: they go to that channel, outside the balanced split, so
+    they don't use up ``count`` (at most ``count`` of them go in one round),
+    and they are stored as followed, not as dealt or set by hand.
     """
     rng = random.Random(seed)
     channels = [c for c in dict.fromkeys(channels) if c in CHANNELS]
@@ -310,14 +388,8 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     round_id = now_iso() + "-" + uuid.uuid4().hex[:6]
     now = now_iso()
 
-    taken: dict[str, str] = {}
-    for r in conn.execute(
-        "SELECT id, plaintiff, owner_name, channel FROM leads WHERE channel IS NOT NULL ORDER BY assigned_at, id"
-    ).fetchall():
-        taken.setdefault(landlord_key(r), r["channel"])
-
-    pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
-    pool.sort(key=lambda l: (-l["score"], l["id"]))
+    taken = _taken(conn)
+    pool = _pool(leads)
     out: dict[str, Any] = {
         "assigned": {c: 0 for c in channels},
         "followed": {},
@@ -325,23 +397,23 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
         "round": round_id,
     }
 
-    def give(lead: LeadRow, ch: str, round_: Optional[str]) -> None:
+    def give(lead: LeadRow, ch: str, how: str) -> None:
         conn.execute(
-            "UPDATE leads SET channel = ?, assigned_at = ?, assign_round = ? WHERE id = ?",
-            (ch, now, round_, lead["id"]),
+            "UPDATE leads SET channel = ?, assigned_at = ?, assign_round = ?, assigned_by = ? WHERE id = ?",
+            (ch, now, round_id, how, lead["id"]),
         )
 
-    picked = 0
+    followed = 0
     clusters: dict[str, list] = {}  # landlord -> leads, in score order
     for lead in pool:
         eligible = eligible_channels(lead)
         key = landlord_key(lead)
         if key in taken:
             ch = taken[key]
-            if ch in eligible and picked < count:
-                give(lead, ch, None)
+            if ch in eligible and followed < count:
+                give(lead, ch, FOLLOWED)
                 out["followed"][ch] = out["followed"].get(ch, 0) + 1
-                picked += 1
+                followed += 1
             continue
         missing = [c for c in channels if c not in eligible]
         if missing:
@@ -355,6 +427,7 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
 
     # Best landlords first, until the round is full. A landlord's leads stay
     # together, so a big one that doesn't fit waits for the next round.
+    picked = 0
     chosen = []
     for _key, group in sorted(clusters.items(), key=lambda kv: (-kv[1][0]["score"], kv[0])):
         if picked + len(group) > count:
@@ -379,24 +452,62 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
                 ch = min(free, key=lambda c: have[c])
                 free.remove(ch)
                 for lead in group:
-                    give(lead, ch, round_id)
+                    give(lead, ch, BY_ROUND)
                 have[ch] += len(group)
                 out["assigned"][ch] += len(group)
     conn.commit()
     return out
 
 
+def how_assigned(row: LeadRow) -> str:
+    """``round``, ``followed`` or ``hand``. Leads from before ``assigned_by``
+    was kept: dealt by a round when they carry its id, else by hand."""
+    by = _get(row, "assigned_by")
+    if by in (BY_ROUND, FOLLOWED, BY_HAND):
+        return str(by)
+    return BY_ROUND if _get(row, "assign_round") else BY_HAND
+
+
+def tag_followed_leads(conn: Conn) -> int:
+    """Once per database: older versions stored leads that followed their
+    landlord's method with no round id, the same as leads set by hand. They
+    carry the assignment time of the round that sent them, which a lead set
+    by hand never does, so mark those as followed."""
+    cur = conn.execute(
+        "UPDATE leads SET assigned_by = ? WHERE assigned_by IS NULL AND channel IS NOT NULL "
+        "AND assign_round IS NULL AND assigned_at IN "
+        "(SELECT assigned_at FROM leads WHERE assign_round IS NOT NULL)",
+        (FOLLOWED,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def _mix(rows: list) -> dict:
-    """What kind of leads a channel got."""
+    """What kind of leads a channel got. Leads that followed their landlord's
+    method are counted apart and left out of the shares and the average, as
+    the balanced split didn't choose them."""
+    how = [how_assigned(r) for r in rows]
+    followed = how.count(FOLLOWED)
+    by_hand = how.count(BY_HAND)
+    rows = [r for r, h in zip(rows, how) if h != FOLLOWED]
     n = len(rows)
     if not n:
-        return {"leads": 0, "with_address": None, "evictions": None, "avg_score": None, "set_by_hand": 0}
+        return {
+            "leads": 0,
+            "with_address": None,
+            "evictions": None,
+            "avg_score": None,
+            "set_by_hand": by_hand,
+            "followed": followed,
+        }
     return {
         "leads": n,
         "with_address": sum(1 for r in rows if door_hanger_problem(r) is None) / n,
         "evictions": sum(1 for r in rows if r["lead_type"] == "eviction") / n,
         "avg_score": round(sum(r["_score"] for r in rows) / n, 1),
-        "set_by_hand": sum(1 for r in rows if not r["assign_round"]),
+        "set_by_hand": by_hand,
+        "followed": followed,
     }
 
 
@@ -459,10 +570,13 @@ MIN_CONTACTS = 20
 
 def comparison(results_rows: list[dict]) -> dict:
     """Can the channels be ranked yet? ``{"fair": bool, "ready": bool,
-    "reasons": [plain sentences]}``. ``fair`` means the channels got the same
+    "reasons": [plain sentences], "notes": [plain sentences]}``. ``notes``
+    say how many leads followed their landlord's method (not a reason the
+    comparison is unfair: those leads are left out of the mix). ``fair`` means the channels got the same
     mix of leads; ``ready`` adds that each has enough contacts to judge."""
     active = [r for r in results_rows if r["assigned"]]
-    reasons = []
+    reasons: list[str] = []
+    notes: list[str] = []
     if len(active) < 2:
         reasons.append("Only one outreach method has leads so far, so there is nothing to compare.")
     else:
@@ -479,11 +593,22 @@ def comparison(results_rows: list[dict]) -> dict:
                 )
         for r in active:
             if r["mix"]["set_by_hand"] > 0.2 * r["assigned"]:
-                reasons.append(f"Many {r['label']} leads were set by hand rather than split with Assign leads.")
+                n = r["mix"]["set_by_hand"]
+                reasons.append(
+                    f"{n} {r['label']} lead{'' if n == 1 else 's'} had the method set by hand on the lead "
+                    "rather than split with Assign leads."
+                )
+    for r in active:
+        n = r["mix"]["followed"]
+        if n:
+            notes.append(
+                f"{n} {r['label']} lead{' went' if n == 1 else 's went'} to the method already working "
+                "their landlord; they are left out of the mix below."
+            )
     fair = not reasons
     thin = [r["label"] for r in active if r["touched"] < MIN_CONTACTS]
     if fair and thin:
         reasons.append(
             f"Fewer than {MIN_CONTACTS} contacts logged for: {', '.join(thin)}. One job can still swing the ranking."
         )
-    return {"fair": fair, "ready": fair and not thin, "reasons": reasons}
+    return {"fair": fair, "ready": fair and not thin, "reasons": reasons, "notes": notes}

@@ -1,27 +1,70 @@
 // Outreach tab: split leads between methods, and each method's work list
 // (the server sends the list for the method that's showing).
 "use strict";
+// Methods ticked for Assign leads: the server's suggestion (the most methods
+// the unassigned leads can all be worked by) until Steve changes the ticks.
+const comboKey = chans => Object.keys(S.channels).filter(c => chans.includes(c)).join("+");
+const methodList = chans => chans.map(chName).join(" + ");
+function splitLine(chans) {
+  const sp = S.split || { combos: {}, followed: 0, suggested: [] };
+  const n = chans.length ? sp.combos[comboKey(chans)] || 0 : 0;
+  const followed = sp.followed ? ` ${sp.followed} more go to the method already working their landlord.` : "";
+  if (!chans.length) return { n, html: "Tick at least one method." };
+  const idle = Object.keys(S.channels).filter(c => !chans.includes(c) && !sp.combos[c]);
+  const idleNote = idle.length ? ` ${esc(methodList(idle))}: no unassigned lead ${idle.length > 1 ? "they" : "it"} can work yet${idle.includes("door_hanger") ? " (door hangers need a property address)" : ""}.` : "";
+  if (n) return { n, html: `<strong>${n} lead${n === 1 ? "" : "s"}</strong> can be split between ${esc(methodList(chans))}.${followed}${idleNote}` };
+  // Nothing every ticked method can work: name the method that blocks it.
+  const fixes = chans.map(c => chans.filter(x => x !== c)).filter(rest => rest.length && sp.combos[comboKey(rest)])
+    .sort((a, b) => sp.combos[comboKey(b)] - sp.combos[comboKey(a)]);
+  const fix = fixes[0];
+  const drop = fix ? chans.find(c => !fix.includes(c)) : null;
+  const why = chans.includes("door_hanger") ? " Door hangers need a property address (and a unit number at an apartment or condo complex)." : "";
+  return { n, html: `<strong>No unassigned lead</strong> can be worked by all of ${esc(methodList(chans))}.${why}${followed}`
+    + (drop ? ` <button class="btn small" id="aDrop" data-drop="${drop}">Untick ${esc(chName(drop))} (${sp.combos[comboKey(fix)]} leads)</button>` : "") };
+}
+function otherChoices(chans) {
+  const sp = S.split || { combos: {} };
+  return Object.entries(sp.combos).filter(([k, n]) => n && k !== comboKey(chans) && k.includes("+"))
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, n]) => `<button class="linkbtn" data-combo="${k}">${esc(methodList(k.split("+")))}: ${n}</button>`).join(" · ");
+}
 function renderOutreach() {
   const c = S.counts || {}, per = c.channels || {};
   const unassignedCount = c.unassigned || 0;
   const t = ui.outreachTab;
+  const sp = S.split || { suggested: [] };
+  if (!ui.aChannels) ui.aChannels = sp.suggested.length ? sp.suggested.slice() : Object.keys(S.channels);
+  const chans = ui.aChannels;
+  const line = splitLine(chans), others = otherChoices(chans);
   $("#tab-outreach").innerHTML = `
     <div class="card">
       <h2>Split leads between outreach methods</h2>
       <p class="hint">Hands out the best unassigned leads so each method gets the same kind of leads, and the Results tab can say fairly which one works. Only leads every ticked method can work are used (door hangers need a property address), every lead of one landlord goes to the same method, and each method gets the same mix of strong and weak leads. ${unassignedCount} leads are unassigned.</p>
       <div class="row">
-        <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, unassignedCount) || 40}" min="1" style="width:80px"></label>
-        ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" checked><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
-        <button class="btn primary" id="aGo" ${unassignedCount ? "" : "disabled"}>Assign leads</button>
+        <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
+        ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
+        <button class="btn primary" id="aGo" ${line.n ? "" : "disabled"}>Assign leads</button>
       </div>
+      <p class="hint mt8" id="aSplit" aria-live="polite">${line.html}</p>
+      ${others ? `<p class="hint">Other choices: ${others}</p>` : ""}
     </div>
     <div class="tabs2">${Object.entries(S.channels).map(([c, n]) => `<button data-otab="${c}" class="${c === t ? "on" : ""}"><span class="dot" style="background:var(--c-${c})"></span> ${esc(n)} · ${(per[c] || {}).to_do || 0} to do / ${(per[c] || {}).active || 0}</button>`).join("")}</div>
     <div id="oBody"></div>`;
-  $("#aGo").onclick = e => {
-    const chans = [...document.querySelectorAll(".aCh:checked")].map(x => x.value);
+  const setChans = (list, focusSel) => { ui.aChannels = list; renderOutreach(); const f = $(focusSel); if (f) f.focus(); };
+  document.querySelectorAll(".aCh").forEach(b => b.onchange = () =>
+    setChans([...document.querySelectorAll(".aCh:checked")].map(x => x.value), `.aCh[value="${b.value}"]`));
+  const drop = $("#aDrop");
+  if (drop) drop.onclick = () => setChans(chans.filter(c => c !== drop.dataset.drop), "#aGo");
+  document.querySelectorAll("[data-combo]").forEach(b => b.onclick = () => setChans(b.dataset.combo.split("+"), "#aGo"));
+  $("#aGo").onclick = async e => {
+    const btn = e.currentTarget;
     if (!chans.length) return toast("Tick at least one outreach method.");
     const n = +$("#aCount").value;
-    if (!confirm(`Hand out up to ${n} leads between ${chans.map(chName).join(", ")}? Each lead then shows up in that method's work list.`)) return;
+    const most = Math.min(n, line.n);
+    if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}?`,
+      body: `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.` + ((S.split || {}).followed ? ` Up to ${Math.min(n, S.split.followed)} more go to the method already working their landlord.` : ""),
+      ok: `Assign ${most} lead${most === 1 ? "" : "s"}` }))) return;
+    ui.aChannels = null;  // the next suggestion fits the leads that are left
     act(() => api("/api/assign", { count: n, channels: chans }), r => {
       const got = Object.entries(r.assigned).map(([c, k]) => `${chName(c)} ${k}`).join(", ");
       const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
@@ -30,7 +73,7 @@ function renderOutreach() {
         + (lo.needs_address ? ` ${lo.needs_address} leads left out because they have no property address (add one on the lead, or untick Door hanger).` : "")
         + (lo.needs_unit ? ` ${lo.needs_unit} left out because they're at an apartment or condo complex with no unit number (type the unit or confirm the address on the lead, or untick Door hanger).` : "")
         + (lo.no_contact ? ` ${lo.no_contact} left out because a ticked method has no one to contact.` : "");
-    }, e.currentTarget);
+    }, btn);
   };
   document.querySelectorAll("[data-otab]").forEach(b => b.onclick = async () => {
     ui.outreachTab = b.dataset.otab; syncUrl(); await reloadList(); $(`[data-otab="${b.dataset.otab}"]`).focus();
@@ -88,7 +131,7 @@ function renderCalls(el, q, ch) {
     ${q.some(l => l.lead_type !== "eviction") ? `<h3>Script for code-case owners</h3><div class="script" data-script="code">${esc(fill(ch, { lead_type: "code_violation", address: "[address]" }))}</div>` : ""}
     <p class="hint">Each lead's own page shows the script filled in with its owner and address.</p></div>
     ${q.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th class="num">Priority</th><th>Owner</th><th>Property</th><th>Phone</th><th>Log</th></tr></thead><tbody>
-      ${q.map(l => { const who = l.owner_name || l.plaintiff || ""; return `<tr class="click" data-id="${l.id}"><td class="num" data-th="Priority">${scoreChip(l.score)}</td><td data-th="Owner"><span>${ownerLine(l)}</span></td><td data-th="Property"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}</span></td>
+      ${q.map(l => { const who = l.owner_name || l.plaintiff || ""; return `<tr class="click" data-id="${l.id}"><td class="num" data-th="Priority">${scoreChip(l)}</td><td data-th="Owner"><span>${ownerLine(l)}</span></td><td data-th="Property"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}</span></td>
       <td style="white-space:nowrap" data-th="Phone">${l.owner_phone ? phoneCell(l) : `<a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search</a>`}</td>
       <td data-th="Log"><div class="row">${touchButtons(ch).slice(0, 3).map(([k, t]) => `<button class="btn small" data-quick="${l.id}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;

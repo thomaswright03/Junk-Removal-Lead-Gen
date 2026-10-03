@@ -22,6 +22,7 @@ Providers, tried in order:
              and phone numbers. Honors robots.txt.
 """
 
+import logging
 import os
 import re
 import time
@@ -37,6 +38,8 @@ import requests
 from . import config, db
 from .contacts import clean_email, clean_phone
 from .util import az_now, is_multifamily, is_paused, utc_now
+
+_log = logging.getLogger(__name__)
 
 # Public Overpass servers, tried in order when one refuses or is overloaded.
 OVERPASS_URLS = (
@@ -645,7 +648,9 @@ def find_contacts(
             if contact and contact.website and not (contact.phone and contact.email):
                 try:
                     w = scanner.scan(contact.website) if scanner else None
-                except Exception:
+                except Exception as e:  # the company's site down: keep what the provider found
+                    _log.warning("website scan failed for lead %s: %s", lead["id"], type(e).__name__)
+                    counts["website_errors"] = counts.get("website_errors", 0) + 1
                     w = None
                 if w:
                     contact.phone = contact.phone or w.phone

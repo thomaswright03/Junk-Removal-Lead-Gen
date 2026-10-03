@@ -24,6 +24,7 @@ function renderResults() {
         : C.ready ? "Every method got the same kind of leads and has at least 20 contacts. Compare cost per job and revenue per dollar before shifting effort."
         : "Every method got the same kind of leads. Keep going before deciding."}</p>
       ${C.reasons.length && touched ? `<ul class="hint">${C.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+      ${(C.notes || []).length ? `<ul class="hint" id="rNotes">${C.notes.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
       <div class="tablewrap"><table>
         <thead><tr><th>Method</th><th class="num">Assigned</th><th class="num">Contacted</th><th class="num">Responded</th><th class="num">Quoted</th><th class="num">Won</th><th class="num">Response rate</th><th class="num">Win rate</th><th class="num">Spent</th><th class="num">Revenue</th><th class="num">Cost per job</th><th class="num">Revenue per $1</th></tr></thead>
         <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.assigned}</td><td class="num">${r.touched}</td><td class="num">${r.responded}</td><td class="num">${r.quoted}</td><td class="num">${r.won}</td>
@@ -31,9 +32,9 @@ function renderResults() {
           <td class="num">${r.cost_per_win == null ? "–" : money(r.cost_per_win)}</td><td class="num">${r.revenue_per_dollar == null ? (r.revenue ? "free" : "–") : money(r.revenue_per_dollar)}</td></tr>`).join("")}</tbody>
       </table></div>
     </div>
-    <div class="card"><h2>What each method got</h2><p class="hint">For a fair comparison these should be close: the same share of leads with an address, of evictions, and a similar average priority.</p>
-      <div class="tablewrap"><table><thead><tr><th>Method</th><th class="num">Leads</th><th class="num">With an address</th><th class="num">Evictions</th><th class="num">Average priority</th><th class="num">Set by hand</th></tr></thead>
-      <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.mix.leads}</td><td class="num">${share(r.mix.with_address)}</td><td class="num">${share(r.mix.evictions)}</td><td class="num">${r.mix.avg_score ?? "–"}</td><td class="num">${r.mix.set_by_hand}</td></tr>`).join("")}</tbody></table></div></div>
+    <div class="card"><h2>What each method got</h2><p class="hint">For a fair comparison these should be close: the same share of leads with an address, of evictions, and a similar average priority. Leads that went to the method already working their landlord are counted apart and left out of these shares; “Set by hand” counts only methods changed on the lead itself.</p>
+      <div class="tablewrap"><table><thead><tr><th>Method</th><th class="num">Leads</th><th class="num">With an address</th><th class="num">Evictions</th><th class="num">Average priority</th><th class="num">Followed their landlord</th><th class="num">Set by hand</th></tr></thead>
+      <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.mix.leads}</td><td class="num">${share(r.mix.with_address)}</td><td class="num">${share(r.mix.evictions)}</td><td class="num">${r.mix.avg_score ?? "–"}</td><td class="num">${r.mix.followed || 0}</td><td class="num">${r.mix.set_by_hand}</td></tr>`).join("")}</tbody></table></div></div>
     <div class="card"><h2>Response rate</h2><p class="hint">Share of contacted leads that called back or said yes.</p>
       <div class="bars">${R.map(r => bar(r, r.response_rate || 0, maxRate, pct(r.response_rate))).join("")}</div></div>
     <div class="card"><h2>Revenue per dollar spent</h2><p class="hint">Phone and property-manager outreach cost Steve's time, not cash; add a cost per contact in Settings to compare them fairly.</p>

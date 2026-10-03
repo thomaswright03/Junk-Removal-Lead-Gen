@@ -57,24 +57,29 @@ LEAD_FIELDS = (
     "writ_date",
     "added_by_hand",
 )
-# The default view: eviction cases with a notice filed or further along
-# (judgment, writ), plus cases Steve imported himself whose case page hasn't
-# been read yet (so an import shows up at once, marked "case not checked";
-# once read, the notice rule applies). Dismissed cases, and closed ones that
-# never reached a judgment, drop out.
+# Evictions with a notice filed or further along (judgment, writ), plus
+# cases Steve imported himself whose case page hasn't been read yet (so an
+# import shows up at once, marked "case not checked"; once read, the notice
+# rule applies). Dismissed cases, and closed ones that never reached a
+# judgment, drop out.
 _ENDED = (
     "(COALESCE(case_stage, '') = 'dismissed' OR LOWER(COALESCE(case_status, '')) LIKE 'dismiss%' "
     "OR (LOWER(COALESCE(case_status, '')) LIKE 'closed%' "
     "AND COALESCE(case_stage, '') NOT IN ('judgment', 'writ')))"
 )
+_EVICTION_NOTICE = (
+    "lead_type = 'eviction' AND (eviction_notice = 1 OR case_stage IN ('judgment', 'writ') "
+    f"OR (added_by_hand = 1 AND eviction_notice IS NULL)) AND NOT {_ENDED}"
+)
 LEAD_VIEWS = {
-    "eviction_notice": (
-        "lead_type = 'eviction' AND (eviction_notice = 1 OR case_stage IN ('judgment', 'writ') "
-        f"OR (added_by_hand = 1 AND eviction_notice IS NULL)) AND NOT {_ENDED}"
-    ),
+    # The default (the owner's rule): evictions with a notice or further along.
+    "eviction_notice": _EVICTION_NOTICE,
     "evictions": "lead_type = 'eviction'",
     "all": "1=1",
 }
+DEFAULT_VIEW = "eviction_notice"
+# A property address that isn't a guess from the landlord's parcels.
+KNOWN_ADDRESS = "(address IS NOT NULL AND COALESCE(address_source, '') <> 'landlord')"
 # Statuses the "Open" filter hides, and those "active" (work lists) hides.
 CLOSED = ("stale", "skip", "lost", "won")
 INACTIVE = ("stale", "skip")
@@ -96,9 +101,38 @@ SEARCHED = (
 )
 
 
+def status_condition(status):
+    """SQL condition and arguments for the Status filter (see ``_keep``)."""
+    if status == "open":
+        return f"status NOT IN ({', '.join(repr(s) for s in CLOSED)})", []
+    if status == "active":
+        return f"status NOT IN ({', '.join(repr(s) for s in INACTIVE)})", []
+    if status:
+        return "status = ?", [status]
+    return "1=1", []
+
+
+def view_counts(conn, status="open"):
+    """How many leads each choice of "Show" has, with the Status filter the
+    list uses, so the number next to a view is what the list shows."""
+    cond, args = status_condition(status)
+    sums = ", ".join(f"SUM(CASE WHEN {sql} THEN 1 ELSE 0 END) AS v_{name}" for name, sql in LEAD_VIEWS.items())
+    r = conn.execute(
+        f"SELECT {sums}, "
+        # Case pages not read yet: hidden from the notice views until they are.
+        "SUM(CASE WHEN lead_type = 'eviction' AND case_checked_at IS NULL "
+        "AND url LIKE '%jcDisplayCase%' THEN 1 ELSE 0 END) AS v_unchecked, "
+        # City code cases: only in "All leads", so the menu says how many there are.
+        "SUM(CASE WHEN lead_type = 'code_violation' THEN 1 ELSE 0 END) AS v_code_cases "
+        f"FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL) AND {cond}",
+        args,
+    ).fetchone()
+    return {name: int(r["v_" + name] or 0) for name in (*LEAD_VIEWS, "unchecked", "code_cases")}
+
+
 def in_view(settings):
     """SQL condition for the leads the chosen view shows."""
-    view = LEAD_VIEWS.get((settings or {}).get("lead_view")) or LEAD_VIEWS["eviction_notice"]
+    view = LEAD_VIEWS.get((settings or {}).get("lead_view")) or LEAD_VIEWS[DEFAULT_VIEW]
     return f"duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL) AND {view}"
 
 
@@ -112,7 +146,8 @@ def lead_dict(r, settings, owner_counts, today=None):
     d["code_label"] = CODE_LABELS.get(code) or (
         "Vacant / nuisance building" if "VACANT/NUISANCE" in (r["description"] or "").upper() else None
     )
-    d["score"] = outreach.score(r, owner_counts, today=today)
+    d["score_parts"] = outreach.score_parts(r, owner_counts, today=today)
+    d["score"] = sum(points for _label, points in d["score_parts"])
     d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
     d["eligible"] = outreach.eligible_channels(r)
     d["door_hanger_problem"] = outreach.door_hanger_problem(r)
@@ -245,6 +280,7 @@ def page(conn, settings, params):
 def counts(conn, settings):
     """The numbers the header and the Outreach tab show, counted in the database."""
     inactive = ", ".join(f"'{s}'" for s in INACTIVE)
+    closed = ", ".join(f"'{s}'" for s in CLOSED)
     untouched = "NOT EXISTS (SELECT 1 FROM touches t WHERE t.lead_id = leads.id)"
     r = conn.execute(
         "SELECT COUNT(*) AS total, "
@@ -253,11 +289,18 @@ def counts(conn, settings):
         "SUM(CASE WHEN enriched_at IS NULL THEN 1 ELSE 0 END) AS owners_pending, "
         "SUM(CASE WHEN owner_phone IS NOT NULL THEN 1 ELSE 0 END) AS with_phone, "
         "SUM(CASE WHEN owner_email IS NOT NULL THEN 1 ELSE 0 END) AS with_email, "
-        "SUM(CASE WHEN channel IS NULL AND status = 'new' THEN 1 ELSE 0 END) AS unassigned "
+        "SUM(CASE WHEN channel IS NULL AND status = 'new' THEN 1 ELSE 0 END) AS unassigned, "
+        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) THEN 1 ELSE 0 END) AS evictions_open, "
+        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND {KNOWN_ADDRESS} "
+        "THEN 1 ELSE 0 END) AS evictions_with_address "
         f"FROM leads WHERE {in_view(settings)}"
     ).fetchone()
     out = {k: int(r[k] or 0) for k in ("total", "active", "assigned", "owners_pending", "with_phone", "with_email")}
     out["unassigned"] = int(r["unassigned"] or 0)
+    # Open eviction leads, and how many of them have a property address that
+    # is not a guess from the landlord's parcels (typed, confirmed, imported).
+    out["evictions_open"] = int(r["evictions_open"] or 0)
+    out["evictions_with_address"] = int(r["evictions_with_address"] or 0)
     out["channels"] = {c: {"active": 0, "to_do": 0} for c in outreach.CHANNELS}
     for row in conn.execute(
         "SELECT channel, COUNT(*) AS n, "

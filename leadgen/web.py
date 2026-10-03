@@ -8,6 +8,7 @@ requests, leadlist.py builds the lead list, forms.py checks what the page
 sends and jobs.py runs the long jobs.
 """
 
+import logging
 import os
 import sys
 import threading
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from . import daily, db, leadlist, outreach
 from .contacts import clean_email, clean_phone, import_contacts
-from .enrich import ParcelClient, enrich, enrich_lead, fix_inferred_addresses, owner_fields
+from .enrich import LANDLORD_SOURCE, ParcelClient, enrich, enrich_lead, fix_inferred_addresses, owner_fields
 from .forms import (
     DUPLICATE_TOUCH_SECONDS,
     EDITABLE,
@@ -44,6 +45,8 @@ from .sources.csv_import import read_csv_text
 from .sources.pima_jp_calendar import parse_calendar_html
 from .sources.pima_jp_case import is_case_page, parse_case_html
 from .util import az_today, decode_text, env_flag, is_paused, now_iso
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "ACTIONS",
@@ -91,6 +94,10 @@ class App(JobRunner):
         self.job_lock = threading.Lock()
         with self.conn() as conn:
             outreach.retire_channels(conn)
+            if not db.get_settings(conn).get("followed_tagged"):
+                outreach.tag_followed_leads(conn)
+                db.put_settings(conn, {"followed_tagged": True})
+                conn.commit()
             fix_inferred_addresses(conn)
 
     def conn(self):
@@ -123,6 +130,10 @@ class App(JobRunner):
                 if settings.get("last_daily_summary")
                 else None,
                 "next_run": next_daily_run(settings, self.serverless),
+                # When the last check finished, and what went wrong in it (the
+                # header shows a warning sign when anything did).
+                "finished_at": (settings.get("last_daily_summary") or {}).get("finished_at"),
+                "problems": daily.problems(settings.get("last_daily_summary")),
             },
             "jobs": {name: job.public() for name, job in self.jobs.items()},
             "paused": is_paused(settings),
@@ -145,24 +156,13 @@ class App(JobRunner):
             budget = GoogleBudget(conn)
             public["google_used_this_month"] = budget.used()
             public["google_used_today"] = budget.used_today()
-            counts = conn.execute(
-                "SELECT COUNT(*) AS all_, "
-                "SUM(CASE WHEN lead_type = 'eviction' THEN 1 ELSE 0 END) AS evictions, "
-                f"SUM(CASE WHEN {LEAD_VIEWS['eviction_notice']} THEN 1 ELSE 0 END) AS eviction_notice, "
-                # Case pages not read yet: hidden from the default view until they are.
-                "SUM(CASE WHEN lead_type = 'eviction' AND case_checked_at IS NULL "
-                "AND url LIKE '%jcDisplayCase%' THEN 1 ELSE 0 END) AS unchecked "
-                "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
-            ).fetchone()
             results = outreach.results(conn)
             out = {
                 **self.status(conn, settings),
-                "view_counts": {
-                    "all": counts["all_"] or 0,
-                    "evictions": counts["evictions"] or 0,
-                    "eviction_notice": counts["eviction_notice"] or 0,
-                    "unchecked": counts["unchecked"] or 0,
-                },
+                # Counted with the Leads tab's Status filter, so they match its list.
+                "view_counts": leadlist.view_counts(
+                    conn, params.get("status", "open") if params and params.get("list") == "leads" else "open"
+                ),
                 "counts": leadlist.counts(conn, settings),
                 "settings": public,
                 "channels": outreach.CHANNELS,
@@ -179,6 +179,8 @@ class App(JobRunner):
                 return out
             if params.get("list"):
                 out["list"] = leadlist.page(conn, settings, params)
+            if params.get("list") == "queue":  # the Outreach tab
+                out["split"] = self.split_preview(conn, settings)
             lead_id = params.get("lead")
             out["lead"] = leadlist.one_lead(conn, settings, int(lead_id)) if str(lead_id or "").isdigit() else None
             return out
@@ -248,6 +250,7 @@ class App(JobRunner):
                 fields.pop("channel")
             if "channel" in fields:
                 fields["assign_round"] = None  # set by hand, not by an Assign leads round
+                fields["assigned_by"] = outreach.BY_HAND if fields["channel"] else None
                 if fields["channel"] and not row["assigned_at"]:
                     fields["assigned_at"] = now_iso()
             if fields:
@@ -341,7 +344,7 @@ class App(JobRunner):
                 logged += 1
                 updates = {}
                 if not row["channel"]:
-                    updates.update(channel=channel, assigned_at=now)
+                    updates.update(channel=channel, assigned_at=now, assigned_by=outreach.BY_HAND)
                 if row["status"] == "new":
                     updates["status"] = "contacted"
                 if updates:
@@ -362,8 +365,12 @@ class App(JobRunner):
     def assign(self, body):
         count = count_value(body.get("count"))
         with self.conn() as conn:
-            leads = self.leads(conn)
+            leads = leadlist.lead_dicts(conn, self.settings(conn))
             return outreach.assign(conn, leads, count, body.get("channels") or list(outreach.CHANNELS))
+
+    def split_preview(self, conn, settings):
+        """What Assign leads can hand out with each choice of methods."""
+        return outreach.split_preview(conn, leadlist.lead_dicts(conn, settings))
 
     def save_settings(self, body):
         if not isinstance(body, dict):
@@ -389,7 +396,8 @@ class App(JobRunner):
                 return
             try:
                 r = (self.geocoder or CensusGeocoder()).geocode(s["base_address"])
-            except Exception:
+            except Exception as e:  # map service down: tried again on the next save or start
+                log.warning("base address lookup failed: %s", type(e).__name__)
                 return
             if r:
                 db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})
@@ -440,6 +448,13 @@ class App(JobRunner):
             "odd_dates": odd,
         }
         with self.lock, self.conn() as conn:
+            if source == "csv_import" or Path(filename or "").suffix.lower() == ".csv":
+                # A records-request file: rows for court cases Lead Desk already
+                # has fill in their property address instead of adding a lead.
+                filled = fill_case_addresses(conn, leads)
+                counts["addresses_filled"] = len(filled)
+                leads = [l for l in leads if l.source_id not in filled]
+                counts["imported"] -= len(filled)
             for lead in leads:
                 counts[db.upsert(conn, lead)] += 1
                 conn.execute(
@@ -472,6 +487,36 @@ class App(JobRunner):
             }
             for a in rows
         ]
+
+
+def fill_case_addresses(conn, leads):
+    """Property addresses from an imported file (a Justice Court records
+    request) for eviction cases already in Lead Desk, matched on the case
+    number. An address typed or confirmed on the lead is kept; a guess from
+    the landlord's parcels is replaced. Returns the case numbers matched."""
+    matched = set()
+    for lead in leads:
+        if not (lead.source_id and lead.address):
+            continue
+        row = conn.execute(
+            "SELECT id, address, address_source FROM leads WHERE source_id = ? AND lead_type = 'eviction' "
+            "AND source <> 'csv_import' AND duplicate_of IS NULL",
+            (lead.source_id.strip().upper(),),
+        ).fetchone()
+        if not row:
+            continue
+        matched.add(lead.source_id)
+        if row["address"] and row["address_source"] not in (None, LANDLORD_SOURCE):
+            continue  # typed or confirmed by Steve: his wins
+        if row["address"] and row["address_source"] is None:
+            continue  # already had one from the court
+        fields = _address_fields(lead.address.strip(), None)
+        fields["address_source"] = "import"
+        if lead.zip:
+            fields["zip"] = lead.zip
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), row["id"]])
+    return matched
 
 
 def serve(db_path, host="127.0.0.1", port=8765, stale_days=30, open_browser=True):

@@ -70,7 +70,8 @@ $("#importFile").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   const source = /\.csv$/i.test(f.name) ? "csv_import" : "pima_jp_calendar";
   await act(async () => send(`/api/import?source=${source}&filename=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() }),
-    r => `Imported ${r.imported} lead${r.imported === 1 ? "" : "s"}: ${r.new} new, ${r.updated} already listed.`
+    r => (r.addresses_filled ? `${r.addresses_filled} court case${r.addresses_filled === 1 ? "" : "s"} already in Lead Desk matched by case number; their property address is filled in (an address you typed or confirmed is kept). ` : "")
+      + `Imported ${r.imported} lead${r.imported === 1 ? "" : "s"}: ${r.new} new, ${r.updated} already listed.`
       + (r.with_notice != null ? (r.with_notice ? " An eviction notice is filed." : " No eviction notice in this case yet.") : "")
       + (r.waiting_for_case_check ? ` ${r.waiting_for_case_check} are marked “case not checked” until their court page is read (next check ${S.daily.next_run || "tomorrow 6:00 AM"}).` : "")
       + (r.unreadable_dates ? ` ${r.unreadable_dates} date${r.unreadable_dates === 1 ? "" : "s"} couldn't be read and were left empty.` : "")
@@ -80,7 +81,12 @@ $("#importFile").onchange = async e => {
   if (ui.tab !== "leads") { ui.tab = "leads"; syncUrl(true); await reloadList(); }
 };
 bindLabels(document.querySelector("header"));
-document.addEventListener("keydown", e => { if (e.key === "Escape" && ui.open != null) closeDrawer(); });
+// Escape closes the lead (unless the confirm dialog is up: Escape cancels that).
+// Run after this key press is done, so a "leave without saving?" question it
+// raises isn't closed again by the same Escape.
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && ui.open != null && !$("#confirmBox").open) { e.preventDefault(); setTimeout(closeDrawer); }
+});
 window.addEventListener("beforeunload", e => { if (Object.keys(drafts).length) { e.preventDefault(); e.returnValue = ""; } });
 function start() {
   readUrl();

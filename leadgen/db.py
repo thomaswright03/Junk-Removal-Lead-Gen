@@ -93,6 +93,9 @@ _ADDED_COLUMNS = {
     "assigned_at": "TEXT",
     # Which "Assign leads" round dealt the lead; empty when set by hand.
     "assign_round": "TEXT",
+    # How the lead got its method: "round" (Assign leads), "followed" (the
+    # method already working its landlord) or "hand" (set on the lead).
+    "assigned_by": "TEXT",
     "responded_at": "TEXT",
     "quote_amount": "REAL",
     "job_revenue": "REAL",
