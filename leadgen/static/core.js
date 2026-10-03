@@ -20,7 +20,11 @@ async function send(path, opt) {
   let r;
   try { r = await fetch(path, opt); } catch (e) { throw new Error(OFFLINE); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || (r.status >= 500 ? "Something went wrong on the Lead Desk server. Try again in a minute." : "That didn't work. Reload the page and try again."));
+  if (!r.ok) {
+    const e = new Error(j.error || (r.status >= 500 ? "Something went wrong on the Lead Desk server. Try again in a minute." : "That didn't work. Reload the page and try again."));
+    e.field = j.field || null;  // the form field the server refused, when it says
+    throw e;
+  }
   return j;
 }
 function toast(msg, ms = 3200, undo) {
@@ -59,7 +63,8 @@ function stateQuery() {
   } else if (ui.tab === "settings") {
     p.set("samples", "1");  // a lead of each kind, for the message previews
   } else if (ui.tab === "outreach") {
-    p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", "score"); p.set("limit", QUEUE_LIMIT);
+    // Calls and landlords: leads with a phone or email first, the ones to search for after.
+    p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", ui.outreachTab === "door_hanger" ? "score" : "contact"); p.set("limit", QUEUE_LIMIT);
     // Door hangers and calls: the leads still to do. Landlords: everyone in that method.
     if (ui.outreachTab === "property_manager") p.set("status", "active");
     else { p.set("status", "new"); p.set("untouched", "1"); }
@@ -79,8 +84,10 @@ const listLeads = () => (S && S.list && S.list.leads) || [];
 const findLead = id => (S.lead && S.lead.id === id ? S.lead : listLeads().find(l => l.id === id));
 // Run one action: the button is disabled while it runs (so a double click
 // can't log twice), the page reloads, then the result is shown in a toast
-// (so the toast never describes leads the list isn't showing yet).
-async function act(fn, okMsg, btn, undo) {
+// (so the toast never describes leads the list isn't showing yet). A failure
+// shows in a toast, unless ``onError`` shows it somewhere better (under the
+// form field it is about) and returns true.
+async function act(fn, okMsg, btn, undo, onError) {
   if (btn) { if (btn.disabled) return; btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
   try {
     const r = await fn();
@@ -89,8 +96,42 @@ async function act(fn, okMsg, btn, undo) {
     if (msg) toast(msg, Math.max(3200, msg.length * 60), undo);
     return r;
   }
-  catch (e) { toast(e.message, 8000); }
+  catch (e) { if (!(onError && onError(e))) toast(e.message, 8000); }
   finally { if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); } }
+}
+
+// ---------- form field errors -----------------------------------------------
+// A value that can't be saved is reported under its box, which is marked
+// invalid (aria-invalid) and focused. The message stays, across redraws of
+// the page, until the value is corrected. Keyed by the box's id.
+const fieldErrors = {};
+const fieldError = id => `<div class="field-error" id="${id}-err" role="alert"${fieldErrors[id] ? "" : " hidden"}>${esc(fieldErrors[id] || "")}</div>`;
+// Marks the box invalid (after a redraw too); its error line must be in the page (fieldError).
+function markField(id) {
+  const box = document.getElementById(id); if (!box) return;
+  const bad = !!fieldErrors[id];
+  if (bad) box.setAttribute("aria-invalid", "true"); else box.removeAttribute("aria-invalid");
+  const ids = (box.getAttribute("aria-describedby") || "").split(" ").filter(x => x && x !== id + "-err");
+  if (bad) ids.push(id + "-err");
+  if (ids.length) box.setAttribute("aria-describedby", ids.join(" ")); else box.removeAttribute("aria-describedby");
+  const line = document.getElementById(id + "-err");
+  if (line) { line.textContent = fieldErrors[id] || ""; line.hidden = !bad; }
+}
+function setFieldError(id, msg, focus = true) {
+  fieldErrors[id] = msg; markField(id);
+  const box = document.getElementById(id);
+  if (box && focus) box.focus();
+  return false;
+}
+function clearFieldError(id) { if (fieldErrors[id]) { delete fieldErrors[id]; markField(id); } }
+const markFields = root => root.querySelectorAll("[id]").forEach(el => { if (fieldErrors[el.id]) markField(el.id); });
+// A refusal from the server about one field (``{"field": ...}``): shown under
+// that field's box when ``boxes`` maps it to one on the page. True when shown.
+function showFieldErrors(e, boxes) {
+  const id = e && e.field && boxes[e.field];
+  if (!id || !document.getElementById(id)) return false;
+  setFieldError(id, e.message);
+  return true;
 }
 
 // ---------- helpers ---------------------------------------------------------
@@ -219,6 +260,11 @@ const SOURCE_LABEL = { manual: "entered by hand", import: "imported file", osm: 
 function phoneCell(l) {
   return l.owner_phone ? `<a href="tel:${esc(l.owner_phone.replace(/\D/g, ""))}">${esc(l.owner_phone)}</a>` : '<span class="muted">–</span>';
 }
+// Evictions with no phone, email or known address can't be contacted yet.
+function reachChip(l) {
+  if (l.lead_type !== "eviction" || l.reach !== "none") return "";
+  return ` <span class="chip warn" title="No phone, email or confirmed property address yet. Find landlord phones, or a court records request, fills these in.">can't reach yet</span>`;
+}
 function emailCell(l) {
   return l.owner_email ? `<a href="mailto:${esc(l.owner_email)}">${esc(l.owner_email)}</a>` : '<span class="muted">–</span>';
 }
@@ -283,6 +329,7 @@ function renderHeader() {
     <button class="linkbtn" id="subMore" aria-expanded="${open}" aria-controls="subDetails">${open ? "Hide details" : "Details"}</button>`;
   const details = [
     `${c.assigned || 0} in outreach`,
+    c.evictions_open ? `${c.evictions_reachable || 0} of ${c.evictions_open} open eviction leads can be reached (phone, email or known address)` : "",
     c.owners_pending ? `${c.owners_pending} owners not looked up yet` : "",
     unchecked ? `${unchecked} court case${unchecked > 1 ? "s" : ""} still to check (${d.running ? "checking now" : "next check " + (d.next_run || "tomorrow 6:00 AM")})` : "",
     d.last_run && d.summary ? `Last check ${fmtDate(d.last_run)}: ${d.summary}` : "",

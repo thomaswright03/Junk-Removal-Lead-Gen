@@ -83,6 +83,8 @@ LEAD_VIEWS = {
 DEFAULT_VIEW = "eviction_notice"
 # A property address that isn't a guess from the landlord's parcels.
 KNOWN_ADDRESS = "(address IS NOT NULL AND COALESCE(address_source, '') <> 'landlord')"
+# A phone number or email for the owner or landlord.
+HAS_CONTACT = "(owner_phone IS NOT NULL OR owner_email IS NOT NULL)"
 # Statuses the "Open" filter hides, and those "active" (work lists) hides.
 CLOSED = ("stale", "skip", "lost", "won")
 INACTIVE = ("stale", "skip")
@@ -139,6 +141,16 @@ def in_view(settings: Optional[dict]) -> str:
     return f"duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL) AND {view}"
 
 
+def reach(lead: Any) -> str:
+    """How Steve can reach a lead now: ``"both"`` (a phone or email and a
+    known property address), ``"contact"`` (phone or email only),
+    ``"address"`` (a known address only: a door hanger or a visit) or
+    ``"none"``. A guess from the landlord's parcels isn't a known address."""
+    contact = bool(lead["owner_phone"] or lead["owner_email"])
+    address = bool(lead["address"]) and lead["address_source"] != "landlord"
+    return "both" if contact and address else "contact" if contact else "address" if address else "none"
+
+
 def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[date] = None) -> dict:
     """One lead as the page gets it: its columns plus priority, what its date
     is, the latest court event, and which outreach methods can work it."""
@@ -158,6 +170,7 @@ def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[da
     d["owner_first"] = outreach.owner_first_name(r)
     d["eligible"] = outreach.eligible_channels(r)
     d["door_hanger_problem"] = outreach.door_hanger_problem(r)
+    d["reach"] = reach(r)
     d["date_label"] = outreach.date_label(r)
     d["latest_label"], d["latest_date"] = outreach.latest_event(r, today)
     d["miles"] = outreach.miles_between(settings.get("base_lat"), settings.get("base_lon"), r["lat"], r["lon"])
@@ -233,6 +246,10 @@ def _keep(l: dict, p: dict, touched: set) -> bool:
         # The address work queue: evictions with no address, or only a
         # guess from the landlord's parcels.
         "address_work": l["lead_type"] == "eviction" and (not l["address"] or l["address_source"] == "landlord"),
+        # Can be called, emailed or visited now; or not yet (no phone, email
+        # or known address).
+        "reachable": l["reach"] != "none",
+        "unreachable": l["reach"] == "none",
     }
     if kind in tests and not tests[kind]:
         return False
@@ -255,7 +272,12 @@ def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
     (filing, judgment or writ; cases not read yet, which only have a hearing
     date, come last); or closest first."""
     by_date = lambda l: (l["latest_date"] or "", l["id"])
-    if key == "date":
+    if key == "contact":
+        # Work lists: leads with a phone number first, then an email, each
+        # by priority, so the calls Steve can make come before the searches.
+        leads.sort(key=by_date, reverse=True)
+        leads.sort(key=lambda l: (not l["owner_phone"], not l["owner_email"], *outreach.rank_key(l)))
+    elif key == "date":
         leads.sort(key=by_date, reverse=True)
     elif key == "miles":
         leads.sort(key=lambda l: (l["miles"] is None, l["miles"] or 0, -l["id"]))
@@ -305,7 +327,11 @@ def counts(conn: Conn, settings: dict) -> dict:
         "SUM(CASE WHEN channel IS NULL AND status = 'new' THEN 1 ELSE 0 END) AS unassigned, "
         f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) THEN 1 ELSE 0 END) AS evictions_open, "
         f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND {KNOWN_ADDRESS} "
-        "THEN 1 ELSE 0 END) AS evictions_with_address "
+        "THEN 1 ELSE 0 END) AS evictions_with_address, "
+        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND {HAS_CONTACT} "
+        "THEN 1 ELSE 0 END) AS evictions_with_contact, "
+        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND ({HAS_CONTACT} OR {KNOWN_ADDRESS}) "
+        "THEN 1 ELSE 0 END) AS evictions_reachable "
         f"FROM leads WHERE {in_view(settings)}"
     ).fetchone()
     out: dict[str, Any] = {
@@ -316,6 +342,10 @@ def counts(conn: Conn, settings: dict) -> dict:
     # is not a guess from the landlord's parcels (typed, confirmed, imported).
     out["evictions_open"] = int(r["evictions_open"] or 0)
     out["evictions_with_address"] = int(r["evictions_with_address"] or 0)
+    # How many open eviction leads can be reached now: a phone or email, or a
+    # known address (see ``reach``); the rest can't be contacted yet.
+    out["evictions_with_contact"] = int(r["evictions_with_contact"] or 0)
+    out["evictions_reachable"] = int(r["evictions_reachable"] or 0)
     out["channels"] = {c: {"active": 0, "to_do": 0} for c in outreach.CHANNELS}
     for row in conn.execute(
         "SELECT channel, COUNT(*) AS n, "
@@ -350,8 +380,8 @@ def record_address_share(conn: Conn, settings: dict, today: Optional[date] = Non
 def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -> dict:
     """The address numbers the Leads tab shows: the share a week ago (the
     latest daily snapshot at least seven days old), and the records request
-    (when the last one was imported, which dates to ask for next, whether
-    one is due)."""
+    (when one was last sent and last imported, which dates to ask for next,
+    when the next one is due, and whether Lead Desk is waiting for a file)."""
     today = today or az_today()
     history = settings.get("address_history") or {}
     week = (today - timedelta(days=7)).isoformat()
@@ -359,8 +389,12 @@ def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -
     then = history[max(older)] if older else None
     last = settings.get("last_records_import") or {}
     last_date = last.get("date")
-    if last_date:
-        start = last_date
+    # Steve says when he sent a request ("I've sent it"): the next one is due
+    # two weeks after the latest request or import, and asks from there on.
+    requested = (settings.get("records_requested") or {}).get("date")
+    latest = max(d for d in (last_date, requested) if d) if (last_date or requested) else None
+    if latest:
+        start = latest
     else:
         row = conn.execute(
             f"SELECT MIN(event_date) AS d FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' "
@@ -368,12 +402,15 @@ def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -
         ).fetchone()
         start = str(row["d"])[:10] if row and row["d"] else (today - timedelta(days=30)).isoformat()
         start = min(start, today.isoformat())
-    due_on = (date.fromisoformat(last_date) + timedelta(days=RECORDS_REQUEST_DAYS)).isoformat() if last_date else None
+    due_on = (date.fromisoformat(latest) + timedelta(days=RECORDS_REQUEST_DAYS)).isoformat() if latest else None
     return {
         "week_ago": {"date": max(older), "with_address": then[0], "open": then[1]} if then else None,
         "records": {
             "last_import": last_date,
             "last_filled": last.get("filled"),
+            "last_request": requested,
+            # A request was sent and its file hasn't been imported yet.
+            "waiting": bool(requested and (not last_date or requested > last_date)),
             "request_from": start,
             "request_to": today.isoformat(),
             "due_on": due_on,

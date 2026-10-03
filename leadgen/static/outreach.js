@@ -130,10 +130,30 @@ function bindQuick(el) {
   el.querySelectorAll("[data-quick]").forEach(b => b.onclick = () =>
     act(() => api("/api/touch", { lead_id: +b.dataset.quick, kind: b.dataset.kind }), r => r.logged ? "Logged: " + b.textContent : "Already logged a moment ago", b));
 }
+// When work-list leads have no phone number: why, and what to do about it.
+function noPhoneNote(q, what) {
+  const missing = q.filter(l => !l.owner_phone).length;
+  if (!missing) return "";
+  const why = googleReady()
+    ? "Press Find landlord phones to look them up again, or use each lead's Search link to find a number by hand."
+    : "Court cases don't include phone numbers, and without a Google Places key Lead Desk checks only OpenStreetMap, which knows few Tucson landlords. Adding a key finds most office numbers; at the default limits it costs nothing.";
+  return `<div class="notice mb12" id="noPhoneNote" role="note"><strong>No phone number yet for ${missing} of ${q.length} ${what}.</strong>
+    ${q.length > missing ? "The ones with a number are at the top. " : ""}${why}
+    <div class="row mt8">${googleReady() ? "" : `<button class="btn primary" data-setup>Set up phone lookups</button>`}
+    <button class="btn" data-findphones ${S.paused ? "disabled" : ""}>Find landlord phones now</button></div></div>`;
+}
+function bindNoPhoneNote(el) {
+  el.querySelectorAll("[data-setup]").forEach(b => b.onclick = async () => {
+    Object.assign(ui, { tab: "leads", showSetup: true, setupOpen: true, type: "", offset: 0 }); syncUrl(true); await reloadList();
+    const g = $("#setupTitle"); if (g) { g.scrollIntoView(); g.focus(); }
+  });
+  el.querySelectorAll("[data-findphones]").forEach(b => b.onclick = () => findContacts(b));
+}
 function renderCalls(el, q, ch) {
   el.innerHTML = `<div class="card">
     <h2>Calls: ${q.length} to make</h2>
     <p class="hint">Numbers found by the lookup or imported show here; otherwise use the search link. Check each number against the Do Not Call registry before cold-calling a cell phone, and log every attempt. Never auto-dial or mass-text.</p>
+    ${noPhoneNote(q, "calls")}
     ${q.some(l => l.lead_type === "eviction") || !q.length ? `<h3>Script for eviction landlords</h3><div class="script" data-script="eviction">${esc(fill(ch, { lead_type: "eviction", owner_entity: 1 }))}</div>` : ""}
     ${q.some(l => l.lead_type !== "eviction") ? `<h3>Script for code-case owners</h3><div class="script" data-script="code">${esc(fill(ch, { lead_type: "code_violation", address: "[address]" }))}</div>` : ""}
     <p class="hint">Each lead's own page shows the script filled in with its owner and address.</p></div>
@@ -143,14 +163,18 @@ function renderCalls(el, q, ch) {
       <td data-th="Log"><div class="row">${touchButtons(ch).slice(0, 3).map(([k, t]) => `<button class="btn small" data-quick="${l.id}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;
   bindQuick(el);
+  bindNoPhoneNote(el);
 }
 function renderManagers(el, leads) {
   const groups = {};
   for (const l of leads) { const k = (l.plaintiff || l.owner_name || "Unknown").toUpperCase(); (groups[k] = groups[k] || []).push(l); }
-  const list = Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+  // Companies with a phone or email first, then those on the most leads.
+  const reachable = ls => ls.some(l => l.owner_phone || l.owner_email);
+  const list = Object.entries(groups).sort((a, b) => reachable(b[1]) - reachable(a[1]) || b[1].length - a[1].length);
   el.innerHTML = `<div class="card">
     <h2>Landlords and property managers: ${list.length}</h2>
-    <p class="hint">One pitch per company, not per property: offer a standing move-out clean-out rate. Companies that show up on several leads come first. Use “Other properties this owner has” on a lead to see their portfolio.</p>
+    <p class="hint">One pitch per company, not per property: offer a standing move-out clean-out rate. Companies with a phone or email come first, then those on several leads. Use “Other properties this owner has” on a lead to see their portfolio.</p>
+    ${noPhoneNote(leads.filter(l => l.status !== "won"), "leads here")}
     <div class="script">${esc(fill("property_manager", {}))}</div></div>
     ${list.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
@@ -161,6 +185,7 @@ function renderManagers(el, leads) {
         <td data-th="Log"><div class="row"><a class="btn small" href="https://www.google.com/search?q=${encodeURIComponent(name + " Tucson")}" target="_blank" rel="noopener">Search</a>
         ${touchButtons("property_manager").map(([k, t]) => `<button class="btn small" data-group="${ids}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;
+  bindNoPhoneNote(el);
   el.querySelectorAll("[data-group]").forEach(b => b.onclick = () => {
     const ids = b.dataset.group.split(",").map(Number);
     // One contact covers the company; cost is logged once, on the first lead.

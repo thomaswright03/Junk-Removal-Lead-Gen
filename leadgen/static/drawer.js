@@ -84,6 +84,12 @@ function addressGuide(l) {
   ].filter(Boolean);
   return `<p class="hint"><strong>Find the address:</strong></p><ol class="hint guide">${steps.map(t => `<li>${t}</li>`).join("")}</ol>`;
 }
+const REACH_TEXT = {
+  both: "Phone or email, and a door hanger at the property.",
+  contact: "Phone or email. No confirmed property address yet, so no door hanger.",
+  address: "A door hanger or visit at the property. No phone or email yet.",
+  none: "Nothing yet: no phone, email or confirmed address. Find landlord phones on the Leads tab, or find the address below.",
+};
 function renderDrawer() {
   const d = $("#drawer");
   const l = findLead(ui.open);
@@ -115,6 +121,7 @@ function renderDrawer() {
       <dt>Location</dt><dd>${map ? `<a href="${map}" target="_blank" rel="noopener">Open map</a>` : "–"}${l.miles != null ? ` · ${l.miles.toFixed(1)} mi from base` : ""}</dd>
       <dt>Phone</dt><dd>${phoneCell(l)}</dd>
       <dt>Email</dt><dd>${emailCell(l)}</dd>
+      ${l.lead_type === "eviction" ? `<dt>Can reach by</dt><dd id="dReach">${esc(REACH_TEXT[l.reach] || "")}${reachChip(l)}</dd>` : ""}
       ${l.owner_website ? `<dt>Website</dt><dd><a href="${esc(/^https?:/i.test(l.owner_website) ? l.owner_website : "https://" + l.owner_website)}" target="_blank" rel="noopener">${esc(l.owner_website.replace(/^https?:\/\//i, ""))}</a></dd>` : ""}
       ${l.contact_source ? `<dt>Contact from</dt><dd class="muted">${esc(SOURCE_LABEL[l.contact_source] || l.contact_source)}${l.contact_name ? ` · matched “${esc(l.contact_name)}”` : ""}</dd>` : ""}
       ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (lists the company's registered contact, its “statutory agent”)` : ""}</dd>` : ""}

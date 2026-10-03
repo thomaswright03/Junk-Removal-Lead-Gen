@@ -54,6 +54,23 @@ per 1,000; Lead Desk stops at 30 a day and 1,000 a month unless you change
 the limits in Settings. A limit of 0 allows no Google searches; "no limit" is
 a separate box.
 
+**Making eviction leads reachable.** Court cases name the landlord and the
+tenant but carry no phone number and no property address, so on a fresh
+install most evictions can't be called or visited yet. Until both are set
+up, the Leads tab shows a guide, **Get phone numbers and addresses for
+eviction leads**, with two steps: adding a Google Places key (how to get one,
+what it costs at your limits, and a box to paste it that saves it and starts
+**Find landlord phones** at once), and sending the court records request
+(**I've sent the request** records the date; the next one is due two weeks
+after the latest request or import). **Hide this guide** puts it away; **How
+to reach more** brings it back. The Leads tab says how many open eviction
+leads can be reached now (a phone or email, or a known property address),
+each eviction with neither is marked "can't reach yet" (the kind filter has
+**Can't be reached yet** and **Can be reached**), and the lead says how it
+can be reached. The Outreach call list and landlord list put leads with a
+phone number (then an email) first, and say how many have no number yet,
+why, and what to do (set up phone lookups, or find phones now).
+
 **Stopping everything (kill switch).** Tick **Pause Lead Desk** in Settings,
 or set the environment variable `LEADDESK_PAUSED=1` (on Vercel, and as a
 repository variable for the GitHub Actions daily check). While paused, the

@@ -75,11 +75,21 @@ def validate_settings(body: dict) -> dict:
     ):
         if key in body:
             values[key] = _limit(body[key], label)
-    for key, label in (("paused", "Pause"), ("google_enabled", "Use Google")):
+    for key, label in (
+        ("paused", "Pause"),
+        ("google_enabled", "Use Google"),
+        ("setup_guide_hidden", "Hide the setup guide"),
+    ):
         if key in body:
             if not isinstance(body[key], bool):
                 raise ValueError(f"{label} must be on or off.")
             values[key] = body[key]
+    if "records_requested" in body:
+        # "I've sent the court records request": today, so the next one is due
+        # two weeks from now. False takes it back.
+        if not isinstance(body["records_requested"], bool):
+            raise ValueError("Records request sent must be yes or no.")
+        values["records_requested"] = {"date": az_today().isoformat()} if body["records_requested"] else None
     if "costs" in body:
         costs = body["costs"]
         if not isinstance(costs, dict) or set(costs) - set(outreach.CHANNELS):

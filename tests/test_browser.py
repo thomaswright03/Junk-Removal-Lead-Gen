@@ -566,3 +566,83 @@ def test_phone_text_and_targets_are_big_enough(server, page):
               && e.getBoundingClientRect().height < 44).map(e => e.id || e.textContent.trim().slice(0, 30))"""
         )
         assert small_targets == [], (tab, small_targets)
+
+
+def add_unreachable_eviction(path):
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000002-EA",
+            "eviction",
+            "2026-09-28",
+            None,
+            plaintiff="SAMPLE PROPERTIES LLC",
+            defendant="ROE, SAM",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.commit()
+
+
+def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    app.providers = []  # "find phones" looks nothing up here
+    page.goto(url)
+    guide = page.locator("#setupGuide")
+    guide.wait_for()
+    assert "2 steps to do" in guide.inner_text()
+    assert "1 of 2 open eviction leads can't be reached yet" in page.inner_text("#reachLine")
+    assert "1,000 of these lookups a month free" in guide.inner_text() and "$0 a month" in guide.inner_text()
+    # The lead with nothing says so in the list.
+    assert "can't reach yet" in lead_row(page, "Sample Properties").inner_text()
+    assert "can't reach yet" not in lead_row(page, "Example Homes").inner_text()
+
+    # A blank key is refused at the box, before anything is sent.
+    page.click("#setupKeySave")
+    page.wait_for_selector("#setupKey-err:not([hidden])")
+    assert page.get_attribute("#setupKey", "aria-invalid") == "true"
+    assert page.evaluate("document.activeElement.id") == "setupKey"
+    page.fill("#setupKey", "test-key-123")
+    page.wait_for_selector("#setupKey-err", state="hidden")
+    page.click("#setupKeySave")
+    page.wait_for_selector("#setupGuide >> text=key saved")
+    assert db.get_settings(db.connect(path))["google_places_api_key"] == "test-key-123"
+    page.wait_for_selector("#setupGuide >> text=1 step to do")
+
+    # The records request: sent today, so the guide is done and says when the next is due.
+    page.click("#setupGuide [data-recsent]")
+    page.wait_for_selector("#setupGuide >> text=waiting for the file")
+    assert db.get_settings(db.connect(path))["records_requested"]["date"]
+    page.click("#setupHide")
+    page.wait_for_selector("#setupGuide", state="detached")
+    assert db.get_settings(db.connect(path))["setup_guide_hidden"] is True
+    # The reach numbers stay above the list, with the way back to the guide.
+    assert "1 of 2 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    page.click("#fUnreach")
+    page.wait_for_function("document.querySelectorAll('#leadTable tbody tr[data-id]').length === 1")
+    assert "Sample Properties" in page.inner_text("#leadTable")
+
+
+def test_call_list_puts_numbers_first_and_says_why_others_have_none(server, page):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    conn = db.connect(path)
+    conn.execute("UPDATE leads SET channel = 'phone' WHERE lead_type = 'eviction'")
+    # The lead without a number has the higher priority; the one with a number still comes first.
+    conn.execute("UPDATE leads SET case_stage = 'writ' WHERE source_id = 'CV26-000002-EA'")
+    conn.commit()
+    page.goto(url + "#tab=outreach&method=phone")
+    note = page.locator("#noPhoneNote")
+    note.wait_for()
+    assert "No phone number yet for 1 of 2 calls" in note.inner_text()
+    assert "without a Google Places key" in note.inner_text()
+    rows = page.locator("#oBody tbody tr")
+    assert "(520) 555-0101" in rows.nth(0).inner_text()
+    assert "Search" in rows.nth(1).inner_text()
+    # "Set up phone lookups" opens the guide on the Leads tab.
+    page.click("#noPhoneNote [data-setup]")
+    page.wait_for_selector("#setupGuide[open]")

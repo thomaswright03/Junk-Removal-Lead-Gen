@@ -131,6 +131,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "google_monthly_limit": 1000,
     # Most Google searches per day; 0 means none, null means no limit.
     "google_daily_limit": 30,
+    # The Leads tab's setup guide (Google key, court records request) put away.
+    "setup_guide_hidden": False,
+    # When the last court records request was sent: {"date": iso}, or None.
+    "records_requested": None,
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {
