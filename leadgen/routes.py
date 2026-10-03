@@ -30,7 +30,30 @@ def static_file(path: str) -> Optional[tuple[bytes, str]]:
 
 def handle(app: Any, method: str, path: str, query: str, headers: Any, body: bytes) -> tuple[int, Any, str]:
     """Answer one request. ``headers`` needs only ``.get``. Returns
-    (status, body, content type); a body that isn't bytes or str is JSON."""
+    (status, body, content type); a body that isn't bytes or str is JSON.
+    The request uses one database connection, closed when it is answered."""
+    scope = getattr(app, "request_connection", None)
+    if scope is None or not path.startswith("/api/"):
+        return _handle(app, method, path, query, headers, body)
+    try:
+        with scope():
+            return _handle(app, method, path, query, headers, body)
+    except Exception:
+        # The database couldn't be opened at all: a plain sentence, as below.
+        traceback.print_exc(file=sys.stderr)
+        return 500, {"error": _unexpected(path)}, "application/json"
+
+
+def _unexpected(path: str) -> str:
+    action = ACTIONS.get(path, "do that")
+    return (
+        f"Lead Desk couldn't {action} because of an unexpected problem. "
+        "Try again; if it keeps happening, restart Lead Desk and look at "
+        "its window (or the Vercel log) for details."
+    )
+
+
+def _handle(app: Any, method: str, path: str, query: str, headers: Any, body: bytes) -> tuple[int, Any, str]:
     q = parse_qs(query or "", keep_blank_values=True)
     try:
         if method == "GET":
@@ -105,16 +128,7 @@ def handle(app: Any, method: str, path: str, query: str, headers: Any, body: byt
     except Exception:
         # The details go to the server log; the page gets a plain sentence.
         traceback.print_exc(file=sys.stderr)
-        action = ACTIONS.get(path, "do that")
-        return (
-            500,
-            {
-                "error": f"Lead Desk couldn't {action} because of an unexpected problem. "
-                "Try again; if it keeps happening, restart Lead Desk and look at "
-                "its window (or the Vercel log) for details."
-            },
-            "application/json",
-        )
+        return 500, {"error": _unexpected(path)}, "application/json"
 
 
 # What each request does, for error messages.

@@ -13,7 +13,7 @@ import json
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 from . import pg
 from .models import Lead
@@ -159,15 +159,39 @@ _REFRESHABLE = (
 )
 
 
-_READY_URLS: set = set()  # Postgres databases whose schema was checked by this process
+# Databases whose schema and upgrades this process has already run: a
+# Postgres URL, or a SQLite file by path and inode (a file deleted and made
+# again is a new database). Opening one again only connects.
+_READY: set = set()
+
+
+class _SqliteConnection(sqlite3.Connection):
+    """A SQLite connection that is closed when its ``with`` block ends (the
+    standard one only commits), so no request leaves one open."""
+
+    def __exit__(self, *exc: Any) -> Literal[False]:
+        try:
+            super().__exit__(*exc)
+        finally:
+            self.close()
+        return False
+
+
+def _sqlite_key(path: Path) -> Optional[tuple]:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path.resolve()), st.st_dev, st.st_ino)
 
 
 def connect(path: Any) -> Conn:
     """Open the lead database: a SQLite file, or Postgres (Neon) when
-    ``path`` is a ``postgres://`` URL (see pg.py)."""
+    ``path`` is a ``postgres://`` URL (see pg.py). The schema is created and
+    older databases upgraded the first time this process opens each one."""
     if pg.is_url(path):
         conn = pg.Connection(str(path))
-        if str(path) not in _READY_URLS:
+        if str(path) not in _READY:
             conn.executescript(pg.SCHEMA)
             for col, kind in _ADDED_COLUMNS.items():
                 conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
@@ -175,16 +199,28 @@ def connect(path: Any) -> Conn:
                 conn.execute(f"ALTER TABLE touches ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             _money_to_cents(conn)
             _upgrade_case_stages(conn)
-            _READY_URLS.add(str(path))
+            _READY.add(str(path))
         return conn
     path = Path(path)
-    if str(path) != ":memory:":
+    memory = str(path) == ":memory:"
+    if not memory:
         path.parent.mkdir(parents=True, exist_ok=True)
-    lite = sqlite3.connect(str(path))
+    lite = sqlite3.connect(str(path), factory=_SqliteConnection)
     lite.row_factory = sqlite3.Row
-    lite.executescript(SCHEMA)
-    _migrate(lite)
+    key = None if memory else _sqlite_key(path)
+    if key is None or key not in _READY:
+        lite.executescript(SCHEMA)
+        _migrate(lite)
+        key = None if memory else _sqlite_key(path)
+        if key:
+            _READY.add(key)
     return lite
+
+
+def forget_ready() -> None:
+    """Run the schema and upgrades again on the next open of each database
+    (tests that stand in for a new process)."""
+    _READY.clear()
 
 
 def _migrate(conn: Conn) -> None:
@@ -209,7 +245,7 @@ def _migrate(conn: Conn) -> None:
 
 def _money_to_cents(conn: Conn) -> None:
     """Dollar amounts saved before money was kept in whole cents, moved into
-    the cents columns (only rows not moved yet, so this runs on every open)."""
+    the cents columns (only rows not moved yet, so running it again is safe)."""
     for table, dollars, cents in (
         ("leads", "quote_amount", "quote_cents"),
         ("leads", "job_revenue", "revenue_cents"),

@@ -14,10 +14,11 @@ import sys
 import threading
 import traceback
 import webbrowser
+from contextlib import contextmanager
 from datetime import timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Literal, Optional
 
 from . import daily, db, leadlist, outreach
 from .contacts import clean_email, clean_phone, import_contacts
@@ -97,6 +98,7 @@ class App(JobRunner):
         self.lock = threading.Lock()
         self.jobs = {}
         self.job_lock = threading.Lock()
+        self._request = threading.local()
         with self.conn() as conn:
             outreach.retire_channels(conn)
             if not db.get_settings(conn).get("followed_tagged"):
@@ -106,7 +108,27 @@ class App(JobRunner):
             fix_inferred_addresses(conn)
 
     def conn(self) -> Conn:
+        """A database connection for a ``with`` block, closed when it ends.
+        Inside a request (``request_connection``) every block shares the
+        request's one connection, which closes when the request ends."""
+        shared = getattr(self._request, "conn", None)
+        if shared is not None:
+            return _Borrowed(shared)
         return db.connect(self.db_path)
+
+    @contextmanager
+    def request_connection(self) -> Iterator[None]:
+        """One connection for everything one request does (routes.handle)."""
+        if getattr(self._request, "conn", None) is not None:
+            yield
+            return
+        conn = db.connect(self.db_path)
+        self._request.conn = conn
+        try:
+            yield
+        finally:
+            self._request.conn = None
+            conn.close()
 
     # ---- reads -------------------------------------------------------------
 
@@ -560,6 +582,27 @@ class App(JobRunner):
             }
             for a in rows
         ]
+
+
+class _Borrowed:
+    """The request's shared connection, for one ``with`` block: the block's
+    end commits (or rolls back after an error) but leaves it open."""
+
+    def __init__(self, conn: Conn) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def __enter__(self) -> Conn:
+        return self._conn
+
+    def __exit__(self, exc_type: Any, *exc: Any) -> Literal[False]:
+        if exc_type is None:
+            self._conn.commit()
+        elif hasattr(self._conn, "rollback"):
+            self._conn.rollback()
+        return False
 
 
 def fill_case_addresses(conn: Conn, leads: list[Lead]) -> set[str]:

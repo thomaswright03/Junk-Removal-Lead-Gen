@@ -661,6 +661,65 @@ def test_dollar_amounts_from_before_become_cents(tmp_path):
     )
     old.commit()
     old.close()
+    db.forget_ready()  # the next start of Lead Desk
     conn = db.connect(path)
     assert tuple(conn.execute("SELECT quote_cents, revenue_cents FROM leads").fetchone()) == (24999, 30010)
     assert conn.execute("SELECT cost_cents FROM touches").fetchone()[0] == 35
+
+
+# ---- database connections: one per request, closed, schema checked once ----
+
+
+def test_each_request_uses_one_connection_and_closes_it(tmp_path, monkeypatch):
+    app = App(tmp_path / "l.db")
+    opened = []
+    real = db.connect
+
+    def counting(path):
+        conn = real(path)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(db, "connect", counting)
+    status, _, _ = handle(app, "GET", "/api/state", "list=leads", {}, b"")
+    assert status == 200 and len(opened) == 1
+    status, _, _ = post(app, "/api/settings", {"business_phone": "(520) 555-0100"})
+    assert status == 200 and len(opened) == 2
+    for conn in opened:  # closed: using it fails
+        with pytest.raises(Exception, match="(?i)closed"):
+            conn.execute("SELECT 1")
+
+
+@pytest.mark.skipif(bool(os.environ.get("TEST_DATABASE_URL")), reason="counts open SQLite files")
+@pytest.mark.skipif(not Path("/proc/self/fd").exists(), reason="needs /proc")
+def test_open_database_files_stay_flat_under_load(tmp_path):
+    path = tmp_path / "l.db"
+    app = App(path)
+
+    def open_files():
+        n = 0
+        for fd in Path("/proc/self/fd").iterdir():
+            try:
+                n += str(path) in os.readlink(fd)
+            except OSError:
+                pass
+        return n
+
+    handle(app, "GET", "/api/state", "list=leads", {}, b"")
+    before = open_files()
+    for _ in range(40):
+        assert handle(app, "GET", "/api/state", "list=leads", {}, b"")[0] == 200
+    assert open_files() == before <= 1
+
+
+@pytest.mark.skipif(bool(os.environ.get("TEST_DATABASE_URL")), reason="SQLite file upgrades")
+def test_schema_and_upgrades_run_once_per_database(tmp_path, monkeypatch):
+    path = tmp_path / "l.db"
+    db.connect(path).close()
+    ran = []
+    monkeypatch.setattr(db, "_migrate", lambda conn: ran.append(1))
+    db.connect(path).close()
+    assert ran == []
+    db.forget_ready()
+    db.connect(path).close()
+    assert ran == [1]

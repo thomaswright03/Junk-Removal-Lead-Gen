@@ -200,4 +200,5 @@ class Connection:
         return self
 
     def __exit__(self, *exc: Any) -> Literal[False]:
+        self.close()  # like db's SQLite connections: a ``with`` block's end closes it
         return False

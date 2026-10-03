@@ -207,6 +207,7 @@ def test_stored_cases_get_their_stage_again_at_startup(tmp_path):
     conn.commit()
     conn.close()
 
+    db.forget_ready()  # a new process
     conn = db.connect(path)  # an older database opened by this version
     rows = {r["source_id"]: r for r in conn.execute("SELECT * FROM leads")}
     assert rows[satisfied]["case_stage"] == "satisfied" and rows[satisfied]["judgment_date"] is None
@@ -222,6 +223,7 @@ def test_stored_cases_get_their_stage_again_at_startup(tmp_path):
     conn.execute("UPDATE leads SET case_stage = 'writ' WHERE source_id = ?", (applied,))
     conn.commit()
     conn.close()
+    db.forget_ready()
     assert (
         db.connect(path).execute("SELECT case_stage FROM leads WHERE source_id = ?", (applied,)).fetchone()[0] == "writ"
     )
