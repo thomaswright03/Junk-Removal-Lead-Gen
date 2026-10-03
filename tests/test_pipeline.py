@@ -183,3 +183,44 @@ def test_cli_fetch_csv_and_export(tmp_path, capsys):
     cli.main(["--db", str(dbfile), "--stale-days", "3650", "export", "--out", str(out)])
     text = out.read_text()
     assert "ACME RENTALS" in text and "77 W Test Rd" in text
+
+
+def test_export_keeps_the_lead_desk_ranking(tmp_path, capsys):
+    from leadgen.web import App
+
+    dbfile = tmp_path / "leads.db"
+    conn = db.connect(dbfile)
+    for case, filed, stage in (("CV26-1-EA", "2026-09-01", "notice"), ("CV26-2-EA", "2026-09-02", "writ")):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                case,
+                "eviction",
+                filed,
+                plaintiff="SAMPLE HOMES LLC",
+                in_pima=True,
+                eviction_notice=True,
+                case_stage=stage,
+                writ_date="2026-09-28" if stage == "writ" else None,
+            ),
+        )
+    db.upsert(conn, Lead("tucson_code_cases", "CE-1", "code_violation", "2026-09-30", "1 W TEST ST", in_pima=True))
+    db.put_settings(conn, {"lead_view": "all"})
+    conn.commit()
+    out = tmp_path / "out.csv"
+    cli.main(["--db", str(dbfile), "--stale-days", "3650", "export", "--out", str(out)])
+    import csv
+
+    rows = list(csv.DictReader(out.open()))
+    assert list(rows[0])[:5] == ["priority", "case_stage", "eviction_notice", "latest_event", "latest_event_date"]
+    desk = App(dbfile).state({"list": "leads", "status": ""})["list"]["leads"]
+    assert [r["id"] for r in rows] == [str(l["id"]) for l in desk]
+    assert rows[0]["case_stage"] == "writ" and rows[0]["latest_event"] == "Writ"
+    assert [int(r["priority"]) for r in rows] == sorted((int(r["priority"]) for r in rows), reverse=True)
+    html_out = tmp_path / "out.html"
+    cli.main(["--db", str(dbfile), "--stale-days", "3650", "export", "--format", "html", "--out", str(html_out)])
+    assert "<th>Priority</th>" in html_out.read_text()
+    cli.main(["--db", str(dbfile), "--stale-days", "3650", "list"])
+    first = capsys.readouterr().out.splitlines()[-4]
+    assert first.split()[1] == rows[0]["id"]

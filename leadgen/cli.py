@@ -193,9 +193,14 @@ def _rows_for_export(args, conn):
     )
 
 
+def _ranked_rows(args, conn):
+    """The rows to export or list, in Lead Desk's order with its priority."""
+    return export.ranked(conn, _rows_for_export(args, conn), db.get_settings(conn))
+
+
 def cmd_export(args, conn=None):
     conn = conn or _connect(args)
-    rows = _rows_for_export(args, conn)
+    rows = _ranked_rows(args, conn)
     out = Path(args.out or f"exports/leads-{az_today().isoformat()}.{args.format}")
     out.parent.mkdir(parents=True, exist_ok=True)
     if args.format == "csv":
@@ -228,12 +233,13 @@ def cmd_status(args):
 
 def cmd_list(args):
     conn = _connect(args)
-    rows = _rows_for_export(args, conn)
+    rows = _ranked_rows(args, conn)
     for r in rows[: args.limit]:
-        who = r["plaintiff"] or ""
+        who = r["plaintiff"] or r["owner_name"] or ""
+        stage = r["case_stage"] or ("notice" if r["eviction_notice"] else "")
         print(
-            f"{r['id']:>5}  {r['event_date'] or '':10}  {r['lead_type']:<14} "
-            f"{(r['address'] or '(address needed)')[:40]:<40}  {who[:30]}"
+            f"{r['priority']:>3}  {r['id']:>5}  {r['latest_event_date'] or r['event_date'] or '':10}  "
+            f"{r['lead_type']:<14} {stage:<9} {(r['address'] or '(address needed)')[:40]:<40}  {who[:30]}"
         )
     print(f"{len(rows)} leads")
 
