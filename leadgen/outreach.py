@@ -36,6 +36,9 @@ DEFAULT_SETTINGS = {
     "lead_view": "eviction_notice",
     # Optional. Google Maps Platform key for the business phone lookup.
     "google_places_api_key": "",
+    # Most Google searches per month; 0 means no limit. 1,000 is Google's free
+    # monthly allowance for searches that return phone numbers.
+    "google_monthly_limit": 1000,
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {

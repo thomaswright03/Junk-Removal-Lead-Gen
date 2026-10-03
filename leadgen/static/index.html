@@ -622,6 +622,8 @@ function renderSettings() {
       <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>
       <div class="row"><input id="sGoogle" type="password" placeholder="${st.google_key_set ? "Key saved. Paste a new one to replace it" : "Google Places API key"}" style="flex:1;min-width:260px" autocomplete="off">
       ${st.google_key_set ? `<span class="chip good">key saved</span> <button class="btn small" id="sGoogleClear">Remove key</button>` : `<span class="chip">no key</span>`}</div>
+      <div class="row" style="margin-top:8px"><label>Google lookups per month, at most <input id="sGoogleLimit" type="number" min="0" step="100" value="${st.google_monthly_limit ?? 1000}" style="width:90px"></label>
+      <span class="hint">${st.google_used_this_month || 0} used this month. Google gives 1,000 a month free, then charges about $35 per 1,000. 0 means no limit.</span></div>
     </div>
     <div class="card"><h2>Channels</h2>
       <p class="hint">A separate tracking phone number per channel (Google Voice, CallRail and similar) is the cleanest way to know which channel a caller came from. Cost is what one contact costs, including printing and postage.</p>
@@ -639,7 +641,7 @@ function renderSettings() {
     document.querySelectorAll("[data-cost]").forEach(i => costs[i.dataset.cost] = Number(i.value || 0));
     document.querySelectorAll("[data-track]").forEach(i => tracking[i.dataset.track] = i.value.trim());
     document.querySelectorAll("[data-tpl]").forEach(i => templates[i.dataset.tpl] = i.value);
-    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), google_places_api_key: $("#sGoogle").value.trim(), costs, tracking_numbers: tracking, templates }), "Settings saved");
+    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), google_places_api_key: $("#sGoogle").value.trim(), google_monthly_limit: Number($("#sGoogleLimit").value || 0), costs, tracking_numbers: tracking, templates }), "Settings saved");
   };
 }
 

@@ -250,3 +250,48 @@ def test_osm_prefers_the_server_that_answered():
     osm.find({"lat": 1, "lon": 2}, None)
     osm.find({"lat": 1, "lon": 2}, None)
     assert session.urls == [osm_urls[0], osm_urls[1], osm_urls[1]]
+
+
+class FakePlaces:
+    def __init__(self):
+        self.calls = 0
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.calls += 1
+        return type("R", (), {"raise_for_status": lambda s: None,
+                              "json": lambda s: {"places": []}})()
+
+
+def test_google_stops_at_monthly_limit(tmp_path):
+    from datetime import datetime, timezone
+
+    import pytest
+
+    from leadgen.lookup import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
+
+    conn = db.connect(str(tmp_path / "g.db"))
+    session = FakePlaces()
+    google = GooglePlacesProvider("key", session=session, budget=GoogleBudget(conn, limit=2))
+    lead = {"lat": None, "lon": None, "address": None, "property_use": None}
+    google.find(lead, "SAGUARO VISTA LLC")
+    google.find(lead, "SAGUARO VISTA LLC")
+    with pytest.raises(ProviderUnavailable):
+        google.find(lead, "SAGUARO VISTA LLC")
+    assert session.calls == 2
+    assert GoogleBudget(conn).used() == 2
+    next_month = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    assert GoogleBudget(conn, limit=2).take(now=next_month)
+
+
+def test_google_limit_from_settings(tmp_path):
+    from leadgen.lookup import providers_from
+
+    conn = db.connect(str(tmp_path / "g.db"))
+    google = providers_from({"google_places_api_key": "k"}, conn=conn)[-1]
+    assert google.name == "google" and google.budget.limit == 1000
+    google = providers_from({"google_places_api_key": "k", "google_monthly_limit": 0}, conn=conn)[-1]
+    assert google.budget.take() and google.budget.limit == 0
+    a = App(str(tmp_path / "w.db"))
+    a.save_settings({"google_monthly_limit": "250"})
+    assert a.state()["settings"]["google_monthly_limit"] == 250
+    assert a.state()["settings"]["google_used_this_month"] == 0

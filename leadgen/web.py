@@ -22,7 +22,7 @@ from .contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
 from .enrich import ParcelClient, enrich, owner_fields
 from .daily import run_daily
 from .geocode import CensusGeocoder
-from .lookup import find_contacts, providers_from
+from .lookup import GoogleBudget, find_contacts, providers_from
 from .sources import SOURCES
 from .sources.pima_jp_case import add_cases, is_case_page, parse_case_html, update_cases
 from .tucson_codes import CODE_LABELS, code_of
@@ -114,6 +114,7 @@ class App:
             public = dict(settings)
             key = public.pop("google_places_api_key", "") or ""
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
+            public["google_used_this_month"] = GoogleBudget(conn).used()
             counts = conn.execute(
                 "SELECT COUNT(*) AS all_, SUM(lead_type = 'eviction') AS evictions, "
                 "SUM(lead_type = 'eviction' AND eviction_notice = 1) AS eviction_notice, "
@@ -220,6 +221,11 @@ class App:
             values = {k: v for k, v in body.items() if k in allowed}
             if "lead_view" in values and values["lead_view"] not in LEAD_VIEWS:
                 raise ValueError("lead_view must be one of " + ", ".join(LEAD_VIEWS))
+            if "google_monthly_limit" in values:
+                limit = int(values["google_monthly_limit"] or 0)
+                if limit < 0:
+                    raise ValueError("google_monthly_limit can't be negative")
+                values["google_monthly_limit"] = limit
             if not values.get("google_places_api_key"):
                 values.pop("google_places_api_key", None)  # blank field keeps the saved key
             if body.get("clear_google_key"):
@@ -293,7 +299,7 @@ class App:
         with self.lock, self.conn() as conn:
             settings = self.settings(conn)
             log = []
-            counts = find_contacts(conn, providers_from(settings),
+            counts = find_contacts(conn, providers_from(settings, conn=conn),
                                    limit=int(body.get("limit") or 0) or None,
                                    refresh=bool(body.get("refresh")), log=log.append)
             counts["google_used"] = any(p.name == "google" for p in providers_from(settings))

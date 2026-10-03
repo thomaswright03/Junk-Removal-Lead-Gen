@@ -104,7 +104,7 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
     _step(summary, "geocode", lambda: geocode_new(conn, geocoder), log)
 
     def contacts():
-        provs = providers if providers is not None else providers_from(settings)
+        provs = providers if providers is not None else providers_from(settings, conn=conn)
         return find_contacts(conn, provs, limit=contact_limit, lead_types=("eviction",), log=log)
     _step(summary, "contacts", contacts, log)
 

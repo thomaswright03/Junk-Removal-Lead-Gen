@@ -81,7 +81,7 @@ def cmd_contacts(args):
     conn = _connect(args)
     if args.action == "find":
         settings = outreach.merged_settings(db.get_settings(conn))
-        providers = providers_from(settings, google_key=args.google_key)
+        providers = providers_from(settings, google_key=args.google_key, conn=conn)
         names = ", ".join(p.name for p in providers)
         print(f"looking up business contacts with: {names} (+ company websites)")
         counts = find_contacts(conn, providers, limit=args.limit, refresh=args.refresh)
