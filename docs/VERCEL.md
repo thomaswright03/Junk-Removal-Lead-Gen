@@ -18,9 +18,15 @@ counts only, never names or addresses, because this repository is public.
 1. In the Vercel project, open **Storage**, choose **Create Database**, then
    **Neon** (Serverless Postgres). Pick the Washington, D.C. (US East) region,
    close to where Vercel runs Lead Desk, and the free plan.
-2. Connect it to this project for all environments. Vercel adds
-   `DATABASE_URL` (and a few other `PG...`/`POSTGRES_...` variables) to the
-   project by itself. Lead Desk creates its tables on first use.
+2. Connect it to this project (Production and Preview). On the connect
+   screen:
+   - set **Custom Prefix** to `DATABASE`, so the variable is `DATABASE_URL`
+     (the name Lead Desk reads);
+   - uncheck **Create database branch for deployment** for both Production
+     and Preview. Otherwise each deployment gets its own copy of the
+     database, and the daily check would save leads to a different copy
+     than the one the site shows.
+   Use a database no other app uses. Lead Desk creates its tables on first use.
 
 ## 2. Set the password
 
