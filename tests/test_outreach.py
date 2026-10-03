@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from leadgen import db, outreach
 from leadgen.enrich import enrich, is_entity, owner_fields
@@ -79,6 +82,7 @@ def test_enrich_fills_owner_columns():
     assert enrich(conn, parcels) == {"found": 0, "not_found": 0, "landlord_property": 0}
 
 
+@pytest.mark.skipif(bool(os.environ.get("TEST_DATABASE_URL")), reason="migrates an old SQLite file")
 def test_migration_adds_columns_and_backfills_parcel(tmp_path):
     import sqlite3
 

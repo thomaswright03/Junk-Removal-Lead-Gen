@@ -5,9 +5,10 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("LEADGEN_DATA_DIR", "data"))
 DB_PATH = Path(os.environ.get("LEADGEN_DB", DATA_DIR / "leads.db"))
-# The hosted database (Turso) when Lead Desk runs online; see docs/VERCEL.md.
-# When set, it is used instead of DB_PATH.
-DATABASE_URL = os.environ.get("TURSO_DATABASE_URL", "")
+# The hosted Postgres database (Neon) when Lead Desk runs online; Vercel's
+# Neon integration sets DATABASE_URL. When set, it is used instead of DB_PATH.
+# See docs/VERCEL.md.
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
 
 # Leads whose event date is older than this are "stale" and left out of exports
 # unless asked for.

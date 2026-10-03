@@ -427,16 +427,18 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
     """
     scanner = scanner if scanner is not None else WebsiteScanner()
     stale_google = (_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
+    due = "" if refresh else (
+        "AND (contact_checked_at IS NULL "
+        "OR (contact_source LIKE 'google%' AND contact_checked_at < ?))")
     rows = conn.execute(
-        """
+        f"""
         SELECT * FROM leads
         WHERE duplicate_of IS NULL AND status NOT IN ('stale', 'skip', 'lost', 'won')
           AND COALESCE(contact_source, '') != 'manual'
-          AND (? OR contact_checked_at IS NULL
-               OR (contact_source LIKE 'google%' AND contact_checked_at < ?))
-        ORDER BY lead_type = 'eviction' DESC, event_date DESC
+          {due}
+        ORDER BY CASE WHEN lead_type = 'eviction' THEN 0 ELSE 1 END, event_date DESC
         """,
-        (int(bool(refresh)), stale_google),
+        () if refresh else (stale_google,),
     ).fetchall()
     if lead_types:
         rows = [r for r in rows if r["lead_type"] in lead_types]

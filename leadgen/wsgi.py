@@ -2,8 +2,8 @@
 
 Same pages and API as ``leadgen serve``, with three differences:
 
-- Leads live in the Turso database named by TURSO_DATABASE_URL and
-  TURSO_AUTH_TOKEN, because Vercel keeps no files between requests.
+- Leads live in the Postgres (Neon) database in DATABASE_URL, which Vercel's
+  Neon integration sets, because Vercel keeps no files between requests.
 - Every request needs the password in LEADDESK_PASSWORD (the browser asks
   for it once; any user name works). Without a password set, nothing is shown.
 - The daily check runs on GitHub Actions (.github/workflows/daily.yml), not
@@ -22,9 +22,13 @@ REALM = "Lead Desk"
 _app = None
 
 
+def database_url():
+    return os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+
+
 def missing_settings():
-    return [k for k in ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "LEADDESK_PASSWORD")
-            if not os.environ.get(k)]
+    missing = [] if database_url() else ["DATABASE_URL (connect Neon under Storage)"]
+    return missing + [k for k in ("LEADDESK_PASSWORD",) if not os.environ.get(k)]
 
 
 def password_ok(header, password):
@@ -43,8 +47,8 @@ SETUP_PAGE = """<!doctype html><meta charset="utf-8"><title>Lead Desk setup</tit
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <body style="font-family: system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px">
 <h1>Lead Desk isn't set up yet</h1>
-<p>Add these environment variables in Vercel (Project, Settings, Environment Variables),
-then redeploy:</p><ul>{items}</ul>
+<p>Add these in Vercel, then redeploy. The database comes from Storage; the
+password goes in Settings, Environment Variables.</p><ul>{items}</ul>
 <p>The steps are in <code>docs/VERCEL.md</code> in the repository.</p></body>"""
 
 
@@ -76,7 +80,7 @@ def _respond(start_response, status, body, ctype, extra=()):
 def get_app():
     global _app
     if _app is None:
-        _app = App(os.environ["TURSO_DATABASE_URL"], serverless=True)
+        _app = App(database_url(), serverless=True)
     return _app
 
 

@@ -6,46 +6,43 @@ browser. Three pieces work together:
 | Piece | What it does | Cost |
 |---|---|---|
 | **Vercel** | Shows Lead Desk at a web address, behind a password | Hobby plan is free but for non-commercial use only; Pro is $20 per person per month |
-| **Turso** | Stores the leads (Vercel keeps no files between requests) | Free plan is enough for this |
-| **GitHub Actions** | Runs the daily eviction check every morning at 6:00 Tucson time and saves the results in Turso | Free for this public repository |
+| **Neon** (through Vercel) | Stores the leads in Postgres (Vercel keeps no files between requests) | Free plan is enough for this |
+| **GitHub Actions** | Runs the daily eviction check every morning at 6:00 Tucson time and saves the results in Neon | Free for this public repository |
 
 The daily check runs on GitHub, not Vercel, because it takes 10 to 20 minutes
 and Vercel stops a request after 5. Its log on GitHub shows step names and
 counts only, never names or addresses, because this repository is public.
 
-## 1. Create the Turso database
+## 1. Add the Neon database in Vercel
 
-1. Sign up at https://turso.tech.
-2. Create a database. Pick the AWS US East (Virginia) location, close to
-   Vercel's default region.
-3. On the database page, copy its URL. It starts with `libsql://`.
-4. Create a token for the database with read and write access and no
-   expiration. Copy it; it is shown once.
+1. In the Vercel project, open **Storage**, choose **Create Database**, then
+   **Neon** (Serverless Postgres). Pick the Washington, D.C. (US East) region,
+   close to where Vercel runs Lead Desk, and the free plan.
+2. Connect it to this project for all environments. Vercel adds
+   `DATABASE_URL` (and a few other `PG...`/`POSTGRES_...` variables) to the
+   project by itself. Lead Desk creates its tables on first use.
 
-## 2. Set up Vercel
+## 2. Set the password
 
-In the Vercel project (Settings, Environment Variables), add:
+In the Vercel project, open **Settings**, **Environment Variables**, and add:
 
 | Name | Value |
 |---|---|
-| `TURSO_DATABASE_URL` | the `libsql://...` URL |
-| `TURSO_AUTH_TOKEN` | the token |
 | `LEADDESK_PASSWORD` | the password Steve will type to open Lead Desk |
 | `GOOGLE_PLACES_API_KEY` | optional; the key can also be pasted in Lead Desk Settings |
 | `LEADDESK_GITHUB_TOKEN` | optional; lets the "Check for new evictions" button start the check (step 4) |
 
-Under Settings, Git, make sure the production branch is `main`, then redeploy.
-The browser asks for the password once (any user name works). Until all three
-required variables are set, the site shows a setup page and no data.
+Under **Settings**, **Git**, make sure the production branch is `main`, then
+redeploy. The browser asks for the password once (any user name works). Until
+the database and password are set, the site shows a setup page and no data.
 
 ## 3. Turn on the daily check
 
-In GitHub, open the repository's Settings, Secrets and variables, Actions, and
-add these repository secrets:
-
-- `TURSO_DATABASE_URL`
-- `TURSO_AUTH_TOKEN`
-- `GOOGLE_PLACES_API_KEY` (optional, same as above)
+1. In Vercel, open **Settings**, **Environment Variables**, find
+   `DATABASE_URL` and copy its value (the eye icon shows it).
+2. In GitHub, open the repository's **Settings**, **Secrets and variables**,
+   **Actions**, and add a repository secret named `DATABASE_URL` with that
+   value. Add `GOOGLE_PLACES_API_KEY` too if you use one.
 
 The check is `.github/workflows/daily.yml`. It runs every day at 13:00 UTC
 (6:00 in Tucson) from the `main` branch. To run it right away, open the
@@ -66,7 +63,6 @@ check runs every morning.
 
 ## Running locally still works
 
-`leadgen serve` with no Turso variables uses the SQLite file in `data/` as
-before. To work on the online data from your computer, set
-`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in the terminal first; every
-`leadgen` command then uses Turso.
+`leadgen serve` without `DATABASE_URL` uses the SQLite file in `data/` as
+before. To work on the online data from your computer, set `DATABASE_URL` in
+the terminal first; every `leadgen` command then uses Neon.

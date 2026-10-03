@@ -14,7 +14,7 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from . import turso
+from . import pg
 from .normalize import extract_zip, normalize_address
 
 SCHEMA = """
@@ -114,17 +114,19 @@ def _now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-_READY_URLS = set()  # Turso databases whose schema was checked by this process
+_READY_URLS = set()  # Postgres databases whose schema was checked by this process
 
 
 def connect(path):
-    """Open the lead database: a SQLite file, or a Turso database when
-    ``path`` is a ``libsql://`` URL (see turso.py)."""
-    if turso.is_url(path):
-        conn = turso.Connection(str(path))
+    """Open the lead database: a SQLite file, or Postgres (Neon) when
+    ``path`` is a ``postgres://`` URL (see pg.py)."""
+    if pg.is_url(path):
+        conn = pg.Connection(str(path))
         if str(path) not in _READY_URLS:
-            conn.executescript(SCHEMA)
-            _migrate(conn)
+            conn.executescript(pg.SCHEMA)
+            for col, kind in _ADDED_COLUMNS.items():
+                conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} "
+                             f"{pg.TYPES.get(kind, kind)}")
             _READY_URLS.add(str(path))
         return conn
     path = Path(path)

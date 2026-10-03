@@ -220,7 +220,7 @@ def cmd_sources(args):
 def build_parser():
     p = argparse.ArgumentParser(prog="leadgen", description=__doc__.splitlines()[0])
     p.add_argument("--db", default=config.DATABASE_URL or str(config.DB_PATH),
-                   help="SQLite file or Turso libsql:// URL (default: TURSO_DATABASE_URL if set, "
+                   help="SQLite file or postgres:// URL (default: DATABASE_URL if set, "
                         f"else {config.DB_PATH})")
     p.add_argument("--stale-days", type=int, default=config.STALE_AFTER_DAYS,
                    help="leads older than this are stale (default %(default)s)")

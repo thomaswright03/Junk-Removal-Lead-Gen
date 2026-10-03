@@ -120,9 +120,12 @@ class App:
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
             public["google_used_this_month"] = GoogleBudget(conn).used()
             counts = conn.execute(
-                "SELECT COUNT(*) AS all_, SUM(lead_type = 'eviction') AS evictions, "
-                "SUM(lead_type = 'eviction' AND eviction_notice = 1) AS eviction_notice, "
-                "SUM(lead_type = 'eviction' AND eviction_notice IS NULL) AS unchecked "
+                "SELECT COUNT(*) AS all_, "
+                "SUM(CASE WHEN lead_type = 'eviction' THEN 1 ELSE 0 END) AS evictions, "
+                "SUM(CASE WHEN lead_type = 'eviction' AND eviction_notice = 1 THEN 1 ELSE 0 END) "
+                "AS eviction_notice, "
+                "SUM(CASE WHEN lead_type = 'eviction' AND eviction_notice IS NULL THEN 1 ELSE 0 END) "
+                "AS unchecked "
                 "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
             ).fetchone()
             last = db.get_settings(conn).get("last_daily_summary")

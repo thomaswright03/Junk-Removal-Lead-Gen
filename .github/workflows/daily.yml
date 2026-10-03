@@ -2,7 +2,7 @@
 # morning at 6:00 in Tucson (13:00 UTC; Arizona has no daylight saving time),
 # and when someone presses "Check for new evictions" online.
 #
-# It writes to the Turso database Lead Desk reads. This repository is public,
+# It writes to the Neon (Postgres) database Lead Desk reads. This repository is public,
 # so the log shows step names and counts only (--counts-only), and nothing
 # is uploaded.
 name: Daily eviction check
@@ -21,14 +21,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
-      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
     steps:
       - name: Check the database is set up
         run: |
-          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$TURSO_AUTH_TOKEN" ]; then
-            echo "::warning::Add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN as repository secrets (docs/VERCEL.md). Skipping."
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::warning::Add DATABASE_URL as a repository secret (docs/VERCEL.md). Skipping."
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
       - uses: actions/checkout@v4
