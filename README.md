@@ -267,6 +267,17 @@ assessor, landlord phones, new Tucson code cases. It prints a one-line
 summary. `leadgen schedule install` runs it every morning (`--hour 7` for a
 different time, `leadgen schedule remove` to stop).
 
+When a whole source fails (the court calendar or the City's site can't be
+reached, not just one lookup), the run doesn't count as the day's check: it
+is tried again the same day 30 minutes later, then 1 and 2 hours after each
+further failure (at most three retries, never past midnight), and the Lead
+Desk header says "Today's check failed (...) · trying again today at ...".
+Once a retry gets through, the day counts as checked. Lead Desk retries
+while it is open; the job `leadgen schedule install` sets up also starts 1,
+2, 4 and 6 hours after the first run, with `leadgen daily --if-due`, which
+does nothing unless a retry is due (run `leadgen schedule install` again to
+add these to a schedule set up before).
+
 `leadgen check-court` searches the court calendar for the next 30 days and
 fails when it finds no eviction hearings (there are always some), which
 means the court's page has changed. GitHub runs it every day

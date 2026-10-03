@@ -77,6 +77,11 @@ def next_daily_run(settings: dict, serverless: bool = False, now: Optional[datet
         return "paused"
     local = az_now(now)
     ran_today = settings.get("last_daily_run") == local.date().isoformat()
+    retry = daily.retry_pending(settings, local.date())
+    if retry:
+        # Online the retry runs with the next scheduled GitHub run after this time.
+        line = daily.retry_line(retry)
+        return line.replace("today at ", "today after ", 1) if serverless else line
     if local.hour < 6:
         return "today 6:00 AM"
     if not ran_today and not serverless:
@@ -157,21 +162,25 @@ class JobRunner:
 
     def refresh(self, body: dict) -> dict:
         """Run the daily check now and wait for it (the CLI and CI use this;
-        the page uses ``start_daily``)."""
+        the page uses ``start_daily``). The progress message ("checking old
+        leads") is cleared when it ends: the summary says what happened."""
         with self.daily_lock, self.conn() as conn:
-            summary = run_daily(
-                conn,
-                stale_days=self.stale_days,
-                case_client=self.case_client,
-                parcel_client=self.parcel_client,
-                calendar=self.calendar,
-                code_cases=self.code_cases,
-                geocoder=self.geocoder,
-                providers=self.providers,
-                case_limit=body.get("case_limit"),
-                contact_limit=int(body.get("contact_limit") or 60),
-                log=self._progress,
-            )
+            try:
+                summary = run_daily(
+                    conn,
+                    stale_days=self.stale_days,
+                    case_client=self.case_client,
+                    parcel_client=self.parcel_client,
+                    calendar=self.calendar,
+                    code_cases=self.code_cases,
+                    geocoder=self.geocoder,
+                    providers=self.providers,
+                    case_limit=body.get("case_limit"),
+                    contact_limit=int(body.get("contact_limit") or 60),
+                    log=self._progress,
+                )
+            finally:
+                self.daily_message = None
         self._ensure_base()
         return summary
 
@@ -210,8 +219,6 @@ class JobRunner:
             except Exception as e:
                 traceback.print_exc(file=sys.stderr)
                 self.daily_message = f"the daily check stopped with an error ({type(e).__name__})"
-            else:
-                self.daily_message = None
 
         threading.Thread(target=work, daemon=True, name="daily").start()
         return {"started": True, "running": True}

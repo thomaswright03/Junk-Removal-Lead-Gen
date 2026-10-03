@@ -753,3 +753,22 @@ def test_settings_mistakes_show_under_the_field(server, page):
     page.click("#sSave")
     page.wait_for_selector("text=Settings saved")
     assert db.get_settings(db.connect(path))["business_name"] == "Desert Haul"
+
+
+def test_header_says_when_a_failed_check_is_retried(server, page):
+    from leadgen.util import az_today
+
+    url, app, path = server
+    conn = db.connect(path)
+    today = az_today().isoformat()
+    db.put_settings(
+        conn,
+        {
+            "daily_retry": {"date": today, "attempt": 1, "at": f"{today}T23:58", "failed": ["evictions"]},
+            "last_daily_summary": {"evictions": {"error": "ConnectionError"}, "finished_at": f"{today}T13:05:00"},
+        },
+    )
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#sub >> text=Today's check failed (Justice Court calendar)")
+    assert "trying again today at 11:58 PM" in page.inner_text("#sub")

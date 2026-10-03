@@ -142,9 +142,14 @@ def cmd_cases(args: argparse.Namespace) -> None:
 
 
 def cmd_daily(args: argparse.Namespace) -> None:
-    from .daily import main_log, run_daily
+    from .daily import due, main_log, run_daily
 
     conn = _connect(args)
+    if args.if_due and not due(conn, hour=0):
+        # The scheduled runs after the first: only a same-day retry (or a day
+        # whose check hasn't run yet) does anything.
+        print("nothing to do: today's check has run (or its retry isn't due yet)")
+        return
     if args.counts_only:  # public logs (GitHub Actions): step names and counts, nothing else
         log = lambda m: print("  " + m) if m.startswith("checking ") else None  # noqa: E731
     else:
@@ -362,6 +367,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--counts-only",
         action="store_true",
         help="print step names and counts only, no names or error details (public logs)",
+    )
+    sp.add_argument(
+        "--if-due",
+        action="store_true",
+        help="run only if today's check hasn't run yet, or failed and its retry is due (for schedules)",
     )
     sp.set_defaults(func=cmd_daily)
 

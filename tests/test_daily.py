@@ -225,7 +225,7 @@ def test_one_failing_step_does_not_stop_the_rest():
         log=lambda m: None,
     )
     assert "error" in summary["evictions"]
-    assert "stale" in summary and "failed: evictions" in daily.describe(summary)
+    assert "stale" in summary and "failed: Justice Court calendar" in daily.describe(summary)
 
 
 def test_due_once_a_day_after_six():
@@ -241,3 +241,115 @@ def test_launch_agent_plist(tmp_path):
     xml = schedule.plist(tmp_path / "leads & co.db", 6, 30, tmp_path, tmp_path / "daily.log")
     assert "<string>daily</string>" in xml and "leads &amp; co.db" in xml
     assert "<integer>6</integer>" in xml and "<integer>30</integer>" in xml
+
+
+class Down:
+    """A source whose website can't be reached."""
+
+    def fetch(self, *a, **kw):
+        raise ConnectionError("network unreachable")
+
+
+def run(conn, now, calendar=None, code_cases=None):
+    return daily.run_daily(
+        conn,
+        now=now,
+        code_cases=code_cases or NoCodeCases(),
+        calendar=calendar or Down(),
+        case_client=FakeCases(),
+        parcel_client=FakeParcels([]),
+        geocoder=NoGeocode(),
+        providers=[],
+        log=lambda m: None,
+    )
+
+
+def test_a_failed_source_is_retried_later_the_same_day():
+    from leadgen.jobs import next_daily_run
+
+    conn = db.connect(":memory:")
+    morning = datetime(2026, 10, 3, 6, 5)
+    summary = run(conn, morning, code_cases=Down())
+    assert summary["retry_at"] == "2026-10-03T06:35"
+    assert "trying again at 6:35 AM" in daily.describe(summary)
+    settings = db.get_settings(conn)
+    # Not today's check: the header says a retry is coming, and when.
+    assert settings.get("last_daily_run") is None
+    assert settings["daily_retry"]["failed"] == ["tucson_code_cases", "evictions"]
+    assert daily.retry_status(settings, morning.date()) == {
+        "time": "6:35 AM",
+        "failed": ["Tucson code cases", "Justice Court calendar"],
+        "attempt": 1,
+    }
+    assert next_daily_run(settings, now=datetime(2026, 10, 3, 13, 10)).startswith("today at 6:35 AM (retrying:")
+    assert next_daily_run(settings, serverless=True, now=datetime(2026, 10, 3, 13, 10)).startswith(
+        "today after 6:35 AM"
+    )
+    # Due again at the retry time (a run on the hour a few minutes early counts), not before.
+    assert not daily.due(conn, now=datetime(2026, 10, 3, 6, 20))
+    assert daily.due(conn, now=datetime(2026, 10, 3, 6, 26))
+    # Still down: backing off, 1 hour then 2.
+    assert run(conn, datetime(2026, 10, 3, 6, 40))["retry_at"] == "2026-10-03T07:40"
+    assert run(conn, datetime(2026, 10, 3, 7, 45))["retry_at"] == "2026-10-03T09:45"
+    # After the last retry the day counts as checked; tomorrow starts over.
+    summary = run(conn, datetime(2026, 10, 3, 9, 50))
+    assert "retry_at" not in summary
+    settings = db.get_settings(conn)
+    assert settings["last_daily_run"] == "2026-10-03" and settings["daily_retry"]["gave_up"]
+    assert daily.retry_status(settings, date(2026, 10, 3)) is None
+    assert not daily.due(conn, now=datetime(2026, 10, 3, 12, 0))
+    assert daily.due(conn, now=datetime(2026, 10, 4, 6, 0))
+
+
+def test_a_retry_that_gets_through_makes_the_day_checked():
+    conn = db.connect(":memory:")
+    run(conn, datetime(2026, 10, 3, 6, 0))
+    assert db.get_settings(conn)["daily_retry"]["attempt"] == 1
+    summary = run(conn, datetime(2026, 10, 3, 6, 30), calendar=NoCodeCases())  # the court is back (no hearings)
+    assert "retry_at" not in summary and "error" not in summary["evictions"]
+    settings = db.get_settings(conn)
+    assert settings["last_daily_run"] == "2026-10-03" and settings["daily_retry"] is None
+    assert not daily.due(conn, now=datetime(2026, 10, 3, 7, 0))
+
+
+def test_a_retry_is_never_set_past_midnight():
+    conn = db.connect(":memory:")
+    summary = run(conn, datetime(2026, 10, 3, 23, 50))
+    assert "retry_at" not in summary
+    assert db.get_settings(conn)["last_daily_run"] == "2026-10-03"
+
+
+def test_scheduled_job_runs_again_for_retries(tmp_path):
+    xml = schedule.plist(tmp_path / "leads.db", 6, 0, tmp_path, tmp_path / "daily.log")
+    assert "<string>--if-due</string>" in xml
+    assert xml.count("<key>Hour</key>") == 5 and "<integer>12</integer>" in xml
+    assert schedule.run_hours(20) == [20, 21, 22]
+
+
+def test_status_has_no_progress_message_after_the_check(tmp_path):
+    from leadgen.web import App
+
+    app = App(
+        tmp_path / "l.db",
+        calendar=NoCodeCases(),
+        code_cases=NoCodeCases(),
+        case_client=FakeCases(),
+        parcel_client=FakeParcels([]),
+        geocoder=NoGeocode(),
+        providers=[],
+    )
+    app.refresh({})
+    status = app.status()["daily"]
+    assert status["running"] is False and status["message"] is None and status["retry"] is None
+
+
+def test_scheduled_daily_does_nothing_once_today_has_run(tmp_path, capsys):
+    from leadgen import cli
+    from leadgen.util import az_today
+
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    db.put_settings(conn, {"last_daily_run": az_today().isoformat()})
+    conn.commit()
+    cli.main(["--db", str(path), "daily", "--if-due"])
+    assert "nothing to do" in capsys.readouterr().out

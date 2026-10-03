@@ -132,6 +132,8 @@ class App(JobRunner):
                 "message": self.daily_message,
                 "last_run": settings.get("last_daily_run"),
                 "interrupted": daily.interrupted_today(settings),
+                # Today's check failed outright and is tried again later today.
+                "retry": daily.retry_status(settings),
                 "summary": daily.describe(settings["last_daily_summary"])
                 if settings.get("last_daily_summary")
                 else None,

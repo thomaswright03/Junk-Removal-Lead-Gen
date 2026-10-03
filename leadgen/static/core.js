@@ -367,6 +367,7 @@ function renderHeader() {
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.retry ? `Today's check failed (${d.retry.failed.join(", ")}) · trying again ${(d.next_run || "today " + d.retry.time).replace(/ \(.*\)$/, "")}`
     : d.interrupted ? `Today's check stopped part way (paused) · next check ${d.next_run || "within the next few minutes"}`
     : d.last_run ? `Last check ${d.finished_at ? fmtDateTime(d.finished_at) : fmtDate(d.last_run)}` : "Not checked yet";
   const warn = problems.length && !d.running ? ` <span class="warn-sign" role="img" aria-label="Something failed in the last check" title="${esc(problems.join("; "))}">⚠</span>` : "";
