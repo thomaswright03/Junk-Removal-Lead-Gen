@@ -723,3 +723,18 @@ def test_schema_and_upgrades_run_once_per_database(tmp_path, monkeypatch):
     db.forget_ready()
     db.connect(path).close()
     assert ran == [1]
+
+
+def test_fetching_past_calendar_dates_explains_the_limit(tmp_path, monkeypatch, capsys):
+    from leadgen import cli
+
+    def no_request(*a, **kw):
+        raise AssertionError("asked the calendar for past dates")
+
+    monkeypatch.setattr("requests.Session.request", no_request)
+    argv = ["--db", str(tmp_path / "l.db"), "fetch", "--source", "pima_jp_calendar"]
+    cli.main([*argv, "--since", "2025-01-01", "--until", "2025-01-31"])
+    out = capsys.readouterr().out
+    assert "only lists upcoming hearings" in out
+    assert "records request" in out and "Add cases" in out
+    assert "0 new" not in out

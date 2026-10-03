@@ -46,6 +46,16 @@ def _uses_network(name: str, args: argparse.Namespace) -> bool:
     return True
 
 
+_CALENDAR_LIMIT = (
+    "The court calendar only lists upcoming hearings, so it can't show "
+    "evictions from past dates. For older cases, send the Justice Court "
+    "records request (see docs/DATA_SOURCES.md) and import its file, or "
+    "paste the case links into Add cases."
+)
+_PAST_CALENDAR = f"pima_jp_calendar: nothing to fetch for past dates. {_CALENDAR_LIMIT}"
+_PART_PAST_CALENDAR = "pima_jp_calendar: hearings before {today} aren't listed. " + _CALENDAR_LIMIT
+
+
 def cmd_fetch(args: argparse.Namespace, conn: Conn = None) -> dict:
     conn = conn or _connect(args)
     until = args.until or az_today().isoformat()
@@ -54,7 +64,15 @@ def cmd_fetch(args: argparse.Namespace, conn: Conn = None) -> dict:
     if any(_uses_network(n, args) for n in names):
         _exit_if_paused(conn)
     total = {"new": 0, "updated": 0}
+    today = az_today().isoformat()
     for name in names:
+        if name == "pima_jp_calendar" and not args.file:
+            # The calendar has no past hearings; say so rather than "0 new".
+            if until < today:
+                print(_PAST_CALENDAR)
+                continue
+            if args.since and since < today:
+                print(_PART_PAST_CALENDAR.format(today=today))
         source = SOURCES[name]()
         counts = {"new": 0, "updated": 0}
         options = {"all_cases": args.all_cases, "assume_eviction": args.assume_eviction}
