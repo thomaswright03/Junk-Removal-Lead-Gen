@@ -24,7 +24,7 @@ dev = [
     # Browser tests (tests/test_browser.py); also run `python -m playwright install chromium`,
     # which installs the browser build for exactly this version. Pinned so a new
     # Playwright release can't arrive without its browser.
-    "playwright==1.63.0",
+    "playwright==1.63.0; python_version >= \"3.10\"",
 ]
 
 [project.scripts]
