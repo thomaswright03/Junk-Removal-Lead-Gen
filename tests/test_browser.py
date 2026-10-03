@@ -2,11 +2,13 @@
 keyboard, keeping typed notes through other actions and refreshes, importing
 a CSV, splitting leads, logging a contact once, the address bar keeping
 the view, labelled dates and guessed addresses, and the page on a phone.
-Skipped when Playwright or its browser isn't installed:
+Skipped when Playwright or its browser isn't installed (in CI, where CI=1,
+a missing browser fails instead):
 
     pip install -e ".[dev]" && python -m playwright install chromium
 """
 
+import os
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -80,13 +82,26 @@ def server(tmp_path):
     httpd.server_close()
 
 
+def _launch():
+    """Start Playwright and Chromium. If the browser can't start, Playwright
+    is stopped again (otherwise every later test fails with a misleading
+    "Sync API inside the asyncio loop" error) and the real reason is given:
+    a skip on a computer without the browser, a failure in CI, where a
+    missing browser must not pass quietly."""
+    pw = sync_api.sync_playwright().start()
+    try:
+        return pw, pw.chromium.launch()
+    except Exception as e:
+        pw.stop()
+        reason = f"no browser for Playwright: {str(e).strip().splitlines()[0]}"
+        if os.environ.get("CI"):
+            pytest.fail(reason + " (CI must run `python -m playwright install chromium`)")
+        pytest.skip(reason)
+
+
 @pytest.fixture
 def page(server):
-    try:
-        pw = sync_api.sync_playwright().start()
-        browser = pw.chromium.launch()
-    except Exception as e:  # browser not downloaded
-        pytest.skip(f"no browser for Playwright: {e}")
+    pw, browser = _launch()
     page = browser.new_page()
     page.set_default_timeout(5000)
     errors = []

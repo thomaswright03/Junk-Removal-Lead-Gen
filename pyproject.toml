@@ -17,11 +17,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
+    "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.10",
     "types-requests",
-    # Browser tests (tests/test_browser.py); also run `python -m playwright install chromium`.
-    "playwright>=1.40",
+    # Browser tests (tests/test_browser.py); also run `python -m playwright install chromium`,
+    # which installs the browser build for exactly this version. Pinned so a new
+    # Playwright release can't arrive without its browser.
+    "playwright==1.63.0",
 ]
 
 [project.scripts]
@@ -39,6 +42,15 @@ entrypoint = "leadgen.wsgi:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# CI runs `pytest --cov` and fails below this share of lines run by the tests.
+[tool.coverage.run]
+source = ["leadgen"]
+
+[tool.coverage.report]
+fail_under = 82
+skip_covered = true
+show_missing = true
 
 [tool.ruff]
 line-length = 120

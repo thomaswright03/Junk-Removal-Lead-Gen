@@ -279,6 +279,7 @@ already listed, it is linked to the first one and hidden from exports
 
 ```sh
 pytest                                  # Python tests (SQLite)
+pytest --cov                            # with line coverage; fails below the floor in pyproject.toml
 TEST_DATABASE_URL=postgresql://... pytest   # the same tests on Postgres
 ruff check . && ruff format --check .   # lint and format
 mypy                                    # type check
@@ -287,4 +288,6 @@ mypy                                    # type check
 The browser tests (`tests/test_browser.py`) drive Lead Desk in headless
 Chromium; they run when Playwright is installed
 (`pip install -e ".[dev]" && python -m playwright install chromium`) and
-are skipped otherwise. CI runs all of these.
+are skipped otherwise, with the reason (such as the missing browser file).
+In CI (where `CI` is set) a missing browser fails the run instead. CI runs
+all of these, with coverage on the SQLite run.
