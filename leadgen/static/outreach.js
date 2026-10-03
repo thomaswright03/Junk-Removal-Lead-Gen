@@ -154,7 +154,7 @@ function renderManagers(el, leads) {
     <div class="script">${esc(fill("property_manager", {}))}</div></div>
     ${list.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
-        return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:12px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
+        return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:13px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
         <td style="white-space:nowrap" data-th="Contact">${(() => { const c = ls.find(x => x.owner_phone || x.owner_email); return c ? `${c.owner_phone ? phoneCell(c) : ""}${c.owner_phone && c.owner_email ? "<br>" : ""}${c.owner_email ? emailCell(c) : ""}` : '<span class="muted">–</span>'; })()}</td>
         <td class="num" data-th="Leads">${ls.length}</td><td data-th="Properties"><span>${ls.slice(0, 3).map(l => l.address ? esc(title(l.address)) : esc(l.source_id)).join("<br>")}${ls.length > 3 ? `<br><span class="muted">+${ls.length - 3} more</span>` : ""}</span></td>
         <td data-th="Contacted">${done ? '<span class="chip good">yes</span>' : '<span class="chip">no</span>'}</td>

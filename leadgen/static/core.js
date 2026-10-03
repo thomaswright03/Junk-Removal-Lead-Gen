@@ -271,6 +271,7 @@ function renderHeader() {
   const msg = d.message || "starting the daily check";
   const problems = d.problems || [];
   $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson code cases`;
+  $("#purpose").title = $("#purpose").textContent.slice(2);  // in full, when a wide header cuts it short
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`

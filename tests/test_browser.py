@@ -535,3 +535,34 @@ def test_works_on_a_phone(server, page):
     page.click("[data-touch=visited]")
     page.wait_for_selector("text=Logged: Hanger left")
     assert db.connect(path).execute("SELECT COUNT(*) FROM touches").fetchone()[0] == 1
+
+
+def test_header_is_one_row_on_a_wide_screen(server, page):
+    url, app, path = server
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    title, button = page.locator("header h1").bounding_box(), page.locator("#refreshBtn").bounding_box()
+    # Same row, and the main action at the right edge.
+    assert abs((title["y"] + title["height"] / 2) - (button["y"] + button["height"] / 2)) < 12
+    assert button["x"] + button["width"] > 1440 - 40
+
+
+def test_phone_text_and_targets_are_big_enough(server, page):
+    url, app, path = server
+    page.set_viewport_size({"width": 375, "height": 740})
+    for tab in ("leads", "outreach", "results", "settings"):
+        page.goto(f"{url}#tab={tab}")
+        page.wait_for_selector(f"#tab-{tab}:not([hidden]) > *")
+        small_text = page.evaluate(
+            """[...document.querySelectorAll('body *')].filter(e => e.offsetParent
+              && [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())
+              && parseFloat(getComputedStyle(e).fontSize) < 13)
+              .map(e => e.tagName + ' ' + e.textContent.trim().slice(0, 30))"""
+        )
+        assert small_text == [], (tab, small_text)
+        small_targets = page.evaluate(
+            """[...document.querySelectorAll('button, .btn, select, summary, nav button')].filter(e => e.offsetParent
+              && e.getBoundingClientRect().height < 44).map(e => e.id || e.textContent.trim().slice(0, 30))"""
+        )
+        assert small_targets == [], (tab, small_targets)
