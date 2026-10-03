@@ -117,7 +117,8 @@ _ADDED_COLUMNS = {
     "case_status": "TEXT",
     "next_court_date": "TEXT",
     "case_checked_at": "TEXT",
-    # How far the case has got: filed, notice, judgment, writ or dismissed.
+    # How far the case has got: filed, notice, judgment, writ, or ended
+    # (dismissed, satisfied, closed); see sources/pima_jp_case.case_stage.
     "case_stage": "TEXT",
     "judgment_date": "TEXT",
     "writ_date": "TEXT",
@@ -173,6 +174,7 @@ def connect(path: Any) -> Conn:
             for col, kind in _ADDED_TOUCH_COLUMNS.items():
                 conn.execute(f"ALTER TABLE touches ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             _money_to_cents(conn)
+            _upgrade_case_stages(conn)
             _READY_URLS.add(str(path))
         return conn
     path = Path(path)
@@ -195,6 +197,7 @@ def _migrate(conn: Conn) -> None:
         if col not in have_touch:
             conn.execute(f"ALTER TABLE touches ADD COLUMN {col} {kind}")
     _money_to_cents(conn)
+    _upgrade_case_stages(conn)
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
         for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
@@ -217,6 +220,20 @@ def _money_to_cents(conn: Conn) -> None:
         if conn.execute(f"SELECT 1 FROM {table} WHERE {todo} LIMIT 1").fetchone():
             conn.execute(f"UPDATE {table} SET {cents} = CAST(ROUND({dollars} * 100) AS INTEGER) WHERE {todo}")
             conn.commit()
+
+
+def _upgrade_case_stages(conn: Conn) -> None:
+    """Once per change of the case stage rules: every stored court case's
+    stage worked out again from its saved papers (see
+    pima_jp_case.rederive_stages), so a wrong old stage doesn't linger."""
+    from .sources.pima_jp_case import STAGE_RULES_VERSION, rederive_stages
+
+    row = conn.execute("SELECT value FROM settings WHERE key = 'case_stage_rules'").fetchone()
+    if row and json.loads(row["value"]) == STAGE_RULES_VERSION:
+        return
+    rederive_stages(conn)
+    put_settings(conn, {"case_stage_rules": STAGE_RULES_VERSION})
+    conn.commit()
 
 
 def cents(value: Any) -> Optional[int]:
@@ -256,14 +273,22 @@ def upsert(conn: Conn, lead: Lead) -> str:
     if existing:
         if "jcdisplaycase" in (existing["url"] or "").lower() and "jcdisplaycase" not in (d["url"] or "").lower():
             d["url"] = None  # a calendar re-import keeps the case page link
-        if existing["case_checked_at"] and not d.get("case_checked_at"):
-            # Keep the case page's filing date and summary over calendar rows.
+        case_page = bool(d.get("case_checked_at"))
+        sets, args = ["last_seen = ?"], [now]
+        if existing["case_checked_at"] and not case_page:
+            # Keep the case page's filing date, summary and papers over calendar rows.
             d["event_date"] = d["description"] = None
-        sets, args = ["last_seen = ?", "raw_json = ?"], [now, raw]
+        else:
+            sets.append("raw_json = ?")
+            args.append(raw)
         for col in _REFRESHABLE:
             if d[col] not in (None, ""):
                 sets.append(f"{col} = ?")
                 args.append(d[col])
+            elif case_page and col in ("judgment_date", "writ_date"):
+                # A fresh read of the case decides these: a judgment set aside
+                # or a case dismissed since the last read clears them.
+                sets.append(f"{col} = NULL")
         if d.get("case_checked_at"):
             sets.append("case_checked_at = ?")
             args.append(d["case_checked_at"])

@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import Any, Optional
 
 from . import db, outreach
+from .sources.pima_jp_case import ENDED_SQL
 from .tucson_codes import CODE_LABELS, code_of
 from .util import Conn, LeadRow, az_today
 
@@ -63,13 +64,9 @@ LEAD_FIELDS = (
 # Evictions with a notice filed or further along (judgment, writ), plus
 # cases Steve imported himself whose case page hasn't been read yet (so an
 # import shows up at once, marked "case not checked"; once read, the notice
-# rule applies). Dismissed cases, and closed ones that never reached a
-# judgment, drop out.
-_ENDED = (
-    "(COALESCE(case_stage, '') = 'dismissed' OR LOWER(COALESCE(case_status, '')) LIKE 'dismiss%' "
-    "OR (LOWER(COALESCE(case_status, '')) LIKE 'closed%' "
-    "AND COALESCE(case_stage, '') NOT IN ('judgment', 'writ')))"
-)
+# rule applies). Cases that ended (dismissed, judgment satisfied, closed or
+# disposed with no judgment or writ) drop out; see pima_jp_case.ENDED_SQL.
+_ENDED = ENDED_SQL
 _EVICTION_NOTICE = (
     "lead_type = 'eviction' AND (eviction_notice = 1 OR case_stage IN ('judgment', 'writ') "
     f"OR (added_by_hand = 1 AND eviction_notice IS NULL)) AND NOT {_ENDED}"

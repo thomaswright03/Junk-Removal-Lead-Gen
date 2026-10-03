@@ -71,7 +71,7 @@ class NoParcels:
 def test_case_page_records_judgment_and_writ():
     lead = parse_case_html(WRIT_HTML, url=CASE_URL.format("1000099"))
     assert lead.case_stage == "writ"
-    assert lead.judgment_date == "2026-10-14" and lead.writ_date == "2026-10-20"
+    assert lead.judgment_date == "2026-09-16" and lead.writ_date == "2026-09-22"
     assert "Writ of restitution issued" in lead.description
     plain = parse_case_html(CASE_HTML)
     assert plain.case_stage == "notice" and plain.judgment_date is None and plain.writ_date is None
