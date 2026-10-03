@@ -22,6 +22,7 @@ Providers, tried in order:
              and phone numbers. Honors robots.txt.
 """
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ import requests
 
 from . import config, db
 from .contacts import clean_email, clean_phone
-from .util import ARIZONA, is_multifamily, utc_now
+from .util import az_now, is_multifamily, is_paused, utc_now
 
 # Public Overpass servers, tried in order when one refuses or is overloaded.
 OVERPASS_URLS = (
@@ -214,47 +215,85 @@ def pick_osm(elements, business_name):
 
 
 class GoogleBudget:
-    """Counts Google searches per day and per calendar month (Arizona time) in
-    the settings table and refuses more than ``daily`` a day or ``limit`` a
-    month (0 means no limit), so the lookup stays inside the free allowance
-    unless the limits are raised in Settings."""
+    """Counts Google searches per day and per calendar month (Arizona time)
+    and refuses more than ``daily`` a day or ``limit`` a month, so the lookup
+    stays inside the free allowance unless the limits are raised in Settings.
 
-    KEY = "google_usage"
+    A limit of 0 allows no searches; ``None`` means no limit. Each search is
+    reserved with one conditional UPDATE per counter, so two lookups running
+    at once (the daily check and the button) can't go over a limit together.
+    """
+
+    LEGACY_KEY = "google_usage"  # where older versions kept the counts, in settings
 
     def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT, daily=GOOGLE_DAILY_LIMIT):
         self.conn = conn
         self.limit = limit
         self.daily = daily
 
+    def _keys(self, now=None):
+        local = az_now(now)
+        return f"google:month:{local:%Y-%m}", f"google:day:{local:%Y-%m-%d}", local
+
+    def _count(self, key):
+        row = self.conn.execute("SELECT n FROM counters WHERE key = ?", (key,)).fetchone()
+        return row["n"] if row else None
+
+    def _legacy(self, local):
+        usage = db.get_settings(self.conn).get(self.LEGACY_KEY) or {}
+        month = usage.get("count", 0) if usage.get("month") == f"{local:%Y-%m}" else 0
+        day = usage.get("day_count", 0) if usage.get("day") == f"{local:%Y-%m-%d}" else 0
+        return month, day
+
     def _usage(self, now=None):
-        local = (now or utc_now()).astimezone(ARIZONA)
-        month, day = local.strftime("%Y-%m"), local.strftime("%Y-%m-%d")
-        usage = db.get_settings(self.conn).get(self.KEY) or {}
-        count = usage.get("count", 0) if usage.get("month") == month else 0
-        today = usage.get("day_count", 0) if usage.get("day") == day else 0
-        return month, day, count, today
+        month_key, day_key, local = self._keys(now)
+        month, day = self._count(month_key), self._count(day_key)
+        if month is None or day is None:
+            old_month, old_day = self._legacy(local)
+            month = old_month if month is None else month
+            day = old_day if day is None else day
+        return month, day
 
     def used(self, now=None):
-        return self._usage(now)[2]
+        return self._usage(now)[0]
 
     def used_today(self, now=None):
-        return self._usage(now)[3]
+        return self._usage(now)[1]
 
     def blocked(self, now=None):
         """Why no more searches are allowed right now, or None."""
-        _, _, count, today = self._usage(now)
-        if self.daily and today >= self.daily:
+        count, today = self._usage(now)
+        if self.daily == 0 or self.limit == 0:
+            return "Google lookups are set to 0 in Settings"
+        if self.daily is not None and today >= self.daily:
             return f"daily limit of {self.daily} Google lookups reached; more tomorrow"
-        if self.limit and count >= self.limit:
+        if self.limit is not None and count >= self.limit:
             return f"monthly limit of {self.limit} Google lookups reached; raise it in Settings"
         return None
 
+    def _reserve(self, key, limit):
+        if limit is None:
+            cur = self.conn.execute("UPDATE counters SET n = n + 1 WHERE key = ?", (key,))
+        else:
+            cur = self.conn.execute("UPDATE counters SET n = n + 1 WHERE key = ? AND n < ?", (key, limit))
+        self.conn.commit()
+        return cur.rowcount == 1
+
     def take(self, now=None):
-        if self.blocked(now):
+        """Reserve one search. False when a limit is reached."""
+        month_key, day_key, local = self._keys(now)
+        if self._count(month_key) is None or self._count(day_key) is None:
+            old_month, old_day = self._legacy(local)
+            for key, start in ((month_key, old_month), (day_key, old_day)):
+                self.conn.execute("INSERT INTO counters (key, n) VALUES (?, ?) "
+                                  "ON CONFLICT(key) DO NOTHING", (key, start))
+            self.conn.commit()
+        if not self._reserve(day_key, self.daily):
             return False
-        month, day, count, today = self._usage(now)
-        db.put_settings(self.conn, {self.KEY: {"month": month, "count": count + 1,
-                                               "day": day, "day_count": today + 1}})
+        if not self._reserve(month_key, self.limit):
+            self.conn.execute("UPDATE counters SET n = n - 1 WHERE key = ?", (day_key,))
+            self.conn.commit()
+            return False
         return True
 
 
@@ -419,19 +458,25 @@ def _reach(c):
     return (bool(c.phone), bool(c.email), bool(c.website))
 
 
-def providers_from(settings=None, google_key=None, conn=None):
-    """OpenStreetMap, plus Google when a key is set. With ``conn``, Google
-    searches are counted against the daily and monthly limits in settings."""
-    import os
+def google_key_in_use(settings):
+    """The Google key lookups would use: the environment's, else Settings'."""
+    return os.environ.get("GOOGLE_PLACES_API_KEY") or (settings or {}).get("google_places_api_key") or ""
 
+
+def providers_from(settings=None, google_key=None, conn=None):
+    """OpenStreetMap, plus Google when a key is set and Google is turned on in
+    Settings. None at all while Lead Desk is paused. With ``conn``, Google
+    searches are counted against the daily and monthly limits in settings."""
     settings = settings or {}
-    key = google_key or os.environ.get("GOOGLE_PLACES_API_KEY") or settings.get(
-        "google_places_api_key")
+    if is_paused(settings):
+        return []
+    key = google_key or google_key_in_use(settings)
     out = [OsmProvider()]
-    if key:
+    if key and settings.get("google_enabled", True) is not False:
         limit = settings.get("google_monthly_limit", GOOGLE_MONTHLY_LIMIT)
         daily = settings.get("google_daily_limit", GOOGLE_DAILY_LIMIT)
-        budget = (GoogleBudget(conn, int(limit or 0), int(daily or 0))
+        budget = (GoogleBudget(conn, None if limit is None else int(limit),
+                               None if daily is None else int(daily))
                   if conn is not None else None)
         out.append(GooglePlacesProvider(key, budget=budget))
     return out
@@ -442,12 +487,13 @@ def _has_notice(lead):
 
 
 def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print,
-                  lead_types=None):
+                  lead_types=None, progress=None, should_stop=None):
     """Look up phone/email/website for business owners and landlords.
 
     One lookup per company: every lead with the same owner/landlord name gets
     the result. Values entered by hand (contact_source = 'manual') are never
-    replaced. Returns counts.
+    replaced. ``progress(done, total)`` is called after each lead and
+    ``should_stop()`` before each (True stops early). Returns counts.
     """
     scanner = scanner if scanner is not None else WebsiteScanner()
     stale_google = (utc_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
@@ -469,9 +515,16 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
     if lead_types:
         rows = [r for r in rows if r["lead_type"] in lead_types]
     counts = {"checked": 0, "found": 0, "not_found": 0, "skipped_people": 0, "errors": 0}
+    if not providers:  # paused, or nothing to look up with
+        return counts
     done = {}  # business name -> Contact or None
-    for lead in rows:
+    for i, lead in enumerate(rows):
+        if progress and i:
+            progress(i, len(rows))
         if limit and counts["checked"] >= limit:
+            break
+        if should_stop and should_stop():
+            counts["stopped_early"] = True
             break
         names, site = lookup_targets(lead)
         if not names and not site:

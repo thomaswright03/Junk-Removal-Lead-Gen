@@ -17,7 +17,7 @@ from . import config, db, export
 from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
-from .util import az_today, decode_text
+from .util import PAUSED_MESSAGE, az_today, decode_text, is_paused
 
 
 def _connect(args):
@@ -82,6 +82,8 @@ def cmd_contacts(args):
     conn = _connect(args)
     if args.action == "find":
         settings = outreach.merged_settings(db.get_settings(conn))
+        if is_paused(settings):
+            sys.exit(PAUSED_MESSAGE)
         providers = providers_from(settings, google_key=args.google_key, conn=conn)
         names = ", ".join(p.name for p in providers)
         print(f"looking up business contacts with: {names} (+ company websites)")
@@ -104,9 +106,12 @@ def cmd_contacts(args):
 
 
 def cmd_cases(args):
+    from . import outreach
     from .sources.pima_jp_case import add_cases, update_cases
 
     conn = _connect(args)
+    if is_paused(outreach.merged_settings(db.get_settings(conn))):
+        sys.exit(PAUSED_MESSAGE)
     if args.action == "add":
         if not args.links:
             sys.exit("cases add needs one or more case links or IDs")

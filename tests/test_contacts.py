@@ -280,7 +280,7 @@ def test_google_stops_at_monthly_limit(tmp_path):
     conn = db.connect(str(tmp_path / "g.db"))
     session = FakePlaces()
     google = GooglePlacesProvider("key", session=session,
-                                  budget=GoogleBudget(conn, limit=2, daily=0))
+                                  budget=GoogleBudget(conn, limit=2, daily=None))
     lead = {"lat": None, "lon": None, "address": None, "property_use": None}
     google.find(lead, "SAGUARO VISTA LLC")
     google.find(lead, "SAGUARO VISTA LLC")
@@ -322,8 +322,12 @@ def test_google_limit_from_settings(tmp_path):
     conn = db.connect(str(tmp_path / "g.db"))
     google = providers_from({"google_places_api_key": "k"}, conn=conn)[-1]
     assert google.name == "google" and google.budget.limit == 1000
+    # 0 means none allowed; no limit is a separate choice (null).
     google = providers_from({"google_places_api_key": "k", "google_monthly_limit": 0}, conn=conn)[-1]
-    assert google.budget.take() and google.budget.limit == 0
+    assert not google.budget.take() and "set to 0" in google.budget.blocked()
+    google = providers_from({"google_places_api_key": "k", "google_monthly_limit": None,
+                             "google_daily_limit": None}, conn=conn)[-1]
+    assert google.budget.take() and google.budget.limit is None
     a = App(str(tmp_path / "w.db"))
     a.save_settings({"google_monthly_limit": "250"})
     assert a.state()["settings"]["google_monthly_limit"] == 250
@@ -433,3 +437,52 @@ def test_contacts_csv_saved_by_excel(tmp_path):
     conn = db.connect(path)
     assert conn.execute("SELECT owner_email FROM leads WHERE parcel = 'P2'").fetchone()[0] == \
         "josé@example.com"
+
+
+def test_google_daily_limit_of_zero_makes_no_search(tmp_path):
+    import pytest
+
+    from leadgen.lookup import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
+
+    conn = db.connect(str(tmp_path / "g.db"))
+    session = FakePlaces()
+    google = GooglePlacesProvider("key", session=session, budget=GoogleBudget(conn, daily=0))
+    with pytest.raises(ProviderUnavailable):
+        google.find({"lat": None, "lon": None, "address": None, "property_use": None}, "X LLC")
+    assert session.calls == 0
+    app = App(str(tmp_path / "w.db"))
+    app.save_settings({"google_daily_limit": 0, "google_monthly_limit": "unlimited"})
+    st = app.state()["settings"]
+    assert st["google_daily_limit"] == 0 and st["google_monthly_limit"] is None
+
+
+def test_parallel_lookups_never_overspend(tmp_path):
+    import threading
+
+    from leadgen.lookup import GoogleBudget
+
+    path = str(tmp_path / "g.db")
+    db.connect(path).close()
+    results = []
+    start = threading.Barrier(4)
+
+    def lookup():
+        conn = db.connect(path)
+        start.wait()
+        results.append(GoogleBudget(conn, limit=None, daily=1).take())
+
+    threads = [threading.Thread(target=lookup) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results.count(True) == 1
+    assert GoogleBudget(db.connect(path)).used_today() == 1
+
+
+def test_turning_google_off_overrides_the_environment_key(tmp_path, monkeypatch):
+    from leadgen.lookup import providers_from
+
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "env-key")
+    assert [p.name for p in providers_from({})] == ["osm", "google"]
+    assert [p.name for p in providers_from({"google_enabled": False})] == ["osm"]

@@ -101,7 +101,7 @@ def test_update_cases_rereads_open_evictions(tmp_path):
     conn.execute("UPDATE leads SET case_checked_at = '2000-01-01T00:00:00+00:00'")
     fake = FakeCases({"1000001": CASE_HTML})
     counts = update_cases(conn, fake, log=lambda m: None)
-    assert counts == {"checked": 1, "with_notice": 1, "failed": 0}
+    assert counts == {"checked": 1, "with_notice": 1, "failed": 0, "total": 1}
     assert conn.execute("SELECT eviction_notice FROM leads").fetchone()[0] == 1
     # Just checked, so a second run skips it.
     assert update_cases(conn, fake, log=lambda m: None)["checked"] == 0
@@ -110,7 +110,7 @@ def test_update_cases_rereads_open_evictions(tmp_path):
 def test_import_saved_case_page(tmp_path):
     app = App(tmp_path / "l.db")
     counts = app.import_file("pima_jp_calendar", "case.html", CASE_HTML.encode())
-    assert counts == {"new": 1, "updated": 0, "with_notice": 1}
+    assert (counts["new"], counts["updated"], counts["with_notice"]) == (1, 0, 1)
     assert app.state()["leads"][0]["url"] == CASE_URL
 
 

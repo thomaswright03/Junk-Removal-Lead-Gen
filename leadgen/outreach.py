@@ -45,6 +45,14 @@ CHANNELS = {
     "property_manager": "Landlord / property manager",
 }
 
+# The kinds of contact logged for each method, with their button labels.
+TOUCH_KINDS = {
+    "door_hanger": [["visited", "Hanger left"], ["talked", "Talked in person"]],
+    "phone": [["no_answer", "No answer"], ["voicemail", "Left voicemail"], ["talked", "Talked"],
+              ["bad_number", "Wrong number"], ["do_not_call", "Asked not to call"]],
+    "property_manager": [["emailed", "Emailed"], ["voicemail", "Left voicemail"], ["talked", "Talked"]],
+}
+
 DEFAULT_SETTINGS = {
     "business_name": "Steve's Junk Removal",
     "business_phone": "",
@@ -54,12 +62,17 @@ DEFAULT_SETTINGS = {
     # Which leads Lead Desk shows and assigns: "eviction_notice" (eviction
     # cases with an eviction notice filed), "evictions" or "all".
     "lead_view": "eviction_notice",
+    # Kill switch: when on, the daily check, court case page reads and every
+    # phone/email lookup stop until it is turned off (also LEADDESK_PAUSED=1).
+    "paused": False,
     # Optional. Google Maps Platform key for the business phone lookup.
     "google_places_api_key": "",
-    # Most Google searches per month; 0 means no limit. 1,000 is Google's free
-    # monthly allowance for searches that return phone numbers.
+    # Off: never search Google, even with GOOGLE_PLACES_API_KEY set.
+    "google_enabled": True,
+    # Most Google searches per month; 0 means none, null means no limit.
+    # 1,000 is Google's free monthly allowance for searches that return phone numbers.
     "google_monthly_limit": 1000,
-    # Most Google searches per day; 0 means no limit.
+    # Most Google searches per day; 0 means none, null means no limit.
     "google_daily_limit": 30,
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
@@ -68,10 +81,19 @@ DEFAULT_SETTINGS = {
             "Need this property cleared? Junk, furniture, appliances, yard debris. "
             "Free quote: {phone}. {business}"
         ),
+        # Phone call to the owner of a property with a City code case.
         "phone": (
             "Hi, this is Steve with {business}. I'm calling about {address}. "
             "We help owners clear junk and yard debris, including when the City has "
             "opened a case. Would a free quote help?"
+        ),
+        # Phone call to the landlord on an eviction case ({at_address} is
+        # " at <address>" when the property is known, otherwise nothing).
+        "phone_eviction": (
+            "Hi {owner_first}, this is Steve with {business}. We clear out rentals after a "
+            "move-out or eviction{at_address}: furniture, trash, appliances and yard debris, "
+            "usually within 48 hours, so the unit is ready to show. Could I give you a free "
+            "quote? {phone}"
         ),
         "property_manager": (
             "Hi, this is Steve with {business}. We do move-out and eviction "
@@ -90,6 +112,13 @@ _TYPE_POINTS = {
 }
 
 
+def _get(row, key):
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
 def merged_settings(stored):
     out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULT_SETTINGS.items()}
     for k, v in (stored or {}).items():
@@ -106,6 +135,10 @@ def score(lead, owner_lead_counts=None, today=None):
     points = 0
     if lead["lead_type"] == "eviction":
         points += 35
+        # A judgment, and above all a writ of restitution (lockout), means the
+        # tenant is out or about to be: the unit needs clearing now.
+        stage = _get(lead, "case_stage")
+        points += 25 if stage == "writ" else 15 if stage == "judgment" else 0
     else:
         desc = (lead["description"] or "").upper()
         if "VACANT/NUISANCE" in desc:
@@ -238,7 +271,7 @@ def assign(conn, leads, count, channels, seed=None):
     # Best landlords first, until the round is full. A landlord's leads stay
     # together, so a big one that doesn't fit waits for the next round.
     chosen = []
-    for key, group in sorted(clusters.items(), key=lambda kv: (-kv[1][0]["score"], kv[0])):
+    for _key, group in sorted(clusters.items(), key=lambda kv: (-kv[1][0]["score"], kv[0])):
         if picked + len(group) > count:
             continue
         chosen.append(group)

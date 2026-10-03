@@ -5,12 +5,16 @@
 1. New City of Tucson code cases (last 30 days).
 2. Eviction hearings on the Justice Court calendar for the next few weeks,
    which is where new eviction filings show up.
-3. Each eviction case page that hasn't been read yet (or is still open and
-   wasn't read today) for the eviction notice and court dates.
+3. Eviction case pages: each one not read yet, each open case whose court
+   date has passed since it was last read, and the other open cases every
+   few days (daily while they have no notice yet), for the eviction notice,
+   judgment, writ of restitution and court dates.
 4. Owners from the county assessor; for evictions, the landlord's property.
 5. Coordinates for new addresses.
 6. Phone, email and website for the landlords and owners of new evictions.
 7. Old leads marked stale.
+
+Nothing runs while Lead Desk is paused (Settings, or LEADDESK_PAUSED=1).
 
 Lead Desk runs this once a day while it is open, and ``leadgen schedule``
 installs a daily job on this computer so it runs even when Lead Desk isn't.
@@ -28,7 +32,7 @@ from .outreach import merged_settings
 from .sources import SOURCES
 from .sources.pima_jp_calendar import CalendarClient
 from .sources.pima_jp_case import update_cases
-from .util import az_now, az_today, now_iso
+from .util import az_now, az_today, is_paused, now_iso
 
 CALENDAR_DAYS_AHEAD = 30
 CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait for tomorrow
@@ -80,6 +84,11 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
     today = today or az_today()
     summary = {"started_at": now_iso()}
     settings = merged_settings(db.get_settings(conn))
+    if is_paused(settings):
+        # The kill switch: no court, county or lookup requests at all.
+        log("paused: nothing checked (turn the pause off in Settings, or unset LEADDESK_PAUSED)")
+        summary.update(paused=True, finished_at=now_iso())
+        return summary
 
     since = (today - timedelta(days=30)).isoformat()
     _step(summary, "tucson_code_cases",
@@ -99,7 +108,7 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
     _step(summary, "evictions", evictions, log)
 
     _step(summary, "cases", lambda: update_cases(conn, case_client, limit=case_limit or CASE_PAGES_PER_RUN,
-                                                 max_age_hours=20, only_unconfirmed=True, log=log),
+                                                 scheduled=True, log=log),
           log)
     _step(summary, "owners", lambda: enrich(conn, parcel_client or ParcelClient()), log)
     _step(summary, "geocode", lambda: geocode_new(conn, geocoder), log)
@@ -125,6 +134,9 @@ def due(conn, now=None, hour=6):
 
 def describe(summary):
     """One line for logs and the Lead Desk header."""
+    if summary.get("paused"):
+        return "paused: nothing was checked"
+
     def n(step, key):
         v = summary.get(step) or {}
         return v.get(key, 0) if isinstance(v, dict) else 0

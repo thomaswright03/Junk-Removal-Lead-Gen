@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS touches (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS touches_lead ON touches(lead_id);
+CREATE TABLE IF NOT EXISTS counters (
+    key TEXT PRIMARY KEY,
+    n   INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

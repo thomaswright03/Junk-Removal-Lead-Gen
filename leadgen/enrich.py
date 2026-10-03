@@ -180,6 +180,27 @@ def enrich_landlords(conn, client=None, limit=None):
     return counts
 
 
+def enrich_lead(conn, client, row, attrs=None, now=None):
+    """Owner columns for one lead (``row`` has id, parcel, address) from its
+    parcel record, or by matching its address. Returns True when found."""
+    if attrs is None and row["address"]:
+        try:
+            attrs = client.by_site_address(row["address"])
+        except Exception:
+            attrs = None
+    now = now or now_iso()
+    if not attrs:
+        conn.execute("UPDATE leads SET enriched_at = ? WHERE id = ?", (now, row["id"]))
+        return False
+    fields = owner_fields(attrs)
+    if not row["parcel"] and attrs.get("PARCEL"):
+        fields["parcel"] = attrs["PARCEL"]
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(f"UPDATE leads SET {sets}, enriched_at = ? WHERE id = ?",
+                 [*fields.values(), now, row["id"]])
+    return True
+
+
 def enrich(conn, client=None, limit=None, refresh=False):
     """Fill owner_* columns. Returns counts by outcome."""
     client = client or ParcelClient()
@@ -197,22 +218,7 @@ def enrich(conn, client=None, limit=None, refresh=False):
     counts = {"found": landlords["found"], "not_found": landlords["not_found"],
               "landlord_property": landlords["with_property"]}
     for r in rows:
-        attrs = by_parcel.get(r["parcel"]) if r["parcel"] else None
-        if attrs is None and r["address"]:
-            try:
-                attrs = client.by_site_address(r["address"])
-            except Exception:
-                attrs = None
-        if attrs:
-            fields = owner_fields(attrs)
-            if not r["parcel"] and attrs.get("PARCEL"):
-                fields["parcel"] = attrs["PARCEL"]
-            sets = ", ".join(f"{k} = ?" for k in fields)
-            conn.execute(f"UPDATE leads SET {sets}, enriched_at = ? WHERE id = ?",
-                         [*fields.values(), now, r["id"]])
-            counts["found"] += 1
-        else:
-            conn.execute("UPDATE leads SET enriched_at = ? WHERE id = ?", (now, r["id"]))
-            counts["not_found"] += 1
+        found = enrich_lead(conn, client, r, by_parcel.get(r["parcel"]) if r["parcel"] else None, now)
+        counts["found" if found else "not_found"] += 1
     conn.commit()
     return counts

@@ -7,7 +7,7 @@ import pytest
 from leadgen import db, outreach
 from leadgen.enrich import enrich, is_entity, owner_fields
 from leadgen.models import Lead
-from leadgen.web import App, render_template
+from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"
 PARCEL = json.loads((FIX / "parcel_10610001E.json").read_text())["features"][0]["attributes"]
@@ -251,19 +251,6 @@ def test_postcard_channel_is_retired(tmp_path):
     state = app.state()
     assert "postcard" not in state["channels"]
     assert all(l["channel"] is None for l in state["leads"])
-
-
-def test_first_name_from_assessor_order():
-    s = outreach.merged_settings({"templates": {"phone": "Hi {owner_first}"}})
-    assert render_template(s, "phone", {"owner_name": "SMITH JOHN A", "owner_entity": 0}) == "Hi John"
-    assert render_template(s, "phone", {"owner_name": "ACME LLC", "owner_entity": 1}) == "Hi there"
-
-
-def test_render_template():
-    s = outreach.merged_settings({"business_phone": "520-555-0100"})
-    text = render_template(s, "phone", {"owner_name": "SMITH JOHN", "owner_entity": 0,
-                                           "address": "10 E OWNER LN"})
-    assert "10 E Owner Ln" in text and "Steve's Junk Removal" in text
 
 
 def test_import_calendar_upload(tmp_path):

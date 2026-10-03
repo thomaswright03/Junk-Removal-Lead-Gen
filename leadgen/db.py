@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS touches (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS touches_lead ON touches(lead_id);
+-- Usage counters (Google lookups per day and month), updated atomically.
+CREATE TABLE IF NOT EXISTS counters (
+    key TEXT PRIMARY KEY,
+    n   INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -102,6 +107,15 @@ _ADDED_COLUMNS = {
     "case_status": "TEXT",
     "next_court_date": "TEXT",
     "case_checked_at": "TEXT",
+    # How far the case has got: filed, notice, judgment, writ or dismissed.
+    "case_stage": "TEXT",
+    "judgment_date": "TEXT",
+    "writ_date": "TEXT",
+    # 1 when Steve added the lead himself (pasted link or imported file).
+    "added_by_hand": "INTEGER",
+    # Unit / apartment number, and "manual" when Steve typed the address in.
+    "unit": "TEXT",
+    "address_source": "TEXT",
 }
 
 # Columns a fetch is allowed to refresh on an existing row. A blank value
@@ -110,6 +124,7 @@ _REFRESHABLE = (
     "lead_type", "event_date", "address", "address_norm", "city", "zip",
     "lat", "lon", "in_pima", "plaintiff", "defendant", "description", "url",
     "parcel", "eviction_notice", "case_status", "next_court_date",
+    "case_stage", "judgment_date", "writ_date",
 )
 
 
@@ -205,11 +220,12 @@ def upsert(conn, lead):
         INSERT INTO leads (source, source_id, lead_type, event_date, address,
             address_norm, city, zip, lat, lon, in_pima, parcel, plaintiff,
             defendant, description, url, eviction_notice, case_status, next_court_date,
-            case_checked_at, first_seen, last_seen, raw_json)
+            case_stage, judgment_date, writ_date, case_checked_at, first_seen, last_seen, raw_json)
         VALUES (:source, :source_id, :lead_type, :event_date, :address,
             :address_norm, :city, :zip, :lat, :lon, :in_pima, :parcel, :plaintiff,
             :defendant, :description, :url, :eviction_notice, :case_status,
-            :next_court_date, :case_checked_at, :now, :now, :raw)
+            :next_court_date, :case_stage, :judgment_date, :writ_date, :case_checked_at,
+            :now, :now, :raw)
         """,
         {"case_checked_at": None, **d, "now": now, "raw": raw},
     )

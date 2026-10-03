@@ -68,3 +68,13 @@ def is_residential(use: str | None) -> bool:
 
 def env_flag(name: str) -> bool:
     return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def is_paused(settings: dict | None = None) -> bool:
+    """The kill switch: Settings "Pause" or LEADDESK_PAUSED=1 in the
+    environment stops the daily check, case page reads and all lookups."""
+    return bool((settings or {}).get("paused")) or env_flag("LEADDESK_PAUSED")
+
+
+PAUSED_MESSAGE = ("Lead Desk is paused, so nothing was checked or looked up. Turn the pause off "
+                  "in Settings (and remove LEADDESK_PAUSED if it is set) to start again.")
