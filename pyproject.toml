@@ -59,3 +59,11 @@ python_version = "3.11"
 packages = ["leadgen"]
 ignore_missing_imports = true
 warn_unused_ignores = true
+
+# The modules that decide which leads Steve chases (ranking, ageing, the
+# daily run, owners and addresses) must be fully annotated.
+[[tool.mypy.overrides]]
+module = ["leadgen.outreach", "leadgen.db", "leadgen.daily", "leadgen.enrich"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true

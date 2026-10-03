@@ -22,17 +22,19 @@ installs a daily job on this computer so it runs even when Lead Desk isn't.
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Iterable, Optional, TextIO
 
 from . import db
 from .enrich import ParcelClient, enrich
 from .geocode import CensusGeocoder
 from .lookup import find_contacts, providers_from
+from .models import Lead
 from .outreach import merged_settings
 from .sources import SOURCES
 from .sources.pima_jp_calendar import CalendarClient
 from .sources.pima_jp_case import update_cases
-from .util import az_now, az_today, is_paused, now_iso
+from .util import Conn, Log, StopCheck, az_now, az_today, is_paused, now_iso
 
 CALENDAR_DAYS_AHEAD = 30
 CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait for tomorrow
@@ -49,7 +51,7 @@ STEP_LABELS = {
 }
 
 
-def _step(summary, name, fn, log):
+def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
     log(f"checking {STEP_LABELS.get(name, name)}")
     try:
         summary[name] = fn()
@@ -58,7 +60,7 @@ def _step(summary, name, fn, log):
         log(f"{name} failed: {type(e).__name__}: {e}")
 
 
-def _upsert_all(conn, leads):
+def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
     counts = {"new": 0, "updated": 0}
     for lead in leads:
         counts[db.upsert(conn, lead)] += 1
@@ -66,10 +68,13 @@ def _upsert_all(conn, leads):
     return counts
 
 
-def geocode_new(conn, geocoder=None, limit=100):
+def geocode_new(conn: Conn, geocoder: Any = None, limit: int = 100, should_stop: StopCheck = None) -> dict:
     geocoder = geocoder or CensusGeocoder()
     counts = {"geocoded": 0, "not_found": 0}
     for row in db.needs_geocode(conn, limit=limit):
+        if should_stop and should_stop():
+            counts["stopped_early"] = True
+            break
         try:
             result = geocoder.geocode(row["address"], row["city"], row["zip"])
         except Exception:
@@ -81,24 +86,24 @@ def geocode_new(conn, geocoder=None, limit=100):
 
 
 def run_daily(
-    conn,
-    stale_days=30,
-    today=None,
-    calendar=None,
-    case_client=None,
-    parcel_client=None,
-    geocoder=None,
-    providers=None,
-    contact_limit=60,
-    case_limit=None,
-    days_ahead=CALENDAR_DAYS_AHEAD,
-    code_cases=None,
-    log=print,
-):
+    conn: Conn,
+    stale_days: int = 30,
+    today: Optional[date] = None,
+    calendar: Any = None,
+    case_client: Any = None,
+    parcel_client: Any = None,
+    geocoder: Any = None,
+    providers: Optional[list] = None,
+    contact_limit: int = 60,
+    case_limit: Optional[int] = None,
+    days_ahead: int = CALENDAR_DAYS_AHEAD,
+    code_cases: Any = None,
+    log: Log = print,
+) -> dict:
     """Run every step and return a summary dict. Each step's failure is logged
     and recorded, and the next step still runs."""
     today = today or az_today()
-    summary = {"started_at": now_iso()}
+    summary: dict[str, Any] = {"started_at": now_iso()}
     settings = merged_settings(db.get_settings(conn))
     if is_paused(settings):
         # The kill switch: no court, county or lookup requests at all.
@@ -106,15 +111,19 @@ def run_daily(
         summary.update(paused=True, finished_at=now_iso())
         return summary
 
-    since = (today - timedelta(days=30)).isoformat()
-    _step(
-        summary,
-        "tucson_code_cases",
-        lambda: _upsert_all(conn, (code_cases or SOURCES["tucson_code_cases"]()).fetch(since, today.isoformat())),
-        log,
-    )
+    # The pause is checked again before every step, and before every request
+    # in the long loops, so pausing stops a run that is already going.
+    stop = db.PauseWatch(conn)
 
-    def evictions():
+    def step(name: str, fn: Callable[[], Any]) -> bool:
+        if stop():
+            return False
+        _step(summary, name, fn, log)
+        return not stop.hit
+
+    since = (today - timedelta(days=30)).isoformat()
+
+    def evictions() -> dict:
         until = (today + timedelta(days=days_ahead)).isoformat()
         if calendar is not None:
             return _upsert_all(conn, calendar.fetch(today.isoformat(), until))
@@ -123,43 +132,57 @@ def run_daily(
         counts["pages"] = client.pages
         return counts
 
-    _step(summary, "evictions", evictions, log)
-
-    _step(
-        summary,
-        "cases",
-        lambda: update_cases(conn, case_client, limit=case_limit or CASE_PAGES_PER_RUN, scheduled=True, log=log),
-        log,
-    )
-    _step(summary, "owners", lambda: enrich(conn, parcel_client or ParcelClient()), log)
-    _step(summary, "geocode", lambda: geocode_new(conn, geocoder), log)
-
-    def contacts():
+    def contacts() -> dict:
         provs = providers if providers is not None else providers_from(settings, conn=conn)
-        return find_contacts(conn, provs, limit=contact_limit, lead_types=("eviction",), log=log)
+        return find_contacts(conn, provs, limit=contact_limit, lead_types=("eviction",), log=log, should_stop=stop)
 
-    _step(summary, "contacts", contacts, log)
-
-    _step(summary, "stale", lambda: db.mark_stale(conn, stale_days, today=today), log)
+    steps = [
+        (
+            "tucson_code_cases",
+            lambda: _upsert_all(conn, (code_cases or SOURCES["tucson_code_cases"]()).fetch(since, today.isoformat())),
+        ),
+        ("evictions", evictions),
+        (
+            "cases",
+            lambda: update_cases(
+                conn,
+                case_client,
+                limit=case_limit or CASE_PAGES_PER_RUN,
+                scheduled=True,
+                log=log,
+                should_stop=stop,
+            ),
+        ),
+        ("owners", lambda: enrich(conn, parcel_client or ParcelClient(), should_stop=stop)),
+        ("geocode", lambda: geocode_new(conn, geocoder, should_stop=stop)),
+        ("contacts", contacts),
+        ("stale", lambda: db.mark_stale(conn, stale_days, today=today)),
+    ]
+    for name, fn in steps:
+        if not step(name, fn):
+            # Paused while running: stop here and say so.
+            log(f"paused during {STEP_LABELS.get(name, name)}: stopped")
+            summary.update(paused=True, paused_during=name)
+            break
     summary["finished_at"] = now_iso()
     db.put_settings(conn, {"last_daily_run": today.isoformat(), "last_daily_summary": summary})
     conn.commit()
     return summary
 
 
-def due(conn, now=None, hour=6):
+def due(conn: Conn, now: Optional[datetime] = None, hour: int = 6) -> bool:
     """True when today's run hasn't happened yet and it's past ``hour`` local time."""
     now = now or az_now().replace(tzinfo=None)
     last = db.get_settings(conn).get("last_daily_run")
     return now.hour >= hour and last != now.date().isoformat()
 
 
-def describe(summary):
+def describe(summary: dict) -> str:
     """One line for logs and the Lead Desk header."""
-    if summary.get("paused"):
+    if summary.get("paused") and not summary.get("paused_during"):
         return "paused: nothing was checked"
 
-    def n(step, key):
+    def n(step: str, key: str) -> int:
         v = summary.get(step) or {}
         return v.get(key, 0) if isinstance(v, dict) else 0
 
@@ -169,13 +192,24 @@ def describe(summary):
         f"{n('contacts', 'found')} landlord contacts found",
         f"{n('tucson_code_cases', 'new')} new code cases",
     ]
+    # Lookups that failed (service down, bad Google key) are not the same as
+    # "no number exists", so say how many and that they are tried again.
+    failed = n("contacts", "errors")
+    if failed:
+        lookups = f"{failed} lookup{'' if failed == 1 else 's'}"
+        cause = (summary.get("contacts") or {}).get("error_cause")
+        hint = "; check the Google key in Settings" if cause == "google_key" else ""
+        parts[2] += f", {lookups} failed (will retry tomorrow{hint})"
     errors = [k for k, v in summary.items() if isinstance(v, dict) and "error" in v]
     if errors:
         parts.append("failed: " + ", ".join(errors))
+    if summary.get("paused_during"):
+        label = STEP_LABELS.get(summary["paused_during"], summary["paused_during"])
+        parts.append(f"stopped at {label} because Lead Desk was paused")
     return ", ".join(parts)
 
 
-def counts_only(summary):
+def counts_only(summary: dict) -> dict:
     """The summary with error messages cut to the error type, for public logs
     (an error message can quote a request that carries a landlord's name)."""
     out = {}
@@ -186,6 +220,6 @@ def counts_only(summary):
     return out
 
 
-def main_log(summary, out=sys.stdout, public=False):
+def main_log(summary: dict, out: TextIO = sys.stdout, public: bool = False) -> None:
     print(datetime.now().strftime("%Y-%m-%d %H:%M"), describe(summary), file=out)
     print(json.dumps(counts_only(summary) if public else summary, default=str), file=out)

@@ -16,7 +16,8 @@ The Results tab compares channels, so each channel has to get the same kind
 of leads. ``assign`` makes that so:
 
 - A round uses only leads that every ticked channel can work (door hangers
-  need a property address), so no channel gets the leads the others can't.
+  need a property address, and a unit number or Steve's confirmation at an
+  apartment or condo parcel), so no channel gets the leads the others can't.
 - Every lead of one landlord or owner goes to the same channel, in this round
   and later ones, so no company hears from two channels.
 - Leads are grouped by kind (address or not, eviction or code case), sorted by
@@ -35,9 +36,10 @@ import random
 import re
 import uuid
 from datetime import date
+from typing import Any, Optional
 
 from .tucson_codes import code_of
-from .util import az_today, now_iso
+from .util import Conn, LeadRow, az_today, is_multifamily, now_iso
 
 CHANNELS = {
     "door_hanger": "Door hanger at property",
@@ -122,15 +124,15 @@ _TYPE_POINTS = {
 }
 
 
-def _get(row, key):
+def _get(row: LeadRow, key: str) -> Any:
     try:
         return row[key]
     except (KeyError, IndexError):
         return None
 
 
-def merged_settings(stored):
-    out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULT_SETTINGS.items()}
+def merged_settings(stored: Optional[dict]) -> dict:
+    out: dict[str, Any] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULT_SETTINGS.items()}
     for k, v in (stored or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k].update(v)
@@ -139,7 +141,53 @@ def merged_settings(stored):
     return out
 
 
-def score(lead, owner_lead_counts=None, today=None):
+def _iso_date(value: Any) -> Optional[date]:
+    try:
+        return date.fromisoformat(str(value)[:10]) if value else None
+    except ValueError:
+        return None
+
+
+def date_label(lead: LeadRow) -> str:
+    """What a lead's ``event_date`` is: "Hearing" for an eviction found on the
+    court calendar whose case page hasn't been read yet (the calendar lists
+    upcoming hearings), "Filed" once the case page has been read (or for a
+    filing from an imported list), "Opened" for a City code case."""
+    if lead["lead_type"] == "code_violation":
+        return "Opened"
+    if lead["lead_type"] in ("eviction", "civil"):
+        if _get(lead, "source") == "pima_jp_calendar" and not _get(lead, "case_checked_at"):
+            return "Hearing"
+        return "Filed"
+    return "Dated"
+
+
+def case_events(lead: LeadRow) -> list[tuple[str, str]]:
+    """The lead's real events so far as ``[(label, iso date)]``: filing (or
+    opening), judgment and writ. A hearing is not an event that happened."""
+    out = []
+    label = date_label(lead)
+    if label != "Hearing" and _iso_date(lead["event_date"]):
+        out.append((label, str(lead["event_date"])[:10]))
+    for label, key in (("Judgment", "judgment_date"), ("Writ", "writ_date")):
+        if _iso_date(_get(lead, key)):
+            out.append((label, str(_get(lead, key))[:10]))
+    return out
+
+
+def latest_event(lead: LeadRow, today: Optional[date] = None) -> tuple[Optional[str], Optional[str]]:
+    """``(label, iso date)`` of the most recent real event on or before today
+    (an eviction's filing, judgment or writ; a code case's opening), or
+    ``(None, None)``. How fresh a lead is is measured from here."""
+    today = today or az_today()
+    best: tuple[Optional[str], Optional[str]] = (None, None)
+    for label, iso in case_events(lead):
+        if iso <= today.isoformat() and (best[1] is None or iso >= best[1]):
+            best = (label, iso)
+    return best
+
+
+def score(lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None) -> int:
     """0-100ish. ``lead`` is a dict/row with the leads table's columns."""
     today = today or az_today()
     points = 0
@@ -162,18 +210,32 @@ def score(lead, owner_lead_counts=None, today=None):
     if owner_lead_counts and lead["owner_name"]:
         if owner_lead_counts.get(lead["owner_name"], 0) > 1:
             points += 10
-    if lead["event_date"]:
-        try:
-            age = (today - date.fromisoformat(lead["event_date"][:10])).days
-            points += 15 if age <= 7 else 8 if age <= 14 else 0
-        except ValueError:
-            pass
+    # Recency from the latest thing that actually happened (filing, judgment,
+    # writ), never from an upcoming hearing or any other future date.
+    _label, when = latest_event(lead, today)
+    if when:
+        age = (today - date.fromisoformat(when)).days
+        points += 15 if age <= 7 else 8 if age <= 14 else 0
     return points
 
 
-def eligible_channels(lead):
+def door_hanger_problem(lead: LeadRow) -> Optional[str]:
+    """Why a door hanger can't go to this lead yet, or None when it can:
+    ``"no_address"``, or ``"needs_unit"`` for an apartment / condo parcel with
+    no unit number (a complex has no single door to hang it on) until Steve
+    types the unit or confirms the address."""
+    if not lead["address"]:
+        return "no_address"
+    if _get(lead, "unit") or _get(lead, "address_source") == "confirmed":
+        return None
+    if is_multifamily(_get(lead, "property_use")):
+        return "needs_unit"
+    return None
+
+
+def eligible_channels(lead: LeadRow) -> list[str]:
     out = []
-    if lead["address"]:
+    if door_hanger_problem(lead) is None:
         out.append("door_hanger")
     if lead["owner_name"] or lead["plaintiff"]:
         out.append("phone")
@@ -182,14 +244,14 @@ def eligible_channels(lead):
     return out
 
 
-def _num(value):
+def _num(value: Any) -> Optional[float]:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
 
 
-def miles_between(lat1, lon1, lat2, lon2):
+def miles_between(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> Optional[float]:
     lat1, lon1, lat2, lon2 = (_num(v) for v in (lat1, lon1, lat2, lon2))
     if None in (lat1, lon1, lat2, lon2):
         return None
@@ -205,7 +267,7 @@ def miles_between(lat1, lon1, lat2, lon2):
 RETIRED_CHANNELS = ("postcard",)
 
 
-def retire_channels(conn):
+def retire_channels(conn: Conn) -> int:
     marks = ",".join("?" * len(RETIRED_CHANNELS))
     cur = conn.execute(
         f"UPDATE leads SET channel = NULL, assigned_at = NULL WHERE channel IN ({marks})",
@@ -215,7 +277,7 @@ def retire_channels(conn):
     return cur.rowcount
 
 
-def landlord_key(lead):
+def landlord_key(lead: LeadRow) -> str:
     """Who answers for a lead: the eviction's landlord (first plaintiff), else
     the owner of record. Leads with neither stand alone."""
     for raw in (lead["plaintiff"], lead["owner_name"]):
@@ -225,16 +287,18 @@ def landlord_key(lead):
     return f"lead:{lead['id']}"
 
 
-def _stratum(lead):
-    return (bool(lead["address"]), lead["lead_type"] == "eviction")
+def _stratum(lead: LeadRow) -> tuple[bool, bool]:
+    # "Has an address" means one a door hanger can go to (see door_hanger_problem).
+    return (door_hanger_problem(lead) is None, lead["lead_type"] == "eviction")
 
 
-def assign(conn, leads, count, channels, seed=None):
+def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None) -> dict:
     """Deal up to ``count`` of the best unassigned leads across ``channels``
     so that each channel gets a like-for-like share (see the module notes).
 
     Returns counts: ``{"assigned": {channel: n}, "followed": {channel: n},
-    "left_out": {"needs_address": n, "no_contact": n}, "round": id}``.
+    "left_out": {"needs_address": n, "needs_unit": n, "no_contact": n},
+    "round": id}``.
     ``followed`` are leads whose landlord already has a channel from an
     earlier round: they go to that channel, outside the balanced split.
     """
@@ -246,7 +310,7 @@ def assign(conn, leads, count, channels, seed=None):
     round_id = now_iso() + "-" + uuid.uuid4().hex[:6]
     now = now_iso()
 
-    taken = {}
+    taken: dict[str, str] = {}
     for r in conn.execute(
         "SELECT id, plaintiff, owner_name, channel FROM leads WHERE channel IS NOT NULL ORDER BY assigned_at, id"
     ).fetchall():
@@ -254,21 +318,21 @@ def assign(conn, leads, count, channels, seed=None):
 
     pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
     pool.sort(key=lambda l: (-l["score"], l["id"]))
-    out = {
+    out: dict[str, Any] = {
         "assigned": {c: 0 for c in channels},
         "followed": {},
-        "left_out": {"needs_address": 0, "no_contact": 0},
+        "left_out": {"needs_address": 0, "needs_unit": 0, "no_contact": 0},
         "round": round_id,
     }
 
-    def give(lead, ch, round_):
+    def give(lead: LeadRow, ch: str, round_: Optional[str]) -> None:
         conn.execute(
             "UPDATE leads SET channel = ?, assigned_at = ?, assign_round = ? WHERE id = ?",
             (ch, now, round_, lead["id"]),
         )
 
     picked = 0
-    clusters = {}  # landlord -> leads, in score order
+    clusters: dict[str, list] = {}  # landlord -> leads, in score order
     for lead in pool:
         eligible = eligible_channels(lead)
         key = landlord_key(lead)
@@ -281,7 +345,11 @@ def assign(conn, leads, count, channels, seed=None):
             continue
         missing = [c for c in channels if c not in eligible]
         if missing:
-            out["left_out"]["needs_address" if missing == ["door_hanger"] else "no_contact"] += 1
+            if missing == ["door_hanger"]:
+                reason = "needs_unit" if door_hanger_problem(lead) == "needs_unit" else "needs_address"
+            else:
+                reason = "no_contact"
+            out["left_out"][reason] += 1
             continue
         clusters.setdefault(key, []).append(lead)
 
@@ -297,7 +365,7 @@ def assign(conn, leads, count, channels, seed=None):
     # Deal within each kind of lead, best first, in blocks of len(channels):
     # every channel gets one group per block, in random order, the larger
     # groups going to the channels that are behind on leads of that kind.
-    by_stratum = {}
+    by_stratum: dict[tuple[bool, bool], list] = {}
     for group in chosen:
         by_stratum.setdefault(_stratum(group[0]), []).append(group)
     for stratum in sorted(by_stratum):
@@ -318,21 +386,21 @@ def assign(conn, leads, count, channels, seed=None):
     return out
 
 
-def _mix(rows):
+def _mix(rows: list) -> dict:
     """What kind of leads a channel got."""
     n = len(rows)
     if not n:
         return {"leads": 0, "with_address": None, "evictions": None, "avg_score": None, "set_by_hand": 0}
     return {
         "leads": n,
-        "with_address": sum(1 for r in rows if r["address"]) / n,
+        "with_address": sum(1 for r in rows if door_hanger_problem(r) is None) / n,
         "evictions": sum(1 for r in rows if r["lead_type"] == "eviction") / n,
         "avg_score": round(sum(r["_score"] for r in rows) / n, 1),
         "set_by_hand": sum(1 for r in rows if not r["assign_round"]),
     }
 
 
-def results(conn, today=None):
+def results(conn: Conn, today: Optional[date] = None) -> list[dict]:
     """Per-channel funnel and cost numbers, and the mix of leads each got."""
     rows = conn.execute(
         """
@@ -349,7 +417,7 @@ def results(conn, today=None):
         "AND duplicate_of IS NULL GROUP BY owner_name"
     ).fetchall():
         owner_counts[r["owner_name"]] = r["n"]
-    by = {}
+    by: dict[str, list] = {}
     for r in rows:
         d = dict(r)
         d["_score"] = score(r, owner_counts, today=today)
@@ -389,7 +457,7 @@ MIX_TOLERANCE = {"with_address": 0.15, "evictions": 0.15, "avg_score": 8}
 MIN_CONTACTS = 20
 
 
-def comparison(results_rows):
+def comparison(results_rows: list[dict]) -> dict:
     """Can the channels be ranked yet? ``{"fair": bool, "ready": bool,
     "reasons": [plain sentences]}``. ``fair`` means the channels got the same
     mix of leads; ``ready`` adds that each has enough contacts to judge."""
