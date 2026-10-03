@@ -102,7 +102,9 @@ in the Consolidated Justice Court at 240 N. Stone Ave, Tucson.
 - **Records request**: https://www.jp.pima.gov/OnlineRecordsRequest/Default.aspx -
   the way to get filings **with property addresses**. Worth asking the court
   whether they can send a recurring report of new eviction filings; drop each
-  report into `leadgen fetch --source csv_import --lead-type eviction --file ...`.
+  report into `leadgen fetch --source csv_import --lead-type eviction --file ...`,
+  or import it with **Import court page / CSV** in Lead Desk, where rows whose
+  case number matches a case already listed fill in that case's address.
 - **Arizona Public Access / eAccess do not cover it.** The statewide Public
   Access site lists Pima Consolidated Justice Court as not included
   (https://apps.azcourts.gov/publicaccess/courtsnotinc.aspx), and eAccess is

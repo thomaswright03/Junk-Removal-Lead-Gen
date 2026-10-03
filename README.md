@@ -75,9 +75,15 @@ or set its limits to 0.
   restitution, the lockout that leaves belongings behind), plus cases you
   imported whose case page hasn't been read yet (marked "case not checked").
   Dismissed cases, and closed cases that never reached a judgment, drop out.
-  The "Show" menu switches to all evictions, or all leads including Tucson
-  code cases. The header says how many court cases are still waiting to be
-  checked and when the next check runs. Paste Justice Court case links
+  The "Show" menu switches to all evictions, or all leads including City
+  code cases (it says how many code cases there are; code cases cover the
+  City of Tucson only, not unincorporated Pima County, Marana, Oro Valley,
+  Sahuarita or South Tucson). The header is one short line (open leads, when
+  the last check finished, a warning sign if a lookup failed); **Details**
+  shows the full summary, how many court cases are still waiting to be
+  checked and when the next check runs. The Leads tab also says how many
+  open eviction leads have a confirmed or typed address, and an eviction
+  with no address shows a "Find the address" checklist. Paste Justice Court case links
   (`jcDisplayCase.aspx?ID=...`) into **Add cases** to add cases by hand;
   Lead Desk reads each case page for the eviction notice, judgment, writ,
   parties and next court date. Each open lead is ranked by priority, with the
@@ -112,13 +118,21 @@ or set its limits to 0.
   leads go to the same method (now and in later rounds), and leads are dealt
   in small random blocks within each kind (address or not, eviction or code
   case) so each method gets the same mix and a similar spread of priority.
-  Each method has its own work queue: a driving route for door hangers, a
-  call list with a script, and a list of companies to pitch.
+  Before you press it, the tab says how many unassigned leads each choice of
+  methods can split, ticks only methods the leads can all be worked by, and
+  offers to untick the method that blocks a round. Leads whose landlord is
+  already being worked by a method follow it; they don't count toward the
+  round's number and are reported separately. Each method has its own work
+  queue: a driving route for door hangers, a call list with a script, and a
+  list of companies to pitch.
 - **Results**: per method, how many leads were contacted, responded, were
   quoted and won, what was spent, revenue, cost per job and revenue per
   dollar, and the mix of leads each method got. Lead Desk names a leader
   only when the mixes match; otherwise it says why the comparison isn't
-  fair yet.
+  fair yet. Leads that followed their landlord's method are counted in their
+  own column and left out of the mix; "set by hand" counts only methods
+  changed on the lead. Money is kept in whole cents; a quote or revenue over
+  $100,000 (or a contact cost over $1,000) is refused as a likely typo.
 - **Settings**: business name and phone, a tracking phone number and cost
   per contact for each channel, and the message templates.
 
@@ -192,7 +206,9 @@ leadgen run
 That pulls new City of Tucson code cases, looks up each owner from the county
 assessor, geocodes addresses and checks they
 are in Pima County, marks leads whose latest event is older than 30 days as stale, and writes
-`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`. Open the
+`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, highest
+priority first as in Lead Desk, with the priority, case stage, notice flag and
+latest event (Filed, Judgment, Writ, Opened) in the first columns. Open the
 HTML file in a browser to search and filter; open the CSV in Excel or import it
 into a CRM.
 
@@ -216,6 +232,12 @@ Add any spreadsheet of leads (a records-request export, a writ list, referrals):
 ```sh
 leadgen fetch --source csv_import --lead-type eviction --file data/inbox/filings.csv
 ```
+
+In Lead Desk, **Import court page / CSV** does the same, and rows whose case
+number matches a court case already in Lead Desk fill in that case's
+property address instead of adding a lead (an address you typed or
+confirmed is kept). That is the way to get real addresses for evictions: a
+Justice Court records request (see docs/DATA_SOURCES.md) lists them.
 
 Columns are matched by name: `address`, `case number`, `date filed`,
 `landlord`/`plaintiff`, `tenant`/`defendant`, `notes`, and a few variants.
