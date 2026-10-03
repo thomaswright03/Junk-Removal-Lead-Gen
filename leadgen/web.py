@@ -154,6 +154,7 @@ class App(JobRunner):
             settings = self.settings(conn)
             public = dict(settings)
             public.pop("last_daily_summary", None)
+            public.pop("address_history", None)  # sent as "addresses"
             key = public.pop("google_places_api_key", "") or ""
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
             public["google_key_from_env"] = bool(os.environ.get("GOOGLE_PLACES_API_KEY"))
@@ -168,6 +169,7 @@ class App(JobRunner):
                     conn, params.get("status", "open") if params and params.get("list") == "leads" else "open"
                 ),
                 "counts": leadlist.counts(conn, settings),
+                "addresses": leadlist.address_progress(conn, settings),
                 "settings": public,
                 "channels": outreach.CHANNELS,
                 "touch_kinds": outreach.TOUCH_KINDS,
@@ -496,6 +498,12 @@ class App(JobRunner):
                 # has fill in their property address instead of adding a lead.
                 filled = fill_case_addresses(conn, leads)
                 counts["addresses_filled"] = len(filled)
+                if filled:
+                    # A records request came in: the next one asks from today on.
+                    db.put_settings(
+                        conn, {"last_records_import": {"date": az_today().isoformat(), "filled": len(filled)}}
+                    )
+                    leadlist.record_address_share(conn, self.settings(conn))
                 leads = [l for l in leads if l.source_id not in filled]
                 counts["imported"] -= len(filled)
             for lead in leads:

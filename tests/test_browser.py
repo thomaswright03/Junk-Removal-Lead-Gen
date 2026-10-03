@@ -328,6 +328,47 @@ def test_methods_on_an_eviction_say_who_they_reach_and_what_they_offer(server, p
     page.wait_for_selector("#rBasis >> text=City code cases only")
 
 
+def test_address_work_queue_confirms_a_guess_in_one_click(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000002-EA",
+            "eviction",
+            "2026-09-28",
+            None,
+            plaintiff="MESA RENTALS LLC",
+            defendant="ROE, SAM",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute(
+        "UPDATE leads SET address = '5 W GUESS ST', address_source = 'landlord' WHERE source_id = 'CV26-000002-EA'"
+    )
+    conn.commit()
+    page.goto(url)
+    page.click("#fNeedAddr")
+    page.wait_for_selector("#recordsCard")
+    # What to ask the court for, with the dates, and where.
+    assert "special detainer" in page.inner_text("#recAsk")
+    assert page.get_attribute("#recordsCard a", "href").startswith("https://www.jp.pima.gov/OnlineRecordsRequest")
+    rows = page.locator("#addrTable tbody tr.click")
+    assert rows.count() == 2
+    guess = page.locator("#addrTable tr.click", has_text="CV26-000002-EA")
+    assert "tenant Roe, Sam" in guess.inner_text() and "Mesa Rentals LLC" in guess.inner_text()
+    # The landlord's properties open under the row.
+    page.locator("#addrTable tr.click", has_text="CV26-000001-EA").locator("[data-aprops]").click()
+    page.wait_for_selector("tr.aprops:not([hidden]) >> text=No properties found")
+    guess.locator("[data-aconfirm]").click()
+    page.wait_for_selector("text=Address confirmed")
+    page.wait_for_function("document.querySelectorAll('#addrTable tbody tr.click').length === 1")
+    row = db.connect(path).execute("SELECT address_source FROM leads WHERE source_id = 'CV26-000002-EA'").fetchone()
+    assert row[0] == "confirmed"
+
+
 def test_reload_keeps_the_filter_and_the_open_lead(server, page):
     url, app, _ = server
     page.goto(url)

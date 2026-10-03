@@ -26,7 +26,7 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Iterable, Optional, TextIO
 
-from . import db
+from . import db, leadlist
 from .enrich import ParcelClient, enrich
 from .geocode import CensusGeocoder
 from .lookup import find_contacts, providers_from
@@ -170,6 +170,10 @@ def run_daily(
             summary.update(paused=True, paused_during=name)
             break
     summary["finished_at"] = now_iso()
+    try:
+        leadlist.record_address_share(conn, settings, today)
+    except Exception as e:  # a progress number must never fail the check
+        log(f"address progress not saved: {type(e).__name__}")
     values: dict[str, Any] = {"last_daily_summary": summary}
     if summary.get("paused_during"):
         # Stopped part way: not today's run. Once the pause is off it runs

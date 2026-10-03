@@ -87,7 +87,17 @@ or set its limits to 0.
   shows the full summary, how many court cases are still waiting to be
   checked and when the next check runs. The Leads tab also says how many
   open eviction leads have a confirmed or typed address, and an eviction
-  with no address shows a "Find the address" checklist. Paste Justice Court case links
+  with no address shows a "Find the address" checklist. The share of open
+  evictions with an address is shown next to the share a week ago (from a
+  snapshot the daily check keeps). **Work through the ones that need one**
+  (or Address work queue under the kind filter) lists the evictions with no
+  address or only a guess, with the case, tenant and landlord side by side:
+  **Confirm** accepts a guess in one click, **Landlord's properties** lists
+  the landlord's parcels with a **Use** button each. Above it, the
+  records-request card says what to ask the court for (the dates since the
+  last file you imported), links the court's request form, copies the
+  request, imports the file the court sends, and says when the next one is
+  due (every two weeks). Paste Justice Court case links
   (`jcDisplayCase.aspx?ID=...`) into **Add cases** to add cases by hand;
   Lead Desk reads each case page for the eviction notice, judgment, writ,
   parties and next court date. Each open lead is ranked by priority, with the

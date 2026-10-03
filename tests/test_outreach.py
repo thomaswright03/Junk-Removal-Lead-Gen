@@ -1,12 +1,14 @@
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from leadgen import db, outreach
+from leadgen import db, leadlist, outreach
 from leadgen.enrich import enrich, is_entity, owner_fields
 from leadgen.models import Lead
+from leadgen.util import az_today
 from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"
@@ -531,8 +533,15 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
     )
     conn.commit()
     app = App(path, parcel_client=FakeParcels([]))
-    before = app.state({"list": "leads"})["counts"]
+    state = app.state({"list": "leads", "type": "address_work"})
+    before = state["counts"]
     assert (before["evictions_open"], before["evictions_with_address"]) == (7, 2)
+    # The work queue: open evictions with no address or only a guess.
+    queue = {l["source_id"] for l in state["list"]["leads"]}
+    assert "CV26-000001-EA" in queue and "CV26-000002-EA" not in queue
+    assert all(l["lead_type"] == "eviction" for l in state["list"]["leads"])
+    records = state["addresses"]["records"]
+    assert records["last_import"] is None and records["due"]
     csv = (
         "Case Number,Property Address,Plaintiff\n"
         "CV26-000000-EA,10 N FOUND AVE,CACTUS 0 LLC\n"
@@ -550,6 +559,29 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
     after = app.state({"list": "leads"})["counts"]
     # Three filled or kept, plus the new case from the file.
     assert (after["evictions_open"], after["evictions_with_address"]) == (8, 5)
+    # The next request asks from today on, in two weeks.
+    records = app.state({"list": "leads"})["addresses"]["records"]
+    today = az_today()
+    assert records["last_import"] == today.isoformat() and records["last_filled"] == 3
+    assert records["request_from"] == today.isoformat() and not records["due"]
+    assert records["due_on"] == (today + timedelta(days=14)).isoformat()
+
+
+def test_address_share_is_kept_daily_and_compared_with_a_week_ago(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    today = az_today()
+    week_ago = (today - timedelta(days=8)).isoformat()
+    db.put_settings(conn, {"address_history": {week_ago: [1, 10], "2020-01-01": [0, 1]}})
+    conn.commit()
+    leadlist.record_address_share(conn, db.get_settings(conn), today)
+    conn.commit()
+    history = db.get_settings(conn)["address_history"]
+    assert "2020-01-01" not in history  # only the last two months are kept
+    assert history[today.isoformat()] == [1, 7] and history[week_ago] == [1, 10]
+    progress = App(path).state({"list": "leads"})["addresses"]
+    assert progress["week_ago"] == {"date": week_ago, "with_address": 1, "open": 10}
 
 
 @pytest.mark.parametrize(
