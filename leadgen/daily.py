@@ -26,6 +26,7 @@ from .geocode import CensusGeocoder
 from .lookup import find_contacts, providers_from
 from .outreach import merged_settings
 from .sources import SOURCES
+from .sources.pima_jp_calendar import CalendarClient
 from .sources.pima_jp_case import update_cases
 
 CALENDAR_DAYS_AHEAD = 30
@@ -86,9 +87,14 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
           log)
 
     def evictions():
-        source = calendar or SOURCES["pima_jp_calendar"]()
         until = (today + timedelta(days=days_ahead)).isoformat()
-        return _upsert_all(conn, source.fetch(today.isoformat(), until))
+        if calendar is not None:
+            return _upsert_all(conn, calendar.fetch(today.isoformat(), until))
+        client = CalendarClient()
+        counts = _upsert_all(conn, SOURCES["pima_jp_calendar"]().fetch(
+            today.isoformat(), until, client=client))
+        counts["pages"] = client.pages
+        return counts
     _step(summary, "evictions", evictions, log)
 
     _step(summary, "cases", lambda: update_cases(conn, case_client, limit=case_limit or CASE_PAGES_PER_RUN,

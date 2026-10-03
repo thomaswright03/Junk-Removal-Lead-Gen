@@ -4,7 +4,7 @@ from pathlib import Path
 from leadgen import daily, db, schedule
 from leadgen.enrich import enrich_landlords, landlord_name, landlord_property
 from leadgen.lookup import Contact
-from leadgen.sources.pima_jp_calendar import CalendarClient, PimaJpCalendar, parse_calendar_html
+from leadgen.sources.pima_jp_calendar import CalendarClient, PimaJpCalendar, has_page_link, parse_calendar_html
 from leadgen.sources.pima_jp_case import case_id, parse_case_html
 
 FIX = Path(__file__).parent / "fixtures"
@@ -46,6 +46,12 @@ def test_parse_live_calendar_rows():
     assert lead.url == "https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=1000001"
 
 
+def test_page_links_with_either_quote():
+    assert has_page_link("__doPostBack('grid','Page$2')", 2)
+    assert has_page_link("__doPostBack(&#39;grid&#39;,&#39;Page$11&#39;)", 11)
+    assert not has_page_link("__doPostBack(&#39;grid&#39;,&#39;Page$12&#39;)", 1)
+
+
 def test_calendar_search_reads_every_page():
     court = FakeCourt()
     client = CalendarClient(session=court, delay=0)
@@ -56,6 +62,7 @@ def test_calendar_search_reads_every_page():
     assert first["ctl00$MainContent$drpDnEventType"] == "Eviction Action"
     assert first["startDate"] == "10-03-2026" and first["endDate"] == "11-02-2026"
     assert second["__EVENTARGUMENT"] == "Page$2" and second["__VIEWSTATE"] == "vs1"
+    assert client.pages == 2
 
 
 def parcel(pid, owner, site, use="APARTMENTS 25+ UNITS"):

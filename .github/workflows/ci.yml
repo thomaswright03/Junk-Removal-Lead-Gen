@@ -52,6 +52,7 @@ jobs:
           print("lat/lon types", [tuple(r) for r in c.execute("SELECT typeof(lat), typeof(lon), COUNT(*) FROM leads GROUP BY 1, 2")])
           print(len(a.state()["leads"]), "leads in state")
           assert s["evictions"].get("new", 0) > 0, "calendar search found no evictions"
+          assert s["evictions"]["new"] < 50 or s["evictions"]["pages"] > 1, "calendar stopped after the first results page"
           PY
       - name: Lead Desk state on live data (counts only)
         run: >

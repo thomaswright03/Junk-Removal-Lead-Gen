@@ -161,6 +161,12 @@ def _form_fields(html):
             if i.get("name") and i.get("type") not in ("submit", "button", "image")}
 
 
+def has_page_link(html, n):
+    """True when the results pager links to page ``n``. ASP.NET writes the
+    postback quotes as ``'`` or ``&#39;`` depending on the page."""
+    return re.search(rf"Page\${n}(?:'|&#39;|&#039;|&quot;)", html) is not None
+
+
 class CalendarClient:
     """Runs the calendar search the way the court's page does: Case Type
     "Eviction Actions", Event Type "Eviction Action", a date range, then every
@@ -171,6 +177,7 @@ class CalendarClient:
         self.session.headers["User-Agent"] = USER_AGENT
         self.delay = delay
         self.max_pages = max_pages
+        self.pages = 0
 
     def _post(self, data):
         time.sleep(self.delay)
@@ -191,12 +198,14 @@ class CalendarClient:
             "ctl00$MainContent$submitFilter": "submit",
         })
         html = self._post(data)
+        self.pages = 1
         yield html
         n = 2
-        while n <= self.max_pages and f"Page${n}'" in html:
+        while n <= self.max_pages and has_page_link(html, n):
             data = _form_fields(html)
             data.update({"__EVENTTARGET": GRID, "__EVENTARGUMENT": f"Page${n}"})
             html = self._post(data)
+            self.pages = n
             yield html
             n += 1
 
