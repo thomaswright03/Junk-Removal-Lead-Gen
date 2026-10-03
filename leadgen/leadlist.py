@@ -235,7 +235,9 @@ def page(conn, settings, params):
         touched = {r["lead_id"] for r in conn.execute("SELECT DISTINCT lead_id FROM touches").fetchall()}
     rows = sort_leads([l for l in leads if _keep(l, params, touched)], params.get("sort") or "score")
     limit = _int(params.get("limit"), PAGE_SIZE, 1, MAX_PAGE)
-    offset = _int(params.get("offset"), 0, 0, max(0, len(rows) - 1))
+    # Past the end (the list shrank since the page was drawn): the last page.
+    last_page = (max(0, len(rows) - 1) // limit) * limit
+    offset = _int(params.get("offset"), 0, 0, last_page)
     shown = attach_touches(conn, rows[offset : offset + limit])
     return {"leads": shown, "total": len(rows), "offset": offset, "limit": limit}
 

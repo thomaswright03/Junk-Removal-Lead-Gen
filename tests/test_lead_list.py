@@ -89,6 +89,8 @@ def test_list_is_filtered_sorted_and_paged_on_the_server(desk):
     page = app.state({"list": "leads", "status": "open", "offset": "200"})["list"]
     assert page["total"] == 249 and page["offset"] == 200 and len(page["leads"]) == 49
     assert app.state({"list": "leads", "status": ""})["list"]["total"] == 250
+    past_end = app.state({"list": "leads", "status": "open", "offset": "900"})["list"]
+    assert past_end["offset"] == 200 and len(past_end["leads"]) == 49
     phones = app.state({"list": "leads", "type": "has_phone"})["list"]["leads"]
     assert sorted(l["source_id"] for l in phones) == ["CE-7", "CE-8"]
     found = app.state({"list": "leads", "q": "123 w sample"})["list"]["leads"]
