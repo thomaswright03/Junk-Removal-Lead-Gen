@@ -468,6 +468,29 @@ def split_preview(conn: Conn, leads: list) -> dict:
     return {"combos": combos, "followed": followed, "suggested": list(best)}
 
 
+def check_channels(channels: Any, single_method: bool = False) -> list[str]:
+    """The methods for an Assign leads round, checked: a list of known
+    method names, at least two unless ``single_method`` (a round with one
+    method compares nothing, so the page asks first)."""
+    if not isinstance(channels, (list, tuple)) or not all(isinstance(c, str) for c in channels):
+        raise ValueError("Outreach methods must be a list of method names.")
+    unknown = [c for c in dict.fromkeys(channels) if c not in CHANNELS]
+    if unknown:
+        raise ValueError(
+            f"Unknown outreach method{'' if len(unknown) == 1 else 's'}: {', '.join(unknown)}. "
+            f"The methods are: {', '.join(CHANNELS)}."
+        )
+    chosen = list(dict.fromkeys(channels))
+    if not chosen:
+        raise ValueError("Tick at least one outreach method.")
+    if len(chosen) < 2 and not single_method:
+        raise ValueError(
+            "With one method ticked the round can't compare methods. Tick two or more, "
+            "or confirm that you want a one-method round."
+        )
+    return chosen
+
+
 def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None) -> dict:
     """Deal up to ``count`` of the best unassigned leads across ``channels``
     so that each channel gets a like-for-like share (see the module notes).
@@ -481,9 +504,7 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     and they are stored as followed, not as dealt or set by hand.
     """
     rng = random.Random(seed)
-    channels = [c for c in dict.fromkeys(channels) if c in CHANNELS]
-    if not channels:
-        raise ValueError("Tick at least one outreach method.")
+    channels = check_channels(channels, single_method=True)
     count = max(0, int(count))
     round_id = now_iso() + "-" + uuid.uuid4().hex[:6]
     now = now_iso()

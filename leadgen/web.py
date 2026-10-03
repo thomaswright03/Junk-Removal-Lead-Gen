@@ -398,9 +398,13 @@ class App(JobRunner):
 
     def assign(self, body: dict) -> dict:
         count = count_value(body.get("count"))
+        raw = body.get("channels")
+        channels = outreach.check_channels(
+            list(outreach.CHANNELS) if raw is None else raw, single_method=body.get("single_method") is True
+        )
         with self.conn() as conn:
             leads = leadlist.lead_dicts(conn, self.settings(conn))
-            return outreach.assign(conn, leads, count, body.get("channels") or list(outreach.CHANNELS))
+            return outreach.assign(conn, leads, count, channels)
 
     def split_preview(self, conn: Conn, settings: dict) -> dict:
         """What Assign leads can hand out with each choice of methods."""

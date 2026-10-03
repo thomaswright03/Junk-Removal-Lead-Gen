@@ -192,6 +192,32 @@ def test_assign_with_a_count_that_is_not_a_number(desk):
     assert status == 400 and body["error"] == "Leads this round must be a whole number, like 40."
 
 
+def test_assign_refuses_unknown_methods_and_asks_before_a_one_method_round(desk):
+    app, conn = desk
+    many_leads(conn, 40)
+    status, body, _ = post(app, "/api/assign", {"count": 40, "channels": ["phone", "landlord"]})
+    assert status == 400 and "Unknown outreach method: landlord" in body["error"]
+    status, body, _ = post(app, "/api/assign", {"count": 40, "channels": ["phone"]})
+    assert status == 400 and "one method" in body["error"]
+    status, body, _ = post(app, "/api/assign", {"count": 40, "channels": "phone"})
+    assert status == 400
+    assert conn.execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
+    # Confirmed on the page: a one-method round goes ahead.
+    status, body, _ = post(app, "/api/assign", {"count": 5, "channels": ["phone"], "single_method": True})
+    assert status == 200 and body["assigned"] == {"phone": 5}
+
+
+def test_a_blank_business_name_is_refused_and_the_old_one_kept(desk):
+    app, _ = desk
+    for blank in ("", "   ", None):
+        status, body, _ = post(app, "/api/settings", {"business_name": blank, "business_phone": "(520) 555-0199"})
+        assert status == 400 and "business name" in body["error"]
+    settings = app.state()["settings"]
+    assert settings["business_name"] == "Steve's Junk Removal" and settings["business_phone"] == ""
+    status, _, _ = post(app, "/api/settings", {"business_name": "Desert Haul"})
+    assert status == 200 and app.state()["settings"]["business_name"] == "Desert Haul"
+
+
 def test_notes_over_the_limit_are_refused_with_the_limit(desk):
     app, conn = desk
     many_leads(conn, 1)

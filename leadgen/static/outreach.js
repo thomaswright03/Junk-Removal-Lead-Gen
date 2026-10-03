@@ -66,11 +66,13 @@ function renderOutreach() {
     if (!chans.length) return toast("Tick at least one outreach method.");
     const n = +$("#aCount").value;
     const most = Math.min(n, line.n);
-    if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}?`,
-      body: `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.` + ((S.split || {}).followed ? ` Up to ${Math.min(n, S.split.followed)} more go to the method already working their landlord.` : ""),
+    const single = chans.length === 1;
+    if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}${single ? ` to ${chName(chans[0])} only` : ""}?`,
+      body: (single ? `Only one method is ticked, so this round won't compare methods: all ${most} go to ${chName(chans[0])}. Tick another method to compare.`
+        : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + ((S.split || {}).followed ? ` Up to ${Math.min(n, S.split.followed)} more go to the method already working their landlord.` : ""),
       ok: `Assign ${most} lead${most === 1 ? "" : "s"}` }))) return;
     ui.aChannels = null;  // the next suggestion fits the leads that are left
-    act(() => api("/api/assign", { count: n, channels: chans }), r => {
+    act(() => api("/api/assign", { count: n, channels: chans, single_method: single }), r => {
       const got = Object.entries(r.assigned).map(([c, k]) => `${chName(c)} ${k}`).join(", ");
       const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
       const lo = r.left_out || {};
