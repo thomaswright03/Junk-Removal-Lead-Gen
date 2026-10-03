@@ -180,6 +180,12 @@ or set its limits to 0.
   own column and left out of the mix; "set by hand" counts only methods
   changed on the lead. Money is kept in whole cents; a quote or revenue over
   $100,000 (or a contact cost over $1,000) is refused as a likely typo.
+  A value that can't be saved (a negative or too-large amount, a phone
+  number without 10 digits, an email without an @, a unit with no street
+  address, notes over the limit, a blank business name) is caught in the
+  browser before anything is sent and shown under its box, which is marked
+  invalid and focused; the message stays until the value is corrected. A
+  refusal from the server names its field and is shown the same way.
 - **Settings**: business name and phone, a tracking phone number and cost
   per contact for each channel, and the message templates. Template fields
   (owner name, first name, address...) go in from buttons, and each

@@ -2,8 +2,9 @@
 ids, counts and notes. Each check raises ValueError with a plain sentence
 the page shows as it is."""
 
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from . import outreach
 from .leadlist import LEAD_VIEWS
@@ -24,6 +25,26 @@ EDITABLE = {
 }
 # A second identical contact logged this soon after the first is a double click.
 DUPLICATE_TOUCH_SECONDS = 10
+
+
+class FieldError(ValueError):
+    """A value the page can't save, about one form field (``field``, the
+    name the page sent it under): the page shows it under that field."""
+
+    def __init__(self, message: str, field: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+@contextmanager
+def field(name: str) -> Iterator[None]:
+    """A ValueError raised inside is about the field ``name``."""
+    try:
+        yield
+    except FieldError:
+        raise
+    except ValueError as e:
+        raise FieldError(str(e), name) from None
 
 
 _TEXT_SETTINGS = {
@@ -60,11 +81,13 @@ def validate_settings(body: dict) -> dict:
             if v is None:
                 v = ""
             if not isinstance(v, str) or len(v) > 300:
-                raise ValueError(f"{label} must be text (up to 300 characters).")
+                raise FieldError(f"{label} must be text (up to 300 characters).", key)
             values[key] = v.strip()
     if "business_name" in values and not values["business_name"]:
         # Every message says "Steve with <business>": it can't be blank.
-        raise ValueError("Type your business name: every door hanger and call script uses it. Nothing was saved.")
+        raise FieldError(
+            "Type your business name: every door hanger and call script uses it. Nothing was saved.", "business_name"
+        )
     if "lead_view" in body:
         if body["lead_view"] not in LEAD_VIEWS:
             raise ValueError("Show must be one of: " + ", ".join(LEAD_VIEWS) + ".")
@@ -74,7 +97,8 @@ def validate_settings(body: dict) -> dict:
         ("google_daily_limit", "Google lookups per day"),
     ):
         if key in body:
-            values[key] = _limit(body[key], label)
+            with field(key):
+                values[key] = _limit(body[key], label)
     for key, label in (
         ("paused", "Pause"),
         ("google_enabled", "Use Google"),
@@ -94,10 +118,11 @@ def validate_settings(body: dict) -> dict:
         costs = body["costs"]
         if not isinstance(costs, dict) or set(costs) - set(outreach.CHANNELS):
             raise ValueError("Cost per contact must list a dollar amount for each outreach method.")
-        values["costs"] = {
-            c: (money_value(v, f"Cost per contact for {outreach.CHANNELS[c]}", MAX_CONTACT_CENTS) or 0) / 100
-            for c, v in costs.items()
-        }
+        values["costs"] = {}
+        for c, v in costs.items():
+            with field(f"costs.{c}"):
+                cents = money_value(v, f"Cost per contact for {outreach.CHANNELS[c]}", MAX_CONTACT_CENTS)
+            values["costs"][c] = (cents or 0) / 100
     if "tracking_numbers" in body:
         nums = body["tracking_numbers"]
         if (
@@ -112,12 +137,19 @@ def validate_settings(body: dict) -> dict:
         if (
             not isinstance(tpl, dict)
             or set(tpl) - set(outreach.DEFAULT_SETTINGS["templates"])
-            or not all(isinstance(v, str) and len(v) < 5000 for v in tpl.values())
+            or not all(isinstance(v, str) for v in tpl.values())
         ):
             raise ValueError("Messages must be text for each outreach method.")
+        for k, v in tpl.items():
+            if len(v) >= TEMPLATE_LIMIT:
+                message = f"A message can be up to {TEMPLATE_LIMIT - 1:,} characters. Shorten it."
+                raise FieldError(message, f"templates.{k}")
         values["templates"] = dict(tpl)
     return values
 
+
+# The longest a message template can be, plus one.
+TEMPLATE_LIMIT = 5000
 
 UNRECOGNISED_FILE = (
     "Nothing in that file looks like a lead. Lead Desk can import a saved Justice Court case page, "

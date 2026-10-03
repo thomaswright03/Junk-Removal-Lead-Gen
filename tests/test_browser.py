@@ -684,3 +684,72 @@ def test_call_list_puts_numbers_first_and_says_why_others_have_none(server, page
     # "Set up phone lookups" opens the guide on the Leads tab.
     page.click("#noPhoneNote [data-setup]")
     page.wait_for_selector("#setupGuide[open]")
+
+
+def test_form_mistakes_show_under_the_field_and_nothing_is_sent(server, page):
+    url, app, path = server
+    sent = []
+    page.on("request", lambda r: sent.append(r.post_data) if r.method == "POST" else None)
+    page.goto(url)
+    lead_row(page, "10 E Sample St").click()
+    page.wait_for_selector("#drawer.open")
+
+    page.fill("#dQuote", "-50")
+    page.click("#dSave")
+    page.wait_for_selector("#dQuote-err:not([hidden])")
+    assert page.inner_text("#dQuote-err") == "Quote can't be negative."
+    assert page.get_attribute("#dQuote", "aria-invalid") == "true"
+    assert "dQuote-err" in page.get_attribute("#dQuote", "aria-describedby")
+    assert page.evaluate("document.activeElement.id") == "dQuote"
+    page.fill("#dRev", "250000")
+    page.click("#dSave")
+    page.wait_for_selector("#dRev-err >> text=Job revenue can be at most $100,000")
+    assert sent == []
+    # It stays through a redraw, and goes once the value is corrected.
+    page.evaluate("load()")
+    page.wait_for_selector("#dQuote-err:not([hidden])")
+    page.fill("#dQuote", "50")
+    page.wait_for_selector("#dQuote-err", state="hidden")
+    assert page.get_attribute("#dQuote", "aria-invalid") is None
+    page.fill("#dRev", "")
+
+    page.fill("#dPhone", "12")
+    page.click("#dSaveContact")
+    page.wait_for_selector("#dPhone-err >> text=The phone number needs 10 digits")
+    assert page.evaluate("document.activeElement.id") == "dPhone"
+    page.fill("#dPhone", "")
+    page.fill("#dEmail", "not-an-email")
+    page.click("#dSaveContact")
+    page.wait_for_selector("#dEmail-err >> text=That email address doesn't look right")
+    page.fill("#dAddress", "")
+    page.fill("#dUnit", "4")
+    page.click("#dSaveAddress")
+    page.wait_for_selector("#dAddress-err >> text=Type the street address as well as the unit")
+    assert sent == []
+
+    # The server's own refusal lands under the field too.
+    lead_id = lead_row(page, "10 E Sample St").get_attribute("data-id")
+    send = f"api('/api/lead', {{ id: {lead_id}, fields: {{ owner_phone: '55' }} }})"
+    page.evaluate(f"act(() => {send}, 'x', null, undefined, drawerError)")
+    page.wait_for_selector("#dPhone-err >> text=The phone number needs 10 digits")
+
+
+def test_settings_mistakes_show_under_the_field(server, page):
+    url, app, path = server
+    sent = []
+    page.on("request", lambda r: sent.append(r.url) if r.method == "POST" else None)
+    page.goto(url + "#tab=settings")
+    page.wait_for_selector("#sSave")
+    page.fill("#sName", "")
+    page.fill("#cost-door_hanger", "-1")
+    page.click("#sSave")
+    page.wait_for_selector("#sName-err >> text=Type your business name")
+    page.wait_for_selector("#cost-door_hanger-err >> text=can't be negative")
+    assert page.evaluate("document.activeElement.id") == "sName"
+    assert sent == []
+    page.fill("#sName", "Desert Haul")
+    page.wait_for_selector("#sName-err", state="hidden")
+    page.fill("#cost-door_hanger", "0.5")
+    page.click("#sSave")
+    page.wait_for_selector("text=Settings saved")
+    assert db.get_settings(db.connect(path))["business_name"] == "Desert Haul"

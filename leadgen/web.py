@@ -28,11 +28,13 @@ from .forms import (
     MAX_CONTACT_CENTS,
     NOTES_LIMIT,
     UNRECOGNISED_FILE,
+    FieldError,
     NotFound,
     _address_fields,
     _lead_id,
     _seconds_between,
     count_value,
+    field,
     money_value,
     notes_value,
     odd_dates,
@@ -224,10 +226,12 @@ class App(JobRunner):
             ("job_revenue", "revenue_cents", "Job revenue"),
         ):
             if name in fields:
-                fields[column] = money_value(fields.pop(name), label)
+                with field(name):
+                    fields[column] = money_value(fields.pop(name), label)
                 fields[name] = None
         if "notes" in fields:
-            fields["notes"] = notes_value(fields["notes"])
+            with field("notes"):
+                fields["notes"] = notes_value(fields["notes"])
         if (
             "responded_at" in fields
             and fields["responded_at"] is not None
@@ -238,22 +242,24 @@ class App(JobRunner):
             raw_phone = str(fields["owner_phone"] or "").strip()
             fields["owner_phone"] = clean_phone(raw_phone) if raw_phone else None
             if raw_phone and not fields["owner_phone"]:
-                raise ValueError("The phone number needs 10 digits, like (520) 555-0100.")
+                raise FieldError("The phone number needs 10 digits, like (520) 555-0100.", "owner_phone")
         if "owner_email" in fields:
             raw_email = str(fields["owner_email"] or "").strip()
             fields["owner_email"] = clean_email(raw_email) if raw_email else None
             if raw_email and not fields["owner_email"]:
-                raise ValueError("That email address doesn't look right. Check it and save again.")
+                raise FieldError("That email address doesn't look right. Check it and save again.", "owner_email")
         if "owner_phone" in fields or "owner_email" in fields:
             fields["contact_source"] = "manual"
         address = None
         if "address" in fields or "unit" in fields:
             address = (str(fields.pop("address", "") or "")).strip()
             unit = (str(fields.pop("unit", "") or "")).strip().lstrip("#").strip() or None
-            if len(address) > 200 or (unit and len(unit) > 20):
-                raise ValueError("That address is too long. Type just the street address and unit.")
+            if len(address) > 200:
+                raise FieldError("That address is too long. Type just the street address.", "address")
+            if unit and len(unit) > 20:
+                raise FieldError("That unit is too long. Type just the unit number, like 12B.", "unit")
             if unit and not address:
-                raise ValueError("Type the street address as well as the unit.")
+                raise FieldError("Type the street address as well as the unit.", "address")
             fields.update(_address_fields(address, unit))
         elif raw.get("confirm_address"):
             # Steve checked the property (a guess from the landlord's parcels,
@@ -397,7 +403,8 @@ class App(JobRunner):
         return {"ok": True}
 
     def assign(self, body: dict) -> dict:
-        count = count_value(body.get("count"))
+        with field("count"):
+            count = count_value(body.get("count"))
         raw = body.get("channels")
         channels = outreach.check_channels(
             list(outreach.CHANNELS) if raw is None else raw, single_method=body.get("single_method") is True

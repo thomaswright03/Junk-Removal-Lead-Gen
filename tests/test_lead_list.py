@@ -326,3 +326,33 @@ def test_pause_stops_update_court_cases_within_one_case(tmp_path):
     job = app.jobs["cases"]
     assert len(court.calls) == 1, "no case page is read after the pause"
     assert job.result["paused"] and job.result["stopped_early"]
+
+
+def test_refused_form_values_name_their_field(desk):
+    app, conn = desk
+    many_leads(conn, 1)
+    lead_id = conn.execute("SELECT id FROM leads").fetchone()[0]
+    for fields, name in (
+        ({"quote_amount": -50}, "quote_amount"),
+        ({"job_revenue": 200_000}, "job_revenue"),
+        ({"owner_phone": "12"}, "owner_phone"),
+        ({"owner_email": "nope"}, "owner_email"),
+        ({"unit": "4"}, "address"),
+        ({"address": "1 W A ST", "unit": "X" * 30}, "unit"),
+        ({"notes": "x" * (NOTES_LIMIT + 1)}, "notes"),
+    ):
+        status, body, _ = post(app, "/api/lead", {"id": lead_id, "fields": fields})
+        assert status == 400 and body["field"] == name, (fields, body)
+    for settings, name in (
+        ({"business_name": ""}, "business_name"),
+        ({"costs": {"phone": -1}}, "costs.phone"),
+        ({"google_daily_limit": 2.5}, "google_daily_limit"),
+        ({"templates": {"phone": "x" * 6000}}, "templates.phone"),
+    ):
+        status, body, _ = post(app, "/api/settings", settings)
+        assert status == 400 and body["field"] == name, (settings, body)
+    status, body, _ = post(app, "/api/assign", {"count": "lots", "channels": ["phone", "door_hanger"]})
+    assert status == 400 and body["field"] == "count"
+    # A refusal about no one field has no field.
+    status, body, _ = post(app, "/api/lead", {"id": lead_id, "fields": {"status": "maybe"}})
+    assert status == 400 and "field" not in body

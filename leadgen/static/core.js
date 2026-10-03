@@ -105,7 +105,7 @@ async function act(fn, okMsg, btn, undo, onError) {
 // invalid (aria-invalid) and focused. The message stays, across redraws of
 // the page, until the value is corrected. Keyed by the box's id.
 const fieldErrors = {};
-const fieldError = id => `<div class="field-error" id="${id}-err" role="alert"${fieldErrors[id] ? "" : " hidden"}>${esc(fieldErrors[id] || "")}</div>`;
+const fieldError = id => `<span class="field-error" id="${id}-err" role="alert"${fieldErrors[id] ? "" : " hidden"}>${esc(fieldErrors[id] || "")}</span>`;
 // Marks the box invalid (after a redraw too); its error line must be in the page (fieldError).
 function markField(id) {
   const box = document.getElementById(id); if (!box) return;
@@ -125,6 +125,52 @@ function setFieldError(id, msg, focus = true) {
 }
 function clearFieldError(id) { if (fieldErrors[id]) { delete fieldErrors[id]; markField(id); } }
 const markFields = root => root.querySelectorAll("[id]").forEach(el => { if (fieldErrors[el.id]) markField(el.id); });
+// The server's rules for what the forms send (forms.py, web.py), checked in
+// the browser first so a mistake shows at once and nothing is sent. Each
+// returns the server's own message, or null when the value is fine.
+const MAX_JOB_DOLLARS = 100000, MAX_CONTACT_DOLLARS = 1000;
+function checkMoney(box, label, most = MAX_JOB_DOLLARS) {
+  if (box.validity && box.validity.badInput) return `${label} must be a dollar amount, like 250.`;
+  const v = String(box.value ?? "").trim().replace(/[$,]/g, "");
+  if (!v) return null;
+  const n = Number(v);
+  if (!isFinite(n)) return `${label} must be a dollar amount, like 250.`;
+  if (n < 0) return `${label} can't be negative.`;
+  if (n > most) return `${label} can be at most $${most.toLocaleString("en-US")}. Check for an extra zero.`;
+  return null;
+}
+function checkPhone(v) {
+  v = String(v ?? "").trim(); if (!v) return null;
+  let d = v.replace(/\D/g, ""); if (d.length === 11 && d[0] === "1") d = d.slice(1);
+  return d.length === 10 ? null : "The phone number needs 10 digits, like (520) 555-0100.";
+}
+const checkEmail = v => { v = String(v ?? "").trim(); return !v || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? null : "That email address doesn't look right. Check it and save again."; };
+const checkText = (v, label, most = 300) => String(v ?? "").length > most ? `${label} must be text (up to ${most} characters).` : null;
+function checkWhole(box, label) {
+  if (box.disabled) return null;  // "no limit"
+  if (box.validity && box.validity.badInput) return `${label} must be a whole number, or no limit.`;
+  const v = String(box.value).trim(); if (!v) return null;  // blank is 0
+  const n = Number(v);
+  return isFinite(n) && n >= 0 && n === Math.floor(n) ? null : `${label} must be a whole number of 0 or more (0 means none).`;
+}
+// Check several boxes ({id: () => message or null}): each failure is shown
+// under its box and the first is focused. True when all are fine.
+function checkFields(checks) {
+  let first = null;
+  for (const [id, check] of Object.entries(checks)) {
+    const msg = document.getElementById(id) ? check() : null;
+    if (msg) { setFieldError(id, msg, false); first = first || id; } else clearFieldError(id);
+  }
+  if (first) document.getElementById(first).focus();
+  return !first;
+}
+// While a box shows an error, typing re-checks it and clears the error once fixed.
+function recheckOnInput(checks) {
+  for (const [id, check] of Object.entries(checks)) {
+    const box = document.getElementById(id); if (!box) continue;
+    box.addEventListener("input", () => { if (fieldErrors[id] && !check()) clearFieldError(id); });
+  }
+}
 // A refusal from the server about one field (``{"field": ...}``): shown under
 // that field's box when ``boxes`` maps it to one on the page. True when shown.
 function showFieldErrors(e, boxes) {

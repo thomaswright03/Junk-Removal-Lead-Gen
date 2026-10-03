@@ -39,6 +39,7 @@ async function leaveDrawer() {
 }
 async function openLead(id, from) {
   if (ui.open != null && ui.open !== id && !(await leaveDrawer())) return;
+  if (ui.open !== id) clearDrawerErrors();
   ui.open = id; ui.returnFocus = from || document.activeElement;
   renderDrawer(); syncUrl(true);
   const h = $("#drawer h2"); if (h) h.focus();
@@ -48,13 +49,14 @@ async function openLead(id, from) {
 async function openAnyLead(id, from) {
   if (findLead(id)) return openLead(id, from);
   if (ui.open != null && ui.open !== id && !(await leaveDrawer())) return;
+  if (ui.open !== id) clearDrawerErrors();
   ui.open = id; ui.returnFocus = from || document.activeElement;
   syncUrl(true); await reloadList();
   const h = $("#drawer h2"); if (h) h.focus();
 }
 async function closeDrawer() {
   if (!(await leaveDrawer())) return;
-  const id = ui.open; ui.open = null; $("#drawer").classList.remove("open"); syncUrl(true);
+  const id = ui.open; ui.open = null; clearDrawerErrors(); $("#drawer").classList.remove("open"); syncUrl(true);
   const back = document.querySelector(`[data-id="${id}"]`) || ui.returnFocus;
   if (back && back.focus) back.focus();
 }
@@ -93,6 +95,25 @@ function addressGuide(l) {
   ].filter(Boolean);
   return `<p class="hint"><strong>Find the address:</strong></p><ol class="hint guide">${steps.map(t => `<li>${t}</li>`).join("")}</ol>`;
 }
+// The drawer's boxes, the server's rules for each, and the name the server
+// uses for each in an error (see checkFields).
+const DRAWER_CHECKS = {
+  dQuote: () => checkMoney($("#dQuote"), "Quote"),
+  dRev: () => checkMoney($("#dRev"), "Job revenue"),
+  dNotes: () => { const n = $("#dNotes").value.length, max = S.notes_limit || 2000;
+    return n > max ? `Notes can be up to ${max.toLocaleString("en-US")} characters; this is ${n.toLocaleString("en-US")}. Shorten it and save again.` : null; },
+  dPhone: () => checkPhone($("#dPhone").value),
+  dEmail: () => checkEmail($("#dEmail").value),
+  dAddress: () => { const a = $("#dAddress").value.trim(), u = $("#dUnit").value.trim();
+    return a.length > 200 ? "That address is too long. Type just the street address." : u && !a ? "Type the street address as well as the unit." : null; },
+  dUnit: () => $("#dUnit").value.trim().replace(/^#/, "").trim().length > 20 ? "That unit is too long. Type just the unit number, like 12B." : null,
+};
+const DRAWER_FIELDS = { quote_amount: "dQuote", job_revenue: "dRev", notes: "dNotes", owner_phone: "dPhone", owner_email: "dEmail", address: "dAddress", unit: "dUnit" };
+const pick = (obj, keys) => Object.fromEntries(keys.map(k => [k, obj[k]]));
+const drawerOk = ids => checkFields(pick(DRAWER_CHECKS, ids));
+const drawerError = e => showFieldErrors(e, DRAWER_FIELDS);
+// Errors belong to the lead they were made on.
+const clearDrawerErrors = () => Object.keys(DRAWER_CHECKS).forEach(id => delete fieldErrors[id]);
 const REACH_TEXT = {
   both: "Phone or email, and a door hanger at the property.",
   contact: "Phone or email. No confirmed property address yet, so no door hanger.",
@@ -147,6 +168,7 @@ function renderDrawer() {
         <input id="dAddress" data-draft="address" placeholder="Street address, e.g. 123 W Main St" value="${esc(draftOf(l, "address"))}" style="flex:1;min-width:200px" aria-label="Property street address">
         <input id="dUnit" data-draft="unit" placeholder="Unit" value="${esc(draftOf(l, "unit"))}" style="width:80px" aria-label="Unit">
         <button class="btn small" id="dSaveAddress">Save address</button>
+        ${fieldError("dAddress")}${fieldError("dUnit")}
       </div>
       ${who && (l.owner_entity || l.lead_type === "eviction") ? `<div class="row" style="margin-top:8px"><button class="btn small" id="dOwnerProps">Other properties this owner has</button></div><div id="ownerProps"></div>` : ""}
     </div>
@@ -158,6 +180,7 @@ function renderDrawer() {
         <input id="dPhone" data-draft="owner_phone" placeholder="Phone" value="${esc(draftOf(l, "owner_phone"))}" style="width:150px" aria-label="Phone">
         <input id="dEmail" data-draft="owner_email" placeholder="Email" value="${esc(draftOf(l, "owner_email"))}" style="flex:1;min-width:180px" aria-label="Email">
         <button class="btn small" id="dSaveContact">Save contact</button>
+        ${fieldError("dPhone")}${fieldError("dEmail")}
       </div>
     </div>
 
@@ -184,16 +207,22 @@ function renderDrawer() {
       <div class="row">
         <label>Quote $ <input id="dQuote" data-draft="quote_amount" type="number" min="0" step="1" style="width:100px" value="${esc(draftOf(l, "quote_amount"))}"></label>
         <label>Job revenue $ <input id="dRev" data-draft="job_revenue" type="number" min="0" step="1" style="width:100px" value="${esc(draftOf(l, "job_revenue"))}"></label>
+        ${fieldError("dQuote")}${fieldError("dRev")}
       </div>
       <h3><label for="dNotes">Notes</label></h3>
       <textarea id="dNotes" data-draft="notes" aria-describedby="dNotesCount" placeholder="Who you talked to, what they need, next step…">${esc(draftOf(l, "notes"))}</textarea>
       <div class="counter" id="dNotesCount" aria-live="polite"></div>
+      ${fieldError("dNotes")}
       <div class="row" style="margin-top:8px"><button class="btn primary" id="dSave">Save result</button></div>
     </div>`;
   d.classList.add("open");
   d.scrollTop = scroll;
   if (focusId && $("#" + focusId)) { const f = $("#" + focusId); f.focus(); if (sel) try { f.setSelectionRange(...sel); } catch (e) { /* number box */ } }
   noteCounter();
+  markFields(d);
+  recheckOnInput(DRAWER_CHECKS);
+  // A unit typed in or removed can fix the address box's error too.
+  $("#dUnit").addEventListener("input", () => { if (fieldErrors.dAddress && !DRAWER_CHECKS.dAddress()) clearFieldError("dAddress"); });
   d.querySelectorAll("[data-draft]").forEach(i => i.oninput = () => {
     const before = hasDraft(l.id); setDraft(l, i.dataset.draft, i.value);
     if (i.id === "dNotes") noteCounter();
@@ -204,17 +233,20 @@ function renderDrawer() {
     "Address confirmed. Door hangers can go to this lead.", e.currentTarget);
   $("#dClose").onclick = closeDrawer;
   $("#dSaveContact").onclick = async e => {
-    const r = await act(() => api("/api/lead", { id: l.id, fields: { owner_phone: $("#dPhone").value, owner_email: $("#dEmail").value } }), "Contact saved", e.currentTarget);
+    if (!drawerOk(["dPhone", "dEmail"])) return;
+    const r = await act(() => api("/api/lead", { id: l.id, fields: { owner_phone: $("#dPhone").value, owner_email: $("#dEmail").value } }), "Contact saved", e.currentTarget, undefined, drawerError);
     if (r) { clearDrafts(l.id, ["owner_phone", "owner_email"]); renderDrawer(); }
   };
   $("#dSaveAddress").onclick = async e => {
+    if (!drawerOk(["dAddress", "dUnit"])) return;
     const r = await act(() => api("/api/lead", { id: l.id, fields: { address: $("#dAddress").value, unit: $("#dUnit").value } }),
-      r => r.message || "Address saved", e.currentTarget);
+      r => r.message || "Address saved", e.currentTarget, undefined, drawerError);
     if (r) { clearDrafts(l.id, ["address", "unit"]); renderDrawer(); }
   };
   $("#dSaveCh").onclick = async e => {
     const extra = pendingResult(l);
-    const r = await act(() => api("/api/lead", { id: l.id, fields: { ...extra, channel: $("#dChannel").value } }), "Method saved", e.currentTarget);
+    if (!drawerOk(["dQuote", "dRev", "dNotes"])) return;  // typed result fields go along
+    const r = await act(() => api("/api/lead", { id: l.id, fields: { ...extra, channel: $("#dChannel").value } }), "Method saved", e.currentTarget, undefined, drawerError);
     if (r) { clearDrafts(l.id, Object.keys(extra)); renderDrawer(); }
   };
   d.querySelectorAll("[data-touch]").forEach(b => b.onclick = () =>
@@ -223,15 +255,17 @@ function renderDrawer() {
     act(() => api("/api/touch/delete", { id: +b.dataset.untouch }), "Removed from the history", b));
   d.querySelectorAll("[data-status]").forEach(b => b.onclick = async () => {
     const extra = pendingResult(l), before = l.status, to = b.dataset.status;
+    if (!drawerOk(["dQuote", "dRev", "dNotes"])) return;
     const r = await act(() => api("/api/lead", { id: l.id, fields: { ...extra, status: to } }),
       `Marked ${STATUS_LABEL[to].toLowerCase()}` + (Object.keys(extra).length ? " and saved your notes" : ""), b,
-      () => act(() => api("/api/lead", { id: l.id, fields: { status: before } }), `Back to ${STATUS_LABEL[before].toLowerCase()}`));
+      () => act(() => api("/api/lead", { id: l.id, fields: { status: before } }), `Back to ${STATUS_LABEL[before].toLowerCase()}`), drawerError);
     if (r) { clearDrafts(l.id, Object.keys(extra)); renderDrawer(); }
   });
   $("#dSave").onclick = async e => {
+    if (!drawerOk(["dQuote", "dRev", "dNotes"])) return;
     const quote = moneyField($("#dQuote").value), rev = moneyField($("#dRev").value);
     const r = await act(() => api("/api/lead", { id: l.id, fields: { quote_amount: quote, job_revenue: rev, notes: $("#dNotes").value,
-      ...(rev ? { status: "won" } : quote && !["won", "lost"].includes(l.status) ? { status: "quoted" } : {}) } }), "Saved", e.currentTarget);
+      ...(rev ? { status: "won" } : quote && !["won", "lost"].includes(l.status) ? { status: "quoted" } : {}) } }), "Saved", e.currentTarget, undefined, drawerError);
     if (r) { clearDrafts(l.id, RESULT_FIELDS); renderDrawer(); }
   };
   const op = $("#dOwnerProps");

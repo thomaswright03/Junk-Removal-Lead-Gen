@@ -104,6 +104,7 @@ function renderOutreach() {
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
         <button class="btn primary" id="aGo" ${line.n ? "" : "disabled"}>Assign leads</button>
+        ${fieldError("aCount")}
       </div>
       <p class="hint mt8" id="aSplit" aria-live="polite">${line.html}</p>
       ${others ? `<p class="hint">Other choices: ${others}</p>` : ""}
@@ -120,9 +121,14 @@ function renderOutreach() {
   document.querySelectorAll("[data-combo]").forEach(b => b.onclick = () => setChans(b.dataset.combo.split("+"), "#aGo"));
   const dismiss = $("#roundDismiss");
   if (dismiss) dismiss.onclick = () => { setLastRound(null); renderOutreach(); $("#aGo").focus(); };
+  const countCheck = { aCount: () => { const v = $("#aCount").value.trim(), n = Number(v);
+    return v && isFinite(n) && n >= 1 && n <= 100000 && n === Math.floor(n) ? null : "Leads this round must be a whole number, like 40."; } };
+  markFields($("#tab-outreach"));
+  recheckOnInput(countCheck);
   $("#aGo").onclick = async e => {
     const btn = e.currentTarget;
     if (!chans.length) return toast("Tick at least one outreach method.");
+    if (!checkFields(countCheck)) return;
     const n = +$("#aCount").value;
     const single = chans.length === 1;
     const body = { count: n, channels: chans, single_method: single, lead_type: kind };
@@ -130,7 +136,7 @@ function renderOutreach() {
     let pre;
     btn.disabled = true;
     try { pre = await api("/api/assign", { ...body, preview: true }); }
-    catch (err) { toast(err.message, 8000); return; }
+    catch (err) { if (!showFieldErrors(err, { count: "aCount" })) toast(err.message, 8000); return; }
     finally { btn.disabled = false; }
     const most = Object.values(pre.assigned).reduce((a, b) => a + b, 0);
     const followedPre = Object.values(pre.followed || {}).reduce((a, b) => a + b, 0);
