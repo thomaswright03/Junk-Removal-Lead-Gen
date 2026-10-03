@@ -687,7 +687,8 @@ def test_lead_carries_the_greeting_name(tmp_path):
 
 
 def test_each_method_reaches_someone_else_or_offers_something_else_on_an_eviction():
-    pitches = {ch: outreach.PITCHES[outreach.template_key(ch, "eviction")] for ch in outreach.CHANNELS}
+    # A phone call on an eviction uses the landlord script (templateKey in core.js).
+    pitches = {ch: outreach.PITCHES["phone_eviction" if ch == "phone" else ch] for ch in outreach.CHANNELS}
     assert len({p["who"] for p in pitches.values()}) >= 2
     # The two methods that reach the landlord make different offers.
     assert len({(p["who"], p["offer"]) for p in pitches.values()}) == len(outreach.CHANNELS)

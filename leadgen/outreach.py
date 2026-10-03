@@ -48,11 +48,12 @@ CHANNELS = {
     "property_manager": "Landlord / property manager",
 }
 
-# Who each method reaches and what it offers, by template (see
-# ``template_key``): on an eviction the phone call and the landlord pitch both
-# reach the landlord, so they make different offers (this one unit now vs. a
-# standing rate for every turnover), and Results compares methods within one
-# kind of lead at a time.
+# Who each method reaches and what it offers, by template (the page uses
+# "phone_eviction" for a phone call on an eviction: templateKey in core.js).
+# On an eviction the phone call and the landlord pitch both reach the
+# landlord, so they make different offers (this one unit now vs. a standing
+# rate for every turnover), and Results compares methods within one kind of
+# lead at a time.
 PITCHES = {
     "door_hanger": {
         "who": "whoever is at the property: the tenant moving out, family, neighbours",
@@ -89,12 +90,6 @@ COMPARISON_BASIS = {
         "Pick evictions or code cases to compare like with like."
     ),
 }
-
-
-def template_key(channel: str, lead_type: Optional[str]) -> str:
-    """The message template (and pitch) for a method on a kind of lead:
-    phone calls on evictions use the landlord script."""
-    return "phone_eviction" if channel == "phone" and lead_type == "eviction" else channel
 
 
 # The kinds of contact logged for each method, with their button labels.

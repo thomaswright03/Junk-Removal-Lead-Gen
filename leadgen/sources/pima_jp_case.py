@@ -44,8 +44,6 @@ EVICTION_RE = re.compile(r"EVICT|DETAINER", re.IGNORECASE)
 JUDGMENT_RE = re.compile(r"\bJUDGMENT\b(?![^|]{0,40}\b(?:DEFENDANT|DENIED|VACATED|SET ASIDE)\b)", re.IGNORECASE)
 WRIT_RE = re.compile(r"\bWRIT\b|\bLOCK[- ]?OUT\b", re.IGNORECASE)
 DISMISS_RE = re.compile(r"\bDISMISS", re.IGNORECASE)
-# Stages in order; the lead shows the furthest one reached.
-STAGES = ("filed", "notice", "judgment", "writ")
 
 
 def _clean(text: Optional[str]) -> str:
