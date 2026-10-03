@@ -10,8 +10,6 @@ const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined,
 const pct = v => v == null ? "–" : (v * 100).toFixed(v < 0.1 && v > 0 ? 1 : 0) + "%";
 const title = s => String(s ?? "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
   .replace(/\b(Llc|Lllp|Lp|Po|Nw|Ne|Sw|Se|Hoa|Usa|Az)\b/g, w => w.toUpperCase());
-// Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
-const firstName = name => { const w = String(name || "").replace(/[&,].*$/, "").trim().split(/\s+/); return w.length > 1 && /^[A-Za-z]{2,}$/.test(w[1]) ? title(w[1]) : ""; };
 
 const OFFLINE = "Lead Desk didn't answer. Check that it is still running (and your internet connection), then try again.";
 async function api(path, body) {
@@ -58,6 +56,8 @@ function stateQuery() {
   if (ui.tab === "leads") {
     p.set("list", "leads");
     for (const k of ["q", "type", "status", "channel", "sort", "offset"]) p.set(k, ui[k]);
+  } else if (ui.tab === "settings") {
+    p.set("samples", "1");  // a lead of each kind, for the message previews
   } else if (ui.tab === "outreach") {
     p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", "score"); p.set("limit", QUEUE_LIMIT);
     // Door hangers and calls: the leads still to do. Landlords: everyone in that method.
@@ -144,17 +144,33 @@ function addressNote(l, plain) {
 // Phone calls on eviction cases use the landlord script, code cases the owner one.
 const templateKey = (channel, l) => channel === "phone" && l.lead_type === "eviction" ? "phone_eviction" : channel;
 function fill(channel, l) {
+  const st = S.settings;
+  return fillText(st.templates[templateKey(channel, l)] || st.templates[channel] || "", channel, l);
+}
+// The fields a template can use, with what each becomes (Settings shows them as buttons).
+const TEMPLATE_FIELDS = [["{owner}", "Owner name", "The owner's or landlord's name"],
+  ["{owner_first}", "First name", "The owner's first name, or “there” for a company or trust"],
+  ["{address}", "Address", "The property address, or “your property” when it isn't known"],
+  ["{at_address}", "“at” address", "“ at 123 Main St” when the address is known, otherwise nothing"],
+  ["{phone}", "Your phone", "This method's tracking number, or your main phone"], ["{business}", "Business name", "Your business name"]];
+function fillText(text, channel, l) {
   const st = S.settings, owner = (l.owner_name || l.plaintiff || "").trim();
-  const first = owner && !l.owner_entity ? firstName(owner) : "";
+  // Worked out on the server: blank for companies, trusts and apartments.
+  const first = l.owner_first || "";
   const phone = (st.tracking_numbers || {})[channel] || st.business_phone || "[phone]";
   const addr = title(fullAddress(l));
-  return (st.templates[templateKey(channel, l)] || st.templates[channel] || "")
+  return text
     .replaceAll("{owner}", title(owner) || "Property Owner")
     .replaceAll("{owner_first}", first || "there")
     .replaceAll("{at_address}", addr ? ` at ${addr}` : "")
     .replaceAll("{address}", addr || "your property")
     .replaceAll("{phone}", phone)
     .replaceAll("{business}", st.business_name || "");
+}
+// Who a method reaches on this lead and what it offers, in one line.
+function pitchLine(channel, l) {
+  const p = (S.pitches || {})[templateKey(channel, l)];
+  return p ? `<p class="small-line pitch" data-pitch="${esc(channel)}"><b>Reaches:</b> ${esc(p.who)} · <b>Offer:</b> ${esc(p.offer)}</p>` : "";
 }
 // Where the eviction case is: notice filed, judgment, writ (lockout), etc.
 function noticeChip(l) {
@@ -255,9 +271,11 @@ function renderHeader() {
   const msg = d.message || "starting the daily check";
   const problems = d.problems || [];
   $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson code cases`;
+  $("#purpose").title = $("#purpose").textContent.slice(2);  // in full, when a wide header cuts it short
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.interrupted ? `Today's check stopped part way (paused) · next check ${d.next_run || "within the next few minutes"}`
     : d.last_run ? `Last check ${d.finished_at ? fmtDateTime(d.finished_at) : fmtDate(d.last_run)}` : "Not checked yet";
   const warn = problems.length && !d.running ? ` <span class="warn-sign" role="img" aria-label="Something failed in the last check" title="${esc(problems.join("; "))}">⚠</span>` : "";
   const open = !!ui.headerDetails;
@@ -281,7 +299,7 @@ function renderHeader() {
   banner.hidden = !S.paused;
   if (S.paused) banner.innerHTML = `<strong>Paused.</strong> The daily check, court case reads and phone lookups are stopped${S.paused_by_env ? " by LEADDESK_PAUSED in the server settings" : ""}.
     ${S.paused_by_env ? "" : `<button class="btn small" id="unpause">Turn the pause off</button>`}`;
-  const up = $("#unpause"); if (up) up.onclick = e => act(() => api("/api/settings", { paused: false }), "Lead Desk is running again.", e.currentTarget);
+  const up = $("#unpause"); if (up) up.onclick = e => act(() => api("/api/settings", { paused: false }), r => r.message || "Lead Desk is running again.", e.currentTarget);
   const b = $("#refreshBtn"); b.disabled = !!d.running || !!S.paused; b.textContent = d.running ? "Checking…" : "Check for new evictions";
   if (d.running || runningJobs().length) watch();
   document.querySelectorAll("#nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === ui.tab); b.setAttribute("aria-current", b.dataset.tab === ui.tab ? "page" : "false"); });

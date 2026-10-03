@@ -1,12 +1,14 @@
 import json
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from leadgen import db, outreach
+from leadgen import db, leadlist, outreach
 from leadgen.enrich import enrich, is_entity, owner_fields
 from leadgen.models import Lead
+from leadgen.util import az_today
 from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"
@@ -531,8 +533,15 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
     )
     conn.commit()
     app = App(path, parcel_client=FakeParcels([]))
-    before = app.state({"list": "leads"})["counts"]
+    state = app.state({"list": "leads", "type": "address_work"})
+    before = state["counts"]
     assert (before["evictions_open"], before["evictions_with_address"]) == (7, 2)
+    # The work queue: open evictions with no address or only a guess.
+    queue = {l["source_id"] for l in state["list"]["leads"]}
+    assert "CV26-000001-EA" in queue and "CV26-000002-EA" not in queue
+    assert all(l["lead_type"] == "eviction" for l in state["list"]["leads"])
+    records = state["addresses"]["records"]
+    assert records["last_import"] is None and records["due"]
     csv = (
         "Case Number,Property Address,Plaintiff\n"
         "CV26-000000-EA,10 N FOUND AVE,CACTUS 0 LLC\n"
@@ -550,3 +559,89 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
     after = app.state({"list": "leads"})["counts"]
     # Three filled or kept, plus the new case from the file.
     assert (after["evictions_open"], after["evictions_with_address"]) == (8, 5)
+    # The next request asks from today on, in two weeks.
+    records = app.state({"list": "leads"})["addresses"]["records"]
+    today = az_today()
+    assert records["last_import"] == today.isoformat() and records["last_filled"] == 3
+    assert records["request_from"] == today.isoformat() and not records["due"]
+    assert records["due_on"] == (today + timedelta(days=14)).isoformat()
+
+
+def test_address_share_is_kept_daily_and_compared_with_a_week_ago(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    today = az_today()
+    week_ago = (today - timedelta(days=8)).isoformat()
+    db.put_settings(conn, {"address_history": {week_ago: [1, 10], "2020-01-01": [0, 1]}})
+    conn.commit()
+    leadlist.record_address_share(conn, db.get_settings(conn), today)
+    conn.commit()
+    history = db.get_settings(conn)["address_history"]
+    assert "2020-01-01" not in history  # only the last two months are kept
+    assert history[today.isoformat()] == [1, 7] and history[week_ago] == [1, 10]
+    progress = App(path).state({"list": "leads"})["addresses"]
+    assert progress["week_ago"] == {"date": week_ago, "with_address": 1, "open": 10}
+
+
+@pytest.mark.parametrize(
+    "owner_name, owner_entity, plaintiff, first",
+    [
+        # Eviction with no assessor match: the landlord on the case.
+        (None, 0, "SEDONA POINTE LLC", ""),
+        (None, 0, "ROMERO, RAYNALDO M", "Raynaldo"),
+        (None, 0, "ROMERO, RAYNALDO M; ROMERO, ANA", "Raynaldo"),
+        (None, 0, "DESERT VISTA APTS", ""),
+        (None, 0, "PALO VERDE TRUST", ""),
+        (None, 0, "SAGUARO GROUP LTD", ""),
+        (None, 0, "MARIA LOPEZ", ""),  # no comma: which word is the first name isn't known
+        # Assessor owners are "LAST FIRST MIDDLE".
+        ("SMITH JOHN A & MARY", 0, None, "John"),
+        ("O'BRIEN MARY-KATE", 0, None, "Mary-Kate"),
+        ("DESERT RENTALS LLC", 1, None, ""),
+        ("CANYON HOLDINGS", 1, None, ""),
+        ("SMITH J", 0, None, ""),  # only an initial
+    ],
+)
+def test_call_script_greets_people_by_first_name_and_companies_with_there(owner_name, owner_entity, plaintiff, first):
+    lead = {"owner_name": owner_name, "owner_entity": owner_entity, "plaintiff": plaintiff}
+    assert outreach.owner_first_name(lead) == first
+
+
+def test_lead_carries_the_greeting_name(tmp_path):
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    for case, plaintiff in (("CV26-000001-EA", "SEDONA POINTE LLC"), ("CV26-000002-EA", "ROMERO, RAYNALDO M")):
+        db.upsert(conn, Lead("pima_jp_calendar", case, "eviction", "2026-09-30", plaintiff=plaintiff, in_pima=True))
+    db.put_settings(conn, {"lead_view": "all"})
+    conn.commit()
+    leads = {l["source_id"]: l for l in App(path).state({"list": "leads"})["list"]["leads"]}
+    assert leads["CV26-000001-EA"]["owner_first"] == ""
+    assert leads["CV26-000002-EA"]["owner_first"] == "Raynaldo"
+
+
+def test_each_method_reaches_someone_else_or_offers_something_else_on_an_eviction():
+    pitches = {ch: outreach.PITCHES[outreach.template_key(ch, "eviction")] for ch in outreach.CHANNELS}
+    assert len({p["who"] for p in pitches.values()}) >= 2
+    # The two methods that reach the landlord make different offers.
+    assert len({(p["who"], p["offer"]) for p in pitches.values()}) == len(outreach.CHANNELS)
+    assert "one-time" in pitches["phone"]["offer"] and "standing" in pitches["property_manager"]["offer"]
+
+
+def test_results_compare_methods_within_one_kind_of_lead(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed(conn)
+    seed_evictions(conn, with_address=4, without=0)
+    conn.execute("UPDATE leads SET channel = 'phone' WHERE lead_type = 'eviction'")
+    conn.execute("UPDATE leads SET channel = 'door_hanger' WHERE lead_type = 'code_violation'")
+    conn.commit()
+    state = App(path).state()
+    by_kind = state["results_by_kind"]
+    evictions = {r["channel"]: r["assigned"] for r in by_kind["eviction"]["results"]}
+    codes = {r["channel"]: r["assigned"] for r in by_kind["code_violation"]["results"]}
+    assert evictions == {"door_hanger": 0, "phone": 5, "property_manager": 0}
+    assert codes == {"door_hanger": 3, "phone": 0, "property_manager": 0}
+    # All together the two methods look comparable; within each kind there's nothing to compare yet.
+    assert not by_kind["eviction"]["comparison"]["fair"]
+    assert "eviction leads only" in state["comparison_basis"]["eviction"]

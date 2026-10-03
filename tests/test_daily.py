@@ -189,6 +189,8 @@ def test_run_daily_end_to_end():
     assert r["eviction_notice"] == 1 and r["owner_phone"] == "(520) 555-0101"
     assert "3 new evictions" in daily.describe(summary)
     assert db.get_settings(conn)["last_daily_run"] == "2026-10-03"
+    # The day's address share is kept for the Leads tab's "a week ago".
+    assert "2026-10-03" in db.get_settings(conn)["address_history"]
     # Next day: the cases already confirmed aren't read again.
     cases.fetched.clear()
     daily.run_daily(

@@ -14,7 +14,7 @@ from leadgen.enrich import enrich_landlords, fix_inferred_addresses
 from leadgen.lookup import Contact, find_contacts
 from leadgen.models import Lead
 from leadgen.sources.pima_jp_case import case_id, parse_case_html
-from leadgen.util import is_multifamily, is_residential
+from leadgen.util import az_today, is_multifamily, is_residential
 from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"
@@ -262,6 +262,64 @@ def test_pause_during_the_daily_check_stops_the_rest(tmp_path):
     assert "stopped at eviction case pages because Lead Desk was paused" in daily.describe(summary)
 
 
+class QuickCourt:
+    def __init__(self):
+        self.calls = []
+
+    def fetch(self, url):
+        self.calls.append(case_id(url))
+        return parse_case_html(CASE_HTML, url=url)
+
+
+class NoMap:
+    def geocode(self, *a, **kw):
+        return None
+
+
+def test_a_paused_check_is_finished_once_the_pause_is_off(tmp_path):
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    seed_cases(conn)
+    summary = daily.run_daily(
+        conn,
+        calendar=Nothing(),
+        code_cases=Nothing(),
+        case_client=SlowCourt(path, delay=0),
+        parcel_client=NoCalls(),
+        geocoder=NoCalls(),
+        providers=[NoCalls()],
+        log=lambda m: None,
+    )
+    assert summary["paused_during"] == "cases"
+    settings = db.get_settings(conn)
+    # Stopped part way: not today's run, so it is still due.
+    assert settings.get("last_daily_run") is None and daily.interrupted_today(settings)
+    court = QuickCourt()
+    app = App(
+        path,
+        calendar=Nothing(),
+        code_cases=Nothing(),
+        case_client=court,
+        parcel_client=Assessor([]),
+        geocoder=NoMap(),
+        providers=[],
+    )
+    state = app.status()["daily"]
+    assert state["interrupted"] and state["next_run"] == "paused"
+    out = app.save_settings({"paused": False})
+    assert out.get("daily_started") and "finishing today's check" in out["message"]
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and (
+        app.daily_lock.locked() or daily.interrupted_today(db.get_settings(db.connect(path)))
+    ):
+        time.sleep(0.05)
+    # The cases the paused run didn't reach are read, and today's run is done.
+    assert {"1000002", "1000003", "1000004", "1000005"} <= set(court.calls)
+    settings = db.get_settings(db.connect(path))
+    assert settings["last_daily_run"] == az_today().isoformat()
+    assert not app.status()["daily"]["interrupted"]
+
+
 def test_pause_stops_the_phone_lookup_loop(tmp_path):
     conn = db.connect(tmp_path / "l.db")
     for i in range(4):
@@ -308,6 +366,55 @@ def test_failed_lookups_show_in_the_daily_summary(tmp_path):
     )
     line = daily.describe(summary)
     assert "0 landlord contacts found, 6 lookups failed (will retry tomorrow)" in line
+
+
+def test_a_lookup_that_fails_once_is_tried_again_in_the_same_run(tmp_path):
+    conn = db.connect(tmp_path / "l.db")
+    eviction(conn, "CV26-000001-EA", "2026-09-30", plaintiff="EXAMPLE HOMES LLC")
+
+    class Blip:
+        name = "osm"
+        calls = 0
+
+        def find(self, lead, name):
+            self.calls += 1
+            if self.calls == 1:
+                raise requests.ConnectionError("connection reset")
+            return Contact(phone="(520) 555-0142", source="osm")
+
+    blip = Blip()
+    counts = find_contacts(conn, [blip], scanner=None, log=lambda *a: None)
+    assert blip.calls == 2 and counts["found"] == 1 and counts["errors"] == 0
+    assert row(conn, "CV26-000001-EA")["owner_phone"] == "(520) 555-0142"
+
+
+def test_retries_are_bounded_and_stop_once_a_service_is_down(tmp_path):
+    conn = db.connect(tmp_path / "l.db")
+    for i in range(5):
+        eviction(conn, f"CV26-00000{i}-EA", "2026-09-30", plaintiff=f"EXAMPLE {i} HOMES LLC")
+
+    class Down:
+        name = "osm"
+        calls = 0
+
+        def find(self, lead, name):
+            self.calls += 1
+            raise requests.ConnectionError("lookup service down")
+
+    class Refused:
+        name = "google"
+        calls = 0
+
+        def find(self, lead, name):
+            self.calls += 1
+            raise requests.HTTPError("403", response=type("R", (), {"status_code": 403})())
+
+    down, refused = Down(), Refused()
+    counts = find_contacts(conn, [down, refused], scanner=None, log=lambda *a: None, retry_delays=(0, 0))
+    # Three tries each for the first two companies, then one try each: the service is down.
+    assert down.calls == 3 + 3 + 1 + 1 + 1
+    assert refused.calls == 5  # a refused key isn't tried again
+    assert counts["errors"] == 10 and counts["found"] == 0
 
 
 def test_a_refused_google_key_points_to_settings(tmp_path):

@@ -39,7 +39,12 @@ function renderOutreach() {
   $("#tab-outreach").innerHTML = `
     <div class="card">
       <h2>Split leads between outreach methods</h2>
-      <p class="hint">Hands out the best unassigned leads so each method gets the same kind of leads, and the Results tab can say fairly which one works. Only leads every ticked method can work are used (door hangers need a property address), every lead of one landlord goes to the same method, and each method gets the same mix of strong and weak leads. ${unassignedCount} leads are unassigned.</p>
+      <p class="hint">Assign leads deals the best of your ${unassignedCount} unassigned leads evenly across the ticked methods, so Results can say which one wins jobs.</p>
+      <details class="hint"><summary>How the split works</summary><ul>
+        <li>Only leads every ticked method can work are used: door hangers need a property address (and a unit number at an apartment complex).</li>
+        <li>All of one landlord's leads go to the same method, now and later, so no company hears from you twice.</li>
+        <li>Each method gets the same mix of strong and weak leads, evictions and code cases.</li>
+        <li>Each method reaches someone different or makes a different offer: the lead shows which.</li></ul></details>
       <div class="row">
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
@@ -61,11 +66,13 @@ function renderOutreach() {
     if (!chans.length) return toast("Tick at least one outreach method.");
     const n = +$("#aCount").value;
     const most = Math.min(n, line.n);
-    if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}?`,
-      body: `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.` + ((S.split || {}).followed ? ` Up to ${Math.min(n, S.split.followed)} more go to the method already working their landlord.` : ""),
+    const single = chans.length === 1;
+    if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}${single ? ` to ${chName(chans[0])} only` : ""}?`,
+      body: (single ? `Only one method is ticked, so this round won't compare methods: all ${most} go to ${chName(chans[0])}. Tick another method to compare.`
+        : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + ((S.split || {}).followed ? ` Up to ${Math.min(n, S.split.followed)} more go to the method already working their landlord.` : ""),
       ok: `Assign ${most} lead${most === 1 ? "" : "s"}` }))) return;
     ui.aChannels = null;  // the next suggestion fits the leads that are left
-    act(() => api("/api/assign", { count: n, channels: chans }), r => {
+    act(() => api("/api/assign", { count: n, channels: chans, single_method: single }), r => {
       const got = Object.entries(r.assigned).map(([c, k]) => `${chName(c)} ${k}`).join(", ");
       const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
       const lo = r.left_out || {};
@@ -147,7 +154,7 @@ function renderManagers(el, leads) {
     <div class="script">${esc(fill("property_manager", {}))}</div></div>
     ${list.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
-        return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:12px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
+        return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:13px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
         <td style="white-space:nowrap" data-th="Contact">${(() => { const c = ls.find(x => x.owner_phone || x.owner_email); return c ? `${c.owner_phone ? phoneCell(c) : ""}${c.owner_phone && c.owner_email ? "<br>" : ""}${c.owner_email ? emailCell(c) : ""}` : '<span class="muted">–</span>'; })()}</td>
         <td class="num" data-th="Leads">${ls.length}</td><td data-th="Properties"><span>${ls.slice(0, 3).map(l => l.address ? esc(title(l.address)) : esc(l.source_id)).join("<br>")}${ls.length > 3 ? `<br><span class="muted">+${ls.length - 3} more</span>` : ""}</span></td>
         <td data-th="Contacted">${done ? '<span class="chip good">yes</span>' : '<span class="chip">no</span>'}</td>

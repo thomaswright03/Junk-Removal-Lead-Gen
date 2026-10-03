@@ -38,6 +38,7 @@ import uuid
 from datetime import date
 from typing import Any, Optional
 
+from .enrich import is_entity
 from .tucson_codes import code_of
 from .util import Conn, LeadRow, az_today, is_multifamily, now_iso
 
@@ -46,6 +47,55 @@ CHANNELS = {
     "phone": "Phone call to owner",
     "property_manager": "Landlord / property manager",
 }
+
+# Who each method reaches and what it offers, by template (see
+# ``template_key``): on an eviction the phone call and the landlord pitch both
+# reach the landlord, so they make different offers (this one unit now vs. a
+# standing rate for every turnover), and Results compares methods within one
+# kind of lead at a time.
+PITCHES = {
+    "door_hanger": {
+        "who": "whoever is at the property: the tenant moving out, family, neighbours",
+        "offer": "a free quote to clear this property",
+    },
+    "phone": {
+        "who": "the owner of record of this property",
+        "offer": "clear this property before the City's deadline",
+    },
+    "phone_eviction": {
+        "who": "the landlord on the case",
+        "offer": "a one-time clean-out of this unit after the move-out",
+    },
+    "property_manager": {
+        "who": "the landlord, property manager or owning company",
+        "offer": "a standing clean-out rate for all of their turnovers, not one job",
+    },
+}
+
+# What Results compares within, and how the methods differ there.
+LEAD_KINDS = {"eviction": "evictions", "code_violation": "City code cases"}
+COMPARISON_BASIS = {
+    "eviction": (
+        "Compared on eviction leads only. The phone call and the landlord pitch both reach the landlord; "
+        "they differ in the offer (one clean-out of this unit vs. a standing rate for every turnover), "
+        "so this compares offers as well as methods. Door hangers reach whoever is at the property."
+    ),
+    "code_violation": (
+        "Compared on City code cases only. The phone call reaches the owner about this property; the landlord "
+        "pitch offers a company owner a standing rate; door hangers reach whoever is at the property."
+    ),
+    "": (
+        "All leads together mixes evictions and code cases, where the methods reach different people. "
+        "Pick evictions or code cases to compare like with like."
+    ),
+}
+
+
+def template_key(channel: str, lead_type: Optional[str]) -> str:
+    """The message template (and pitch) for a method on a kind of lead:
+    phone calls on evictions use the landlord script."""
+    return "phone_eviction" if channel == "phone" and lead_type == "eviction" else channel
+
 
 # The kinds of contact logged for each method, with their button labels.
 TOUCH_KINDS = {
@@ -140,6 +190,36 @@ def _get(row: LeadRow, key: str) -> Any:
         return row[key]
     except (KeyError, IndexError):
         return None
+
+
+def owner_first_name(lead: LeadRow) -> str:
+    """The first name to greet on a call, or "" when it isn't known to be a
+    person (the script then says "Hi there"). The owner of record comes
+    first, else the eviction's landlord (first plaintiff).
+
+    - Companies, trusts, apartments and the like (``is_entity``, or the
+      assessor's company flag on the owner): "".
+    - "LAST, FIRST M" (court and most lists): the word after the comma.
+    - The assessor's "LAST FIRST MIDDLE": the second word. A plaintiff
+      without a comma is not split this way, as its order isn't known.
+    """
+    owner = (_get(lead, "owner_name") or "").strip()
+    name, from_assessor = (owner, True) if owner else ((_get(lead, "plaintiff") or "").strip(), False)
+    name = name.split(";")[0].strip()
+    if not name or is_entity(name) or (from_assessor and _get(lead, "owner_entity")):
+        return ""
+    if "," in name:
+        words = name.split(",", 1)[1].split("&")[0].split()
+        word = words[0] if words else ""
+    elif from_assessor:
+        words = name.split("&")[0].split()
+        word = words[1] if len(words) > 1 else ""
+    else:
+        return ""
+    word = word.strip(".")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z'-]+", word):
+        return ""
+    return re.sub(r"(^|[-'])([a-z])", lambda m: m.group(1) + m.group(2).upper(), word.lower())
 
 
 def merged_settings(stored: Optional[dict]) -> dict:
@@ -238,6 +318,26 @@ def score_parts(
     return parts
 
 
+# How far an eviction has got, for the list order: a writ (lockout) means the
+# unit needs clearing now, a judgment means a writ usually follows within days.
+# Every writ case comes before every judgment case, which comes before every
+# other lead; priority points order the leads within a stage.
+STAGE_RANK = {"writ": 2, "judgment": 1}
+
+
+def stage_rank(lead: LeadRow) -> int:
+    """2 for an eviction with a writ, 1 for one with a judgment, else 0."""
+    if _get(lead, "lead_type") != "eviction":
+        return 0
+    return STAGE_RANK.get(str(_get(lead, "case_stage") or ""), 0)
+
+
+def rank_key(lead: LeadRow) -> tuple[int, int]:
+    """Sort key, best first: stage (writ, judgment, the rest), then the
+    priority number already on the lead (``score``)."""
+    return (-stage_rank(lead), -int(_get(lead, "score") or 0))
+
+
 def score(lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None) -> int:
     """0-100ish. ``lead`` is a dict/row with the leads table's columns."""
     return sum(points for _label, points in score_parts(lead, owner_lead_counts, today))
@@ -333,7 +433,7 @@ def _taken(conn: Conn) -> dict[str, str]:
 
 def _pool(leads: list) -> list:
     pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
-    pool.sort(key=lambda l: (-l["score"], l["id"]))
+    pool.sort(key=lambda l: (*rank_key(l), l["id"]))
     return pool
 
 
@@ -368,6 +468,29 @@ def split_preview(conn: Conn, leads: list) -> dict:
     return {"combos": combos, "followed": followed, "suggested": list(best)}
 
 
+def check_channels(channels: Any, single_method: bool = False) -> list[str]:
+    """The methods for an Assign leads round, checked: a list of known
+    method names, at least two unless ``single_method`` (a round with one
+    method compares nothing, so the page asks first)."""
+    if not isinstance(channels, (list, tuple)) or not all(isinstance(c, str) for c in channels):
+        raise ValueError("Outreach methods must be a list of method names.")
+    unknown = [c for c in dict.fromkeys(channels) if c not in CHANNELS]
+    if unknown:
+        raise ValueError(
+            f"Unknown outreach method{'' if len(unknown) == 1 else 's'}: {', '.join(unknown)}. "
+            f"The methods are: {', '.join(CHANNELS)}."
+        )
+    chosen = list(dict.fromkeys(channels))
+    if not chosen:
+        raise ValueError("Tick at least one outreach method.")
+    if len(chosen) < 2 and not single_method:
+        raise ValueError(
+            "With one method ticked the round can't compare methods. Tick two or more, "
+            "or confirm that you want a one-method round."
+        )
+    return chosen
+
+
 def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None) -> dict:
     """Deal up to ``count`` of the best unassigned leads across ``channels``
     so that each channel gets a like-for-like share (see the module notes).
@@ -381,9 +504,7 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     and they are stored as followed, not as dealt or set by hand.
     """
     rng = random.Random(seed)
-    channels = [c for c in dict.fromkeys(channels) if c in CHANNELS]
-    if not channels:
-        raise ValueError("Tick at least one outreach method.")
+    channels = check_channels(channels, single_method=True)
     count = max(0, int(count))
     round_id = now_iso() + "-" + uuid.uuid4().hex[:6]
     now = now_iso()
@@ -429,7 +550,7 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     # together, so a big one that doesn't fit waits for the next round.
     picked = 0
     chosen = []
-    for _key, group in sorted(clusters.items(), key=lambda kv: (-kv[1][0]["score"], kv[0])):
+    for _key, group in sorted(clusters.items(), key=lambda kv: (*rank_key(kv[1][0]), kv[0])):
         if picked + len(group) > count:
             continue
         chosen.append(group)
@@ -511,16 +632,19 @@ def _mix(rows: list) -> dict:
     }
 
 
-def results(conn: Conn, today: Optional[date] = None) -> list[dict]:
-    """Per-channel funnel and cost numbers, and the mix of leads each got."""
+def results(conn: Conn, today: Optional[date] = None, lead_type: Optional[str] = None) -> list[dict]:
+    """Per-channel funnel and cost numbers, and the mix of leads each got;
+    only leads of ``lead_type`` when given (see ``COMPARISON_BASIS``)."""
+    where, args = ("AND l.lead_type = ?", (lead_type,)) if lead_type else ("", ())
     rows = conn.execute(
-        """
+        f"""
         SELECT l.*, COALESCE(t.n, 0) AS touch_count, COALESCE(t.cost_cents, 0) AS touch_cents
         FROM leads l
         LEFT JOIN (SELECT lead_id, COUNT(*) AS n, SUM(cost_cents) AS cost_cents
                    FROM touches GROUP BY lead_id) t ON t.lead_id = l.id
-        WHERE l.channel IS NOT NULL
-        """
+        WHERE l.channel IS NOT NULL {where}
+        """,
+        args,
     ).fetchall()
     owner_counts = {}
     for r in conn.execute(

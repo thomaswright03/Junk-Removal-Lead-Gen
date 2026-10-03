@@ -300,6 +300,89 @@ def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):
     eviction = page.inner_text("[data-script=eviction]")
     code = page.inner_text("[data-script=code]")
     assert "eviction" in eviction and "[address]" not in eviction and "City has opened a case" in code
+    # The landlord is a company (EXAMPLE HOMES LLC): no made-up first name.
+    assert "Hi there, this is Steve" in eviction and "Homes," not in eviction
+
+
+def test_methods_on_an_eviction_say_who_they_reach_and_what_they_offer(server, page):
+    url, app, path = server
+    page.goto(url)
+    lead_row(page, "Example Homes").click()
+    page.wait_for_selector("#drawer.open")
+    page.select_option("#dChannel", "phone")
+    page.click("#dSaveCh")
+    page.wait_for_selector("[data-pitch=phone]")
+    phone = page.inner_text("[data-pitch=phone]")
+    page.select_option("#dChannel", "property_manager")
+    page.click("#dSaveCh")
+    page.wait_for_selector("[data-pitch=property_manager]")
+    pitch = page.inner_text("[data-pitch=property_manager]")
+    assert "landlord" in phone and "one-time clean-out of this unit" in phone
+    assert "standing clean-out rate" in pitch and phone != pitch
+    # Results say what they compare: eviction leads only, by default here.
+    page.keyboard.press("Escape")
+    page.click("#nav [data-tab=results]")
+    page.wait_for_selector("#rBasis >> text=eviction leads only")
+    assert page.input_value("#rKind") == "eviction"
+    page.select_option("#rKind", "code_violation")
+    page.wait_for_selector("#rBasis >> text=City code cases only")
+
+
+def test_address_work_queue_confirms_a_guess_in_one_click(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000002-EA",
+            "eviction",
+            "2026-09-28",
+            None,
+            plaintiff="MESA RENTALS LLC",
+            defendant="ROE, SAM",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute(
+        "UPDATE leads SET address = '5 W GUESS ST', address_source = 'landlord' WHERE source_id = 'CV26-000002-EA'"
+    )
+    conn.commit()
+    page.goto(url)
+    page.click("#fNeedAddr")
+    page.wait_for_selector("#recordsCard")
+    # What to ask the court for, with the dates, and where.
+    assert "special detainer" in page.inner_text("#recAsk")
+    assert page.get_attribute("#recordsCard a", "href").startswith("https://www.jp.pima.gov/OnlineRecordsRequest")
+    rows = page.locator("#addrTable tbody tr.click")
+    assert rows.count() == 2
+    guess = page.locator("#addrTable tr.click", has_text="CV26-000002-EA")
+    assert "tenant Roe, Sam" in guess.inner_text() and "Mesa Rentals LLC" in guess.inner_text()
+    # The landlord's properties open under the row.
+    page.locator("#addrTable tr.click", has_text="CV26-000001-EA").locator("[data-aprops]").click()
+    page.wait_for_selector("tr.aprops:not([hidden]) >> text=No properties found")
+    guess.locator("[data-aconfirm]").click()
+    page.wait_for_selector("text=Address confirmed")
+    page.wait_for_function("document.querySelectorAll('#addrTable tbody tr.click').length === 1")
+    row = db.connect(path).execute("SELECT address_source FROM leads WHERE source_id = 'CV26-000002-EA'").fetchone()
+    assert row[0] == "confirmed"
+
+
+def test_message_fields_insert_from_buttons_with_a_live_preview(server, page):
+    url, app, path = server
+    page.goto(url + "#tab=settings")
+    page.wait_for_selector("#pv-phone_eviction")
+    # The preview is filled in for a real lead: the eviction's landlord is a company.
+    page.wait_for_function("document.getElementById('pv-phone_eviction').textContent.startsWith('Hi there,')")
+    box = page.locator("#tpl-door_hanger")
+    box.fill("Hello ")
+    box.evaluate("b => b.setSelectionRange(6, 6)")
+    page.click("[data-for=tpl-door_hanger][data-field='{business}']")
+    assert box.input_value() == "Hello {business}"
+    page.wait_for_function("document.getElementById('pv-door_hanger').textContent === \"Hello Steve's Junk Removal\"")
+    # The code-case call previews with the code case's address.
+    assert "10 E Sample St" in page.inner_text("#pv-phone")
 
 
 def test_reload_keeps_the_filter_and_the_open_lead(server, page):
@@ -452,3 +535,34 @@ def test_works_on_a_phone(server, page):
     page.click("[data-touch=visited]")
     page.wait_for_selector("text=Logged: Hanger left")
     assert db.connect(path).execute("SELECT COUNT(*) FROM touches").fetchone()[0] == 1
+
+
+def test_header_is_one_row_on_a_wide_screen(server, page):
+    url, app, path = server
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    title, button = page.locator("header h1").bounding_box(), page.locator("#refreshBtn").bounding_box()
+    # Same row, and the main action at the right edge.
+    assert abs((title["y"] + title["height"] / 2) - (button["y"] + button["height"] / 2)) < 12
+    assert button["x"] + button["width"] > 1440 - 40
+
+
+def test_phone_text_and_targets_are_big_enough(server, page):
+    url, app, path = server
+    page.set_viewport_size({"width": 375, "height": 740})
+    for tab in ("leads", "outreach", "results", "settings"):
+        page.goto(f"{url}#tab={tab}")
+        page.wait_for_selector(f"#tab-{tab}:not([hidden]) > *")
+        small_text = page.evaluate(
+            """[...document.querySelectorAll('body *')].filter(e => e.offsetParent
+              && [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())
+              && parseFloat(getComputedStyle(e).fontSize) < 13)
+              .map(e => e.tagName + ' ' + e.textContent.trim().slice(0, 30))"""
+        )
+        assert small_text == [], (tab, small_text)
+        small_targets = page.evaluate(
+            """[...document.querySelectorAll('button, .btn, select, summary, nav button')].filter(e => e.offsetParent
+              && e.getBoundingClientRect().height < 44).map(e => e.id || e.textContent.trim().slice(0, 30))"""
+        )
+        assert small_targets == [], (tab, small_targets)

@@ -1,6 +1,13 @@
 // Settings tab.
 "use strict";
 const TEMPLATE_LABEL = { door_hanger: "Door hanger", phone: "Phone call: owner of a code-case property", phone_eviction: "Phone call: landlord on an eviction", property_manager: "Landlord / property manager pitch" };
+// Which lead a template's preview uses: a code case for the code-case call,
+// an eviction for the rest (falling back to whatever lead there is).
+const previewChannel = c => c === "phone_eviction" ? "phone" : c;
+function previewLead(c) {
+  const sm = S.samples || {};
+  return c === "phone" ? sm.code_violation || sm.eviction : sm.eviction || sm.code_violation;
+}
 function theme() { try { return localStorage.getItem("leaddesk.theme") || "system"; } catch (e) { return "system"; } }
 function setTheme(t) {
   try { if (t === "system") localStorage.removeItem("leaddesk.theme"); else localStorage.setItem("leaddesk.theme", t); } catch (e) { /* storage blocked */ }
@@ -14,6 +21,7 @@ function limitField(id, value, step, label) {
 function renderSettings() {
   const st = S.settings;
   $("#tab-settings").innerHTML = `
+    <p class="hint">Your business details, outreach costs and messages, and the pause switch.</p>
     <div class="card"><h2>Pause</h2>
       <p class="hint">Stops everything that contacts other websites: the daily check, court case reads, owner and map lookups, City code case fetches, and all phone and email lookups (including paid Google lookups). Use it if the court asks you to stop or the Google bill rises. Your leads and notes stay as they are.${S.paused_by_env ? " <strong>LEADDESK_PAUSED is set on the server, so Lead Desk stays paused until it is removed there.</strong>" : ""}</p>
       <label class="ch"><input type="checkbox" id="sPaused" ${st.paused ? "checked" : ""} aria-describedby="sPausedNow"> Pause Lead Desk</label>
@@ -43,8 +51,11 @@ function renderSettings() {
       <div class="tablewrap"><table><thead><tr><th>Method</th><th>Cost per contact $</th><th>Tracking number</th></tr></thead><tbody>
       ${Object.entries(S.channels).map(([c, n]) => `<tr><td>${chDot(c)}</td><td><input type="number" step="0.01" min="0" data-cost="${c}" value="${st.costs[c] ?? 0}" style="width:90px" aria-label="Cost per contact for ${esc(n)}"></td>
         <td><input data-track="${c}" value="${esc(st.tracking_numbers[c] || "")}" placeholder="uses main phone" aria-label="Tracking number for ${esc(n)}"></td></tr>`).join("")}</tbody></table></div></div>
-    <div class="card"><h2>Messages</h2><p class="hint">Fields: {owner}, {owner_first}, {address}, {at_address} (“ at 123 Main St”, or nothing when the address isn't known), {phone}, {business}.</p>
-      ${Object.keys(st.templates).map(c => `<h3><label for="tpl-${c}">${esc(TEMPLATE_LABEL[c] || c)}</label></h3><textarea id="tpl-${c}" data-tpl="${c}">${esc(st.templates[c] || "")}</textarea>`).join("")}
+    <div class="card"><h2>Messages</h2><p class="hint">What each outreach method says. Click a field button to put it where the cursor is; the preview shows the message for one of your leads.</p>
+      ${Object.keys(st.templates).map(c => `<h3><label for="tpl-${c}">${esc(TEMPLATE_LABEL[c] || c)}</label></h3><textarea id="tpl-${c}" data-tpl="${c}">${esc(st.templates[c] || "")}</textarea>
+        <div class="row fields"><span class="small-line">Insert:</span>${TEMPLATE_FIELDS.map(([f, label, tip]) => `<button class="btn small" data-field="${esc(f)}" data-for="tpl-${c}" title="${esc(tip)}">+ ${esc(label)}</button>`).join("")}</div>
+        <p class="small-line">Preview${previewLead(c) ? ` for ${esc(title(previewLead(c).owner_name || previewLead(c).plaintiff || previewLead(c).source_id))}` : " (no lead of this kind yet)"}:</p>
+        <div class="script" id="pv-${c}" aria-live="polite"></div>`).join("")}
     </div>
     <div class="card"><h2>Appearance</h2>
       <label>Theme <select id="sTheme">${[["system", "Same as this computer"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<option value="${v}" ${theme() === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
@@ -52,9 +63,17 @@ function renderSettings() {
     </div>
     <button class="btn primary" id="sSave">Save settings</button> <span class="hint">Saves everything above except Pause (which applies at once) and Theme (saved in this browser).</span>`;
   $("#sTheme").onchange = e => setTheme(e.target.value);
+  // Live preview, and field buttons that insert at the cursor.
+  const preview = box => { const c = box.dataset.tpl; $("#pv-" + c).textContent = fillText(box.value, previewChannel(c), previewLead(c) || {}); };
+  document.querySelectorAll("[data-tpl]").forEach(box => { preview(box); box.addEventListener("input", () => preview(box)); });
+  document.querySelectorAll("[data-field]").forEach(b => b.onclick = () => {
+    const box = $("#" + b.dataset.for), at = box.selectionStart ?? box.value.length, end = box.selectionEnd ?? at;
+    box.value = box.value.slice(0, at) + b.dataset.field + box.value.slice(end);
+    box.focus(); box.setSelectionRange(at + b.dataset.field.length, at + b.dataset.field.length); preview(box);
+  });
   for (const id of ["sGoogleLimit", "sGoogleDaily"]) $("#" + id + "None").onchange = e => { $("#" + id).disabled = e.target.checked; };
   $("#sPaused").onchange = e => act(() => api("/api/settings", { paused: e.target.checked }),
-    e.target.checked ? "Paused: nothing will be checked or looked up until you turn this off." : "Lead Desk is running again.", e.target);
+    e.target.checked ? "Paused: nothing will be checked or looked up until you turn this off." : r => r.message || "Lead Desk is running again.", e.target);
   const gc = $("#sGoogleClear");
   if (gc) gc.onclick = async e => {
     const btn = e.currentTarget;

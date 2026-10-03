@@ -65,8 +65,9 @@ def _as_dict(r: LeadRow) -> dict:
 
 
 def ranked(conn: Conn, rows: list, settings: Optional[dict] = None, today: Optional[date] = None) -> list[dict]:
-    """``rows`` as dicts with the Lead Desk ranking columns added, highest
-    priority first (newest first among equal priorities), as Lead Desk sorts
+    """``rows`` as dicts with the Lead Desk ranking columns added, writ cases
+    first, then judgments, then the rest, each highest priority first (newest
+    first among equal priorities), as Lead Desk sorts
     them. Repeat owners are counted over the leads Lead Desk shows, so a lead
     gets the same priority here as there."""
     settings = outreach.merged_settings(settings)
@@ -115,7 +116,7 @@ input{flex:1;min-width:180px}
 table{border-collapse:collapse;width:100%}
 th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
 th{position:sticky;top:0;background:var(--bg);font-weight:600}
-.chip{display:inline-block;padding:1px 8px;border-radius:10px;background:var(--chip);font-size:12px}
+.chip{display:inline-block;padding:1px 8px;border-radius:10px;background:var(--chip);font-size:13px}
 a{color:var(--accent)}.muted{color:var(--muted)}
 </style></head><body>
 <header><h1>Pima County clean-out leads</h1>

@@ -2,7 +2,7 @@
 columns the page gets for each, and the server-side filtering, sorting and
 paging that keep every response small however many leads there are."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Optional
 
 from . import db, outreach
@@ -155,6 +155,7 @@ def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[da
     d["score_parts"] = outreach.score_parts(r, owner_counts, today=today)
     d["score"] = sum(points for _label, points in d["score_parts"])
     d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
+    d["owner_first"] = outreach.owner_first_name(r)
     d["eligible"] = outreach.eligible_channels(r)
     d["door_hanger_problem"] = outreach.door_hanger_problem(r)
     d["date_label"] = outreach.date_label(r)
@@ -229,6 +230,9 @@ def _keep(l: dict, p: dict, touched: set) -> bool:
         "no_phone": not l["owner_phone"],
         "no_address": not l["address"],
         "guessed_address": l["address_source"] == "landlord",
+        # The address work queue: evictions with no address, or only a
+        # guess from the landlord's parcels.
+        "address_work": l["lead_type"] == "eviction" and (not l["address"] or l["address_source"] == "landlord"),
     }
     if kind in tests and not tests[kind]:
         return False
@@ -246,7 +250,8 @@ def _keep(l: dict, p: dict, touched: set) -> bool:
 
 
 def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
-    """Highest priority first; or newest first by the latest real event
+    """Highest priority first (writ cases, then judgments, then the rest, each
+    by priority; see ``outreach.rank_key``); or newest first by the latest real event
     (filing, judgment or writ; cases not read yet, which only have a hearing
     date, come last); or closest first."""
     by_date = lambda l: (l["latest_date"] or "", l["id"])
@@ -256,7 +261,7 @@ def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
         leads.sort(key=lambda l: (l["miles"] is None, l["miles"] or 0, -l["id"]))
     else:
         leads.sort(key=by_date, reverse=True)
-        leads.sort(key=lambda l: -l["score"])  # stable: newest first among equal scores
+        leads.sort(key=outreach.rank_key)  # stable: newest first among equal scores
     return leads
 
 
@@ -321,3 +326,67 @@ def counts(conn: Conn, settings: dict) -> dict:
         if row["channel"] in out["channels"]:
             out["channels"][row["channel"]] = {"active": int(row["n"] or 0), "to_do": int(row["to_do"] or 0)}
     return out
+
+
+# ---- addresses: progress and the court records request ----------------------
+
+# How often to ask the court for a records request of new filings.
+RECORDS_REQUEST_DAYS = 14
+ADDRESS_HISTORY_DAYS = 60
+
+
+def record_address_share(conn: Conn, settings: dict, today: Optional[date] = None) -> None:
+    """Keep one snapshot a day of how many open eviction leads have a known
+    (typed, confirmed or imported) address, so the Leads tab can say whether
+    the share is rising."""
+    today = today or az_today()
+    c = counts(conn, settings)
+    history = dict(settings.get("address_history") or {})
+    history[today.isoformat()] = [c["evictions_with_address"], c["evictions_open"]]
+    cutoff = (today - timedelta(days=ADDRESS_HISTORY_DAYS)).isoformat()
+    db.put_settings(conn, {"address_history": {k: v for k, v in sorted(history.items()) if k >= cutoff}})
+
+
+def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -> dict:
+    """The address numbers the Leads tab shows: the share a week ago (the
+    latest daily snapshot at least seven days old), and the records request
+    (when the last one was imported, which dates to ask for next, whether
+    one is due)."""
+    today = today or az_today()
+    history = settings.get("address_history") or {}
+    week = (today - timedelta(days=7)).isoformat()
+    older = [k for k in history if k <= week]
+    then = history[max(older)] if older else None
+    last = settings.get("last_records_import") or {}
+    last_date = last.get("date")
+    if last_date:
+        start = last_date
+    else:
+        row = conn.execute(
+            f"SELECT MIN(event_date) AS d FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' "
+            f"AND NOT {KNOWN_ADDRESS} AND status NOT IN ({', '.join(repr(s) for s in CLOSED)})"
+        ).fetchone()
+        start = str(row["d"])[:10] if row and row["d"] else (today - timedelta(days=30)).isoformat()
+        start = min(start, today.isoformat())
+    due_on = (date.fromisoformat(last_date) + timedelta(days=RECORDS_REQUEST_DAYS)).isoformat() if last_date else None
+    return {
+        "week_ago": {"date": max(older), "with_address": then[0], "open": then[1]} if then else None,
+        "records": {
+            "last_import": last_date,
+            "last_filled": last.get("filled"),
+            "request_from": start,
+            "request_to": today.isoformat(),
+            "due_on": due_on,
+            "due": not due_on or due_on <= today.isoformat(),
+            "every_days": RECORDS_REQUEST_DAYS,
+        },
+    }
+
+
+def samples(conn: Conn, settings: dict) -> dict:
+    """The best open lead of each kind in the view, for previews of the
+    message templates: ``{"eviction": lead, "code_violation": lead}``."""
+    out: dict[str, dict] = {}
+    for l in sort_leads([l for l in lead_dicts(conn, settings) if l["status"] not in CLOSED]):
+        out.setdefault(str(l["lead_type"]), l)
+    return {k: out[k] for k in ("eviction", "code_violation") if k in out}

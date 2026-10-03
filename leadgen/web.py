@@ -129,6 +129,7 @@ class App(JobRunner):
                 "running": self.daily_lock.locked(),
                 "message": self.daily_message,
                 "last_run": settings.get("last_daily_run"),
+                "interrupted": daily.interrupted_today(settings),
                 "summary": daily.describe(settings["last_daily_summary"])
                 if settings.get("last_daily_summary")
                 else None,
@@ -153,6 +154,7 @@ class App(JobRunner):
             settings = self.settings(conn)
             public = dict(settings)
             public.pop("last_daily_summary", None)
+            public.pop("address_history", None)  # sent as "addresses"
             key = public.pop("google_places_api_key", "") or ""
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
             public["google_key_from_env"] = bool(os.environ.get("GOOGLE_PLACES_API_KEY"))
@@ -167,11 +169,20 @@ class App(JobRunner):
                     conn, params.get("status", "open") if params and params.get("list") == "leads" else "open"
                 ),
                 "counts": leadlist.counts(conn, settings),
+                "addresses": leadlist.address_progress(conn, settings),
                 "settings": public,
                 "channels": outreach.CHANNELS,
                 "touch_kinds": outreach.TOUCH_KINDS,
                 "results": results,
                 "comparison": outreach.comparison(results),
+                # The same, within one kind of lead at a time (the Results tab's default).
+                "results_by_kind": {
+                    kind: {"results": r, "comparison": outreach.comparison(r)}
+                    for kind, r in ((k, outreach.results(conn, lead_type=k)) for k in outreach.LEAD_KINDS)
+                },
+                "lead_kinds": outreach.LEAD_KINDS,
+                "comparison_basis": outreach.COMPARISON_BASIS,
+                "pitches": outreach.PITCHES,
                 "statuses": db.STATUSES,
                 "stale_days": self.stale_days,
                 "notes_limit": NOTES_LIMIT,
@@ -182,6 +193,8 @@ class App(JobRunner):
                 return out
             if params.get("list"):
                 out["list"] = leadlist.page(conn, settings, params)
+            if params.get("samples"):  # the Settings tab's message previews
+                out["samples"] = leadlist.samples(conn, settings)
             if params.get("list") == "queue":  # the Outreach tab
                 out["split"] = self.split_preview(conn, settings)
             lead_id = str(params.get("lead") or "")
@@ -385,9 +398,13 @@ class App(JobRunner):
 
     def assign(self, body: dict) -> dict:
         count = count_value(body.get("count"))
+        raw = body.get("channels")
+        channels = outreach.check_channels(
+            list(outreach.CHANNELS) if raw is None else raw, single_method=body.get("single_method") is True
+        )
         with self.conn() as conn:
             leads = leadlist.lead_dicts(conn, self.settings(conn))
-            return outreach.assign(conn, leads, count, body.get("channels") or list(outreach.CHANNELS))
+            return outreach.assign(conn, leads, count, channels)
 
     def split_preview(self, conn: Conn, settings: dict) -> dict:
         """What Assign leads can hand out with each choice of methods."""
@@ -408,7 +425,16 @@ class App(JobRunner):
             db.put_settings(conn, values)
             conn.commit()
         self._ensure_base()
-        return {"ok": True}
+        out: dict[str, Any] = {"ok": True}
+        if values.get("paused") is False and current.get("paused"):
+            # Pause turned off: finish today's check now rather than tomorrow.
+            resumed = self.resume_daily()
+            if resumed and resumed.get("started"):
+                out["daily_started"] = True
+                out["message"] = "Lead Desk is running again and is finishing today's check now."
+            elif resumed and resumed.get("message"):
+                out["message"] = "Lead Desk is running again. " + resumed["message"]
+        return out
 
     def _ensure_base(self) -> None:
         with self.conn() as conn:
@@ -478,6 +504,12 @@ class App(JobRunner):
                 # has fill in their property address instead of adding a lead.
                 filled = fill_case_addresses(conn, leads)
                 counts["addresses_filled"] = len(filled)
+                if filled:
+                    # A records request came in: the next one asks from today on.
+                    db.put_settings(
+                        conn, {"last_records_import": {"date": az_today().isoformat(), "filled": len(filled)}}
+                    )
+                    leadlist.record_address_share(conn, self.settings(conn))
                 leads = [l for l in leads if l.source_id not in filled]
                 counts["imported"] -= len(filled)
             for lead in leads:

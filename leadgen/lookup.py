@@ -565,6 +565,46 @@ def providers_from(settings: Optional[dict] = None, google_key: Optional[str] = 
     return out
 
 
+# A lookup that fails with a network error, a timeout or a busy server (429,
+# 5xx) is tried again after these pauses (seconds) before the lead is left
+# for the next run. Once a provider has failed every try for this many
+# companies in a run it is down, not blipping: no more retries for it.
+RETRY_DELAYS = (2.0, 5.0)
+RETRY_GIVE_UP_AFTER = 2
+
+
+def _is_transient(error: BaseException) -> bool:
+    """A failure worth trying again in a moment: the connection or a busy
+    server, not a refused key or a bad request."""
+    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+        return True
+    response = getattr(error, "response", None)
+    return response is not None and (response.status_code == 429 or response.status_code >= 500)
+
+
+def _find_with_retry(
+    prov: Any,
+    lead: LeadRow,
+    name: Optional[str],
+    delays: tuple[float, ...],
+    should_stop: StopCheck = None,
+    sleep: Callable[[float], Any] = time.sleep,
+) -> Optional[Contact]:
+    """``prov.find``, tried again after each of ``delays`` while the failure
+    is transient (see ``_is_transient``) and Lead Desk isn't paused."""
+    for delay in (*delays, None):
+        try:
+            return prov.find(lead, name)
+        except Exception as e:
+            if delay is None or isinstance(e, ProviderUnavailable) or not _is_transient(e):
+                raise
+            if should_stop and should_stop():
+                raise
+            _log.info("%s lookup failed (%s); trying again in %ss", prov.name, type(e).__name__, delay)
+            sleep(delay)
+    return None  # not reached: the last try returns or raises
+
+
 def _has_notice(lead: LeadRow) -> bool:
     return lead["lead_type"] == "eviction" and bool(lead["eviction_notice"])
 
@@ -579,8 +619,13 @@ def find_contacts(
     lead_types: Optional[tuple[str, ...]] = None,
     progress: Optional[Callable[[int, int], Any]] = None,
     should_stop: StopCheck = None,
+    retry_delays: Optional[tuple[float, ...]] = None,
 ) -> dict:
     """Look up phone/email/website for business owners and landlords.
+
+    A lookup that fails for a passing reason is tried again within the run
+    (``retry_delays``, default ``RETRY_DELAYS``) before the lead waits for
+    the next run.
 
     One lookup per company: every lead with the same owner/landlord name gets
     the result. Values entered by hand (contact_source = 'manual') are never
@@ -612,6 +657,8 @@ def find_contacts(
     if not providers:  # paused, or nothing to look up with
         return counts
     done: dict[str, tuple[Optional[Contact], bool]] = {}  # business name -> (Contact or None, failed)
+    gave_up: dict[str, int] = {}  # provider -> companies it failed every retry for
+    retry_delays = RETRY_DELAYS if retry_delays is None else retry_delays
     for i, lead in enumerate(rows):
         if progress and i:
             progress(i, len(rows))
@@ -635,13 +682,16 @@ def find_contacts(
                 for prov in providers:
                     if getattr(prov, "only_eviction_notices", False) and not _has_notice(lead):
                         continue
+                    delays = retry_delays if gave_up.get(prov.name, 0) < RETRY_GIVE_UP_AFTER else ()
                     try:
-                        c = prov.find(lead, name)
+                        c = _find_with_retry(prov, lead, name, delays, should_stop)
                     except LimitReached:
                         counts["over_limit"] = counts.get("over_limit", 0) + 1
                         failed = True
                         continue
                     except Exception as e:  # one provider failing shouldn't stop the run
+                        if delays and _is_transient(e):
+                            gave_up[prov.name] = gave_up.get(prov.name, 0) + 1
                         counts["errors"] += 1
                         if _is_key_problem(prov, e):
                             counts["error_cause"] = "google_key"

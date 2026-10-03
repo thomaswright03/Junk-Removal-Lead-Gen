@@ -66,6 +66,10 @@ buttons say Lead Desk is paused. Pause takes effect the moment it is ticked,
 without "Save settings".
 Pausing also stops a check or job that is already running, before its next
 request to the court or a lookup service, and its result says it was paused.
+A daily check stopped this way doesn't count as the day's check: turning the
+pause off finishes it straight away (online, it starts the GitHub run when
+`LEADDESK_GITHUB_TOKEN` is set; otherwise the header says to press **Check
+for new evictions**), and cases already read that day aren't read again.
 Leads and notes stay as they are. To stop only Google, untick **Use Google
 lookups** (this works even when the key comes from `GOOGLE_PLACES_API_KEY`)
 or set its limits to 0.
@@ -83,7 +87,17 @@ or set its limits to 0.
   shows the full summary, how many court cases are still waiting to be
   checked and when the next check runs. The Leads tab also says how many
   open eviction leads have a confirmed or typed address, and an eviction
-  with no address shows a "Find the address" checklist. Paste Justice Court case links
+  with no address shows a "Find the address" checklist. The share of open
+  evictions with an address is shown next to the share a week ago (from a
+  snapshot the daily check keeps). **Work through the ones that need one**
+  (or Address work queue under the kind filter) lists the evictions with no
+  address or only a guess, with the case, tenant and landlord side by side:
+  **Confirm** accepts a guess in one click, **Landlord's properties** lists
+  the landlord's parcels with a **Use** button each. Above it, the
+  records-request card says what to ask the court for (the dates since the
+  last file you imported), links the court's request form, copies the
+  request, imports the file the court sends, and says when the next one is
+  due (every two weeks). Paste Justice Court case links
   (`jcDisplayCase.aspx?ID=...`) into **Add cases** to add cases by hand;
   Lead Desk reads each case page for the eviction notice, judgment, writ,
   parties and next court date. Each open lead is ranked by priority, with the
@@ -125,7 +139,13 @@ or set its limits to 0.
   round's number and are reported separately. Each method has its own work
   queue: a driving route for door hangers, a call list with a script, and a
   list of companies to pitch.
-- **Results**: per method, how many leads were contacted, responded, were
+- **Results**: compared within one kind of lead at a time (evictions or
+  City code cases; "all leads together" is offered but says it mixes them),
+  because the methods reach different people on each. On an eviction the
+  phone call and the landlord pitch both reach the landlord, so they make
+  different offers (one clean-out of this unit vs. a standing rate for every
+  turnover); the lead shows who its method reaches and what it offers, and
+  the Results tab says what it is comparing. Per method, how many leads were contacted, responded, were
   quoted and won, what was spent, revenue, cost per job and revenue per
   dollar, and the mix of leads each method got. Lead Desk names a leader
   only when the mixes match; otherwise it says why the comparison isn't
@@ -134,7 +154,14 @@ or set its limits to 0.
   changed on the lead. Money is kept in whole cents; a quote or revenue over
   $100,000 (or a contact cost over $1,000) is refused as a likely typo.
 - **Settings**: business name and phone, a tracking phone number and cost
-  per contact for each channel, and the message templates.
+  per contact for each channel, and the message templates. Template fields
+  (owner name, first name, address...) go in from buttons, and each
+  template shows a live preview for one of your leads.
+
+Each tab says what it is for in one line; the longer explanations (how the
+daily check works, how Assign leads splits) are behind a "How..." link, and
+the Leads tab has a short glossary of the court and property words (notice,
+judgment, writ, parcel, phone-lookup service).
 
 **Owner phone and email.** Public property records have no phone numbers or
 emails, so they come from three places, all shown in the Phone and Email
@@ -180,10 +207,18 @@ mailing address is elsewhere, +10 for a company/trust owner, +10 if the
 owner has several leads, +15 if the latest court or city event (filing,
 judgment, writ; opening for a code case) is under a week old (+8 under two
 weeks). An upcoming hearing, or any date in the future, earns nothing.
+The list order puts the case stage first: every eviction with a writ
+(lockout) comes before every one with only a judgment, which comes before
+every other lead; priority orders the leads within each stage. The CSV/HTML
+export, `leadgen list` and Assign leads use the same order.
 
 A lead becomes Old (stale) 30 days after its latest event, so an eviction
 filed weeks ago that has just had a writ stays fresh, and an Old case that
-gets a new judgment or writ is New again. The daily summary says how many
+gets a new judgment or writ is New again. A phone lookup that fails for a
+passing reason (connection dropped, timeout, busy server) is tried twice
+more within the run, a few seconds apart; once a service has failed every
+try for two companies it is treated as down for the rest of that run. The
+daily summary says how many
 phone lookups failed (they are tried again the next day) and points to
 Settings when Google refused the key.
 
@@ -199,6 +234,11 @@ assessor, landlord phones, new Tucson code cases. It prints a one-line
 summary. `leadgen schedule install` runs it every morning (`--hour 7` for a
 different time, `leadgen schedule remove` to stop).
 
+`leadgen check-court` searches the court calendar for the next 30 days and
+fails when it finds no eviction hearings (there are always some), which
+means the court's page has changed. GitHub runs it every day
+(`.github/workflows/live-court.yml`); `--file` checks saved pages instead.
+
 ```sh
 leadgen run
 ```
@@ -206,8 +246,8 @@ leadgen run
 That pulls new City of Tucson code cases, looks up each owner from the county
 assessor, geocodes addresses and checks they
 are in Pima County, marks leads whose latest event is older than 30 days as stale, and writes
-`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, highest
-priority first as in Lead Desk, with the priority, case stage, notice flag and
+`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, in Lead Desk's order (writs, then
+judgments, then the rest, each highest priority first), with the priority, case stage, notice flag and
 latest event (Filed, Judgment, Writ, Opened) in the first columns. Open the
 HTML file in a browser to search and filter; open the CSV in Excel or import it
 into a CRM.

@@ -589,6 +589,10 @@ def test_next_daily_run_wording():
     noon = datetime(2026, 10, 3, 19, 0, tzinfo=timezone.utc)
     assert next_daily_run({"last_daily_run": "2026-10-03"}, now=noon) == "tomorrow 6:00 AM"
     assert next_daily_run({"paused": True}, now=noon) == "paused"
+    # Stopped part way by the pause: still due today, not tomorrow.
+    stopped = {"last_daily_run": "2026-10-02", "last_daily_interrupted": "2026-10-03"}
+    assert next_daily_run(stopped, now=noon) == "within the next few minutes"
+    assert "finish today's" in next_daily_run(stopped, serverless=True, now=noon)
 
 
 def test_channels_list_has_no_postcards():

@@ -117,7 +117,7 @@ function renderDrawer() {
       <dt>Email</dt><dd>${emailCell(l)}</dd>
       ${l.owner_website ? `<dt>Website</dt><dd><a href="${esc(/^https?:/i.test(l.owner_website) ? l.owner_website : "https://" + l.owner_website)}" target="_blank" rel="noopener">${esc(l.owner_website.replace(/^https?:\/\//i, ""))}</a></dd>` : ""}
       ${l.contact_source ? `<dt>Contact from</dt><dd class="muted">${esc(SOURCE_LABEL[l.contact_source] || l.contact_source)}${l.contact_name ? ` · matched “${esc(l.contact_name)}”` : ""}</dd>` : ""}
-      ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (statutory agent)` : ""}</dd>` : ""}
+      ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (lists the company's registered contact, its “statutory agent”)` : ""}</dd>` : ""}
     </dl>
 
     <div class="card" style="margin-top:16px">
@@ -151,7 +151,7 @@ function renderDrawer() {
         <select id="dChannel" aria-label="Outreach method">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? (v !== "door_hanger" ? " (no one to contact)" : l.door_hanger_problem === "needs_unit" ? " (needs a unit number or a confirmed address)" : " (needs an address)") : ""}</option>`).join("")}</select>
         <button class="btn small" id="dSaveCh">Set method</button>
       </div>
-      ${ch ? `<div class="script">${esc(fill(ch, l))}</div>
+      ${ch ? `${pitchLine(ch, l)}<div class="script">${esc(fill(ch, l))}</div>
       <div class="row" style="margin-top:8px">
         ${touchButtons(ch).map(([k, t]) => `<button class="btn small" data-touch="${k}">${t}</button>`).join("")}
       </div>` : `<p class="hint">Pick a method to see the message and log outreach.</p>`}
