@@ -187,14 +187,16 @@ async function load() {
   render();
 }
 // Run one action: the button is disabled while it runs (so a double click
-// can't log twice), the result is shown in a toast, and the page reloads.
+// can't log twice), the page reloads, then the result is shown in a toast
+// (so the toast never describes leads the list isn't showing yet).
 async function act(fn, okMsg, btn, undo) {
   if (btn) { if (btn.disabled) return; btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
   try {
     const r = await fn();
+    await load();
     const msg = okMsg && (typeof okMsg === "function" ? okMsg(r) : okMsg);
     if (msg) toast(msg, Math.max(3200, msg.length * 60), undo);
-    await load(); return r;
+    return r;
   }
   catch (e) { toast(e.message, 8000); }
   finally { if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); } }
