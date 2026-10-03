@@ -204,7 +204,7 @@ def test_code_case_coverage_and_counts_are_shown(server, page):
     page.wait_for_selector("#leadTable tbody tr[data-id]")
     assert "1 of them code cases" in page.inner_text("#fView")
     assert "City of Tucson only" in page.inner_text("#tab-leads")
-    assert "0 of 1 open eviction lead has a confirmed or typed property address" in page.inner_text("#addrShare")
+    assert "0 of 1 open eviction lead has an address a door hanger can go to" in page.inner_text("#addrShare")
 
 
 def test_notes_survive_a_status_change_and_a_refresh(server, page):
@@ -267,6 +267,8 @@ def test_import_a_csv_and_see_the_leads(server, page, tmp_path):
 
 def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     url, app, path = server
+    with db.connect(path) as conn:  # the code case owner's number was found too
+        conn.execute("UPDATE leads SET owner_phone = '(520) 555-0102' WHERE source_id = 'CE-1'")
     page.goto(url)
     page.click("#nav [data-tab=outreach]")
     # The first round offered is evictions only, with the methods they can all be worked by.
@@ -327,6 +329,27 @@ def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     page.click("#confirmOk")
     page.wait_for_selector("#roundSummary >> text=1 eviction and 0 City code cases assigned")
     assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 2
+
+
+def test_a_round_leaves_out_leads_nobody_can_call_unless_steve_includes_them(server, page):
+    url, app, path = server
+    with db.connect(path) as conn:  # day one: no phone or email for anyone
+        conn.execute("UPDATE leads SET owner_phone = NULL")
+    page.goto(url)
+    page.click("#nav [data-tab=outreach]")
+    # The methods that could call the landlord are ticked, and the line says why nothing can go yet.
+    page.wait_for_selector("#aSplit >> text=1 more eviction has no phone or email yet")
+    assert page.is_checked(".aCh[value=phone]") and page.is_checked(".aCh[value=property_manager]")
+    assert page.is_disabled("#aGo")
+    page.check("#aAll")
+    page.wait_for_selector("#aSplit >> text=1 of them have no phone or email yet")
+    page.wait_for_selector("#aGo:not([disabled])")
+    page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
+    page.wait_for_selector("#confirmBody >> text=1 of them have no phone or email yet")
+    page.click("#confirmOk")
+    page.wait_for_selector("#roundSummary >> text=1 eviction and 0 City code cases assigned")
+    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 1
 
 
 def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):
@@ -635,6 +658,10 @@ def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
     assert "2 steps to do" in guide.inner_text()
     assert "1 of 2 open eviction leads can't be reached yet" in page.inner_text("#reachLine")
     assert "1,000 of these lookups a month free" in guide.inner_text() and "$0 a month" in guide.inner_text()
+    # What each step would reach, and the one to start with (it reaches more).
+    assert "up to 2 of 2 open eviction leads" in page.inner_text("#yieldRecords")
+    assert "up to 1 of 2 open eviction leads" in page.inner_text("#yieldGoogle")
+    assert "start here" in page.inner_text("#setupRecords") and "start here" not in page.inner_text("#setupGoogle")
     # The lead with nothing says so in the list.
     assert "can't reach yet" in lead_row(page, "Sample Properties").inner_text()
     assert "can't reach yet" not in lead_row(page, "Example Homes").inner_text()

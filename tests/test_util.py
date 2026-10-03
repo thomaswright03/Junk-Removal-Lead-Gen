@@ -22,4 +22,17 @@ def test_decode_text_reads_excel_csv():
 
 def test_one_definition_of_multifamily():
     assert is_multifamily("APARTMENTS 25+ UNITS") and not is_multifamily("SFR GRADE 010-3")
+    # Every parcel with more than one home, in the assessor's words.
+    for use in (
+        "MANUFACTURED HOME PARK W/ ADDNL RESIDENCE",
+        "MOBILE HOME PARK",
+        "RV PARK",
+        "MULTIPLE RESIDENCE",
+        "SFR W/ ADDNL RESIDENCE",
+        "DUPLEX",
+        "TOWNHOUSE",
+    ):
+        assert is_multifamily(use), use
+    for use in ("SINGLE FAMILY RESIDENCE", "MOBILE HOME (SINGLE)", "CONDOMINIUM COMMON AREA", "RESIDENTIAL RENTAL"):
+        assert not is_multifamily(use), use
     assert is_residential("RESIDENTIAL RENTAL") and is_residential("CONDO")

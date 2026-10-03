@@ -23,7 +23,7 @@ function renderLeads() {
   const opts = (pairs, cur) => pairs.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
   const vc = S.view_counts || {}, view = S.settings.lead_view || "eviction_notice";
   // What's filtering the list, for the empty message and its Clear button.
-  const typeLabel = { address_work: "needs an address", code_violation: "code cases", eviction: "evictions", absentee: "owner lives elsewhere", entity: "company or trust owner", has_phone: "has a phone", no_phone: "no phone yet", no_address: "address needed", guessed_address: "address to confirm", reachable: "can be reached", unreachable: "can't be reached yet" };
+  const typeLabel = { address_work: "needs a usable address", code_violation: "code cases", eviction: "evictions", absentee: "owner lives elsewhere", entity: "company or trust owner", has_phone: "has a phone", no_phone: "no phone yet", no_address: "address needed", guessed_address: "address to confirm", reachable: "can be reached", unreachable: "can't be reached yet" };
   const active = [ui.q.trim() ? `“${esc(ui.q.trim())}”` : "", typeLabel[ui.type] || "", ui.channel ? (ui.channel === "none" ? "not assigned" : esc(chName(ui.channel))) : "",
     ui.status && ui.status !== "open" ? esc(STATUS_LABEL[ui.status] || ui.status) : ""].filter(Boolean);
   const emptyMsg = active.length ? `No leads match ${active.join(", ")}${view !== "all" ? ` in “${esc(VIEW_LABEL[view])}”` : ""}. <button class="btn small" id="fClear">Clear search and filters</button>`
@@ -40,10 +40,10 @@ function renderLeads() {
   const trend = wk && wk.open ? `; ${share(wk.with_address, wk.open)} a week ago` : "";
   // Which eviction leads can be called, emailed or visited now, and which can't yet.
   const reachLine = evOpen ? `<p class="small-line" id="reachLine"><strong>${evReach} of ${evOpen}</strong> open eviction lead${evOpen === 1 ? "" : "s"} can be reached now<span class="m-hide">:
-    ${evContact} with a phone or email, ${evAddr} with a known property address</span>.
+    ${evContact} with a phone or email, ${evAddr} with an address a door hanger can go to</span>.
     ${evNone ? `<strong>${evNone} ha${evNone === 1 ? "s" : "ve"} neither yet.</strong> ${ui.type !== "unreachable" ? `<button class="linkbtn" id="fUnreach">Show them</button>` : ""}` : ""}
     ${evNone && !showSetup() ? `<button class="linkbtn" id="setupShow">How to reach more</button>` : ""}</p>` : "";
-  const addrLine = evOpen ? `<p class="small-line" id="addrShare">${evAddr} of ${evOpen} open eviction lead${evOpen === 1 ? " has" : "s have"} a confirmed or typed property address (${share(evAddr, evOpen)}${trend}).
+  const addrLine = evOpen ? `<p class="small-line" id="addrShare">${evAddr} of ${evOpen} open eviction lead${evOpen === 1 ? " has" : "s have"} an address a door hanger can go to (${share(evAddr, evOpen)}${trend}): typed, confirmed or from the court, with a unit where the parcel has several homes.
     ${evOpen > evAddr && ui.type !== "address_work" ? `<button class="linkbtn" id="fNeedAddr">Work through the ones that need one</button>` : ""}
     ${rec.due && ui.type !== "address_work" ? ` · <span class="chip warn">records request due</span>` : ""}</p>` : "";
   const queue = ui.type === "address_work";
@@ -268,19 +268,37 @@ function setupGuide(addrLine) {
   const recState = rec.waiting ? done(`sent ${fmtDate(rec.last_request)}: waiting for the file`)
     : rec.last_import ? done(`last file imported ${fmtDate(rec.last_import)}`) : '<span class="chip">not sent yet</span>';
   const recDue = rec.due ? '<span class="chip warn">next one due now</span>' : `next one due ${esc(fmtDate(rec.due_on))}`;
+  // What each step would reach, from the leads now open (counted on the
+  // server, see leadlist.eviction_reach), and the one to do first: the
+  // undone step that reaches the most leads.
+  const lookN = c.lookup_leads || 0, firms = c.lookup_companies || 0, recN = c.records_leads || 0;
+  const perDay = st.google_daily_limit, days = perDay ? Math.ceil(firms / perDay) : 0;
+  const keyYield = evOpen ? `<p class="hint yield" id="yieldGoogle"><b>What it reaches:</b> up to ${lookN} of ${evOpen} open eviction lead${evOpen === 1 ? "" : "s"},
+    the ones whose landlord is a company (${firms} compan${firms === 1 ? "y" : "ies"} not looked up yet). Google lists businesses, not private landlords, and won't have a number for every company.
+    ${firms && perDay ? `At ${perDay} lookups a day that takes about ${days} day${days === 1 ? "" : "s"}.` : ""}</p>` : "";
+  const recYield = evOpen ? `<p class="hint yield" id="yieldRecords"><b>What it reaches:</b> up to ${recN} of ${evOpen} open eviction lead${evOpen === 1 ? "" : "s"},
+    the ones with no address a door hanger can go to. The file lists the property for every case filed in the dates you ask for (a unit number too, where the court has one); the court takes days to answer. An address gives a door hanger, not a phone number.</p>` : "";
+  const todo = [!googleReady() && { id: "google", n: lookN }, !recordsStarted() && { id: "records", n: recN }].filter(Boolean);
+  const first = todo.length ? todo.reduce((a, b) => (b.n > a.n ? b : a)).id : null;
+  const startHere = id => id === first && todo.length > 1 ? ' <span class="chip acc" title="Of the steps left, this one reaches the most open eviction leads">start here</span>' : "";
+  const steps = {
+    google: `<li id="setupGoogle"><strong>Add a Google Places key</strong>${startHere("google")} ${keyStep}${googleReady() ? "" : keyYield}</li>`,
+    records: `<li id="setupRecords"><strong>Ask the court for the property addresses</strong>${startHere("records")} ${recState} · ${recDue}
+        <p class="hint">The Justice Court's records request lists each eviction case with its property address. When the file comes, import it and matching cases fill in. Ask every ${rec.every_days || 14} days.</p>
+        ${recordsStarted() ? "" : recYield}
+        ${addrLine || ""}
+        <div class="row"><button class="btn" id="setupRecOpen">Show the records request steps</button>
+        ${rec.waiting ? "" : `<button class="btn" data-recsent>I've sent the request</button>`}</div></li>`,
+  };
+  const order = first === "records" ? ["records", "google"] : ["google", "records"];
   // Open on a computer; on a phone it starts folded so the leads stay on screen.
   const open = ui.setupOpen ?? !matchMedia("(max-width: 720px)").matches;
   return `<details class="card mb12 setup" id="setupGuide" ${open ? "open" : ""}>
     <summary><h2 id="setupTitle" tabindex="-1">Get phone numbers and addresses for eviction leads${setupDone() ? "" : ` <span class="chip warn">${googleReady() || recordsStarted() ? "1 step" : "2 steps"} to do</span>`}</h2>
-      ${evOpen ? `<span class="small-line" id="reachLine"><strong>${evNone} of ${evOpen}</strong> open eviction lead${evOpen === 1 ? "" : "s"} can't be reached yet: no phone, email or known address.</span>` : ""}</summary>
-    <p class="hint">Court cases name the landlord and the tenant but list no phone number and no property address, so a new eviction can't be called or visited until Lead Desk finds them. Two steps fix most of that:</p>
+      ${evOpen ? `<span class="small-line" id="reachLine"><strong>${evNone} of ${evOpen}</strong> open eviction lead${evOpen === 1 ? "" : "s"} can't be reached yet: no phone, email or usable address.</span>` : ""}</summary>
+    <p class="hint">Court cases name the landlord and the tenant but list no phone number and no property address, so a new eviction can't be called or visited until Lead Desk finds them. Until then the Outreach tab doesn't give it to the phone or landlord methods. Two steps fix most of that${first && todo.length > 1 ? "; start with the one marked" : ""}:</p>
     <ol class="setup-steps">
-      <li id="setupGoogle"><strong>Add a Google Places key</strong> ${keyStep}</li>
-      <li id="setupRecords"><strong>Ask the court for the property addresses</strong> ${recState} · ${recDue}
-        <p class="hint">The Justice Court's records request lists each eviction case with its property address. When the file comes, import it and matching cases fill in. Ask every ${rec.every_days || 14} days.</p>
-        ${addrLine || ""}
-        <div class="row"><button class="btn" id="setupRecOpen">Show the records request steps</button>
-        ${rec.waiting ? "" : `<button class="btn" data-recsent>I've sent the request</button>`}</div></li>
+      ${order.map(id => steps[id]).join("")}
     </ol>
     <button class="linkbtn" id="setupHide">${setupDone() ? "Hide" : "Hide this guide"}</button>
   </details>`;
