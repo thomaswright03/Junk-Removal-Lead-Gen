@@ -151,7 +151,7 @@ function renderDrawer() {
         <select id="dChannel" aria-label="Outreach method">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? (v !== "door_hanger" ? " (no one to contact)" : l.door_hanger_problem === "needs_unit" ? " (needs a unit number or a confirmed address)" : " (needs an address)") : ""}</option>`).join("")}</select>
         <button class="btn small" id="dSaveCh">Set method</button>
       </div>
-      ${ch ? `<div class="script">${esc(fill(ch, l))}</div>
+      ${ch ? `${pitchLine(ch, l)}<div class="script">${esc(fill(ch, l))}</div>
       <div class="row" style="margin-top:8px">
         ${touchButtons(ch).map(([k, t]) => `<button class="btn small" data-touch="${k}">${t}</button>`).join("")}
       </div>` : `<p class="hint">Pick a method to see the message and log outreach.</p>`}

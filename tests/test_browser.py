@@ -304,6 +304,30 @@ def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):
     assert "Hi there, this is Steve" in eviction and "Homes," not in eviction
 
 
+def test_methods_on_an_eviction_say_who_they_reach_and_what_they_offer(server, page):
+    url, app, path = server
+    page.goto(url)
+    lead_row(page, "Example Homes").click()
+    page.wait_for_selector("#drawer.open")
+    page.select_option("#dChannel", "phone")
+    page.click("#dSaveCh")
+    page.wait_for_selector("[data-pitch=phone]")
+    phone = page.inner_text("[data-pitch=phone]")
+    page.select_option("#dChannel", "property_manager")
+    page.click("#dSaveCh")
+    page.wait_for_selector("[data-pitch=property_manager]")
+    pitch = page.inner_text("[data-pitch=property_manager]")
+    assert "landlord" in phone and "one-time clean-out of this unit" in phone
+    assert "standing clean-out rate" in pitch and phone != pitch
+    # Results say what they compare: eviction leads only, by default here.
+    page.keyboard.press("Escape")
+    page.click("#nav [data-tab=results]")
+    page.wait_for_selector("#rBasis >> text=eviction leads only")
+    assert page.input_value("#rKind") == "eviction"
+    page.select_option("#rKind", "code_violation")
+    page.wait_for_selector("#rBasis >> text=City code cases only")
+
+
 def test_reload_keeps_the_filter_and_the_open_lead(server, page):
     url, app, _ = server
     page.goto(url)

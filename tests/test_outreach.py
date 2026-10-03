@@ -586,3 +586,30 @@ def test_lead_carries_the_greeting_name(tmp_path):
     leads = {l["source_id"]: l for l in App(path).state({"list": "leads"})["list"]["leads"]}
     assert leads["CV26-000001-EA"]["owner_first"] == ""
     assert leads["CV26-000002-EA"]["owner_first"] == "Raynaldo"
+
+
+def test_each_method_reaches_someone_else_or_offers_something_else_on_an_eviction():
+    pitches = {ch: outreach.PITCHES[outreach.template_key(ch, "eviction")] for ch in outreach.CHANNELS}
+    assert len({p["who"] for p in pitches.values()}) >= 2
+    # The two methods that reach the landlord make different offers.
+    assert len({(p["who"], p["offer"]) for p in pitches.values()}) == len(outreach.CHANNELS)
+    assert "one-time" in pitches["phone"]["offer"] and "standing" in pitches["property_manager"]["offer"]
+
+
+def test_results_compare_methods_within_one_kind_of_lead(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed(conn)
+    seed_evictions(conn, with_address=4, without=0)
+    conn.execute("UPDATE leads SET channel = 'phone' WHERE lead_type = 'eviction'")
+    conn.execute("UPDATE leads SET channel = 'door_hanger' WHERE lead_type = 'code_violation'")
+    conn.commit()
+    state = App(path).state()
+    by_kind = state["results_by_kind"]
+    evictions = {r["channel"]: r["assigned"] for r in by_kind["eviction"]["results"]}
+    codes = {r["channel"]: r["assigned"] for r in by_kind["code_violation"]["results"]}
+    assert evictions == {"door_hanger": 0, "phone": 5, "property_manager": 0}
+    assert codes == {"door_hanger": 3, "phone": 0, "property_manager": 0}
+    # All together the two methods look comparable; within each kind there's nothing to compare yet.
+    assert not by_kind["eviction"]["comparison"]["fair"]
+    assert "eviction leads only" in state["comparison_basis"]["eviction"]

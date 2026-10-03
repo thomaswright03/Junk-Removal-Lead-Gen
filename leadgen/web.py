@@ -173,6 +173,14 @@ class App(JobRunner):
                 "touch_kinds": outreach.TOUCH_KINDS,
                 "results": results,
                 "comparison": outreach.comparison(results),
+                # The same, within one kind of lead at a time (the Results tab's default).
+                "results_by_kind": {
+                    kind: {"results": r, "comparison": outreach.comparison(r)}
+                    for kind, r in ((k, outreach.results(conn, lead_type=k)) for k in outreach.LEAD_KINDS)
+                },
+                "lead_kinds": outreach.LEAD_KINDS,
+                "comparison_basis": outreach.COMPARISON_BASIS,
+                "pitches": outreach.PITCHES,
                 "statuses": db.STATUSES,
                 "stale_days": self.stale_days,
                 "notes_limit": NOTES_LIMIT,

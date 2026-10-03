@@ -48,6 +48,55 @@ CHANNELS = {
     "property_manager": "Landlord / property manager",
 }
 
+# Who each method reaches and what it offers, by template (see
+# ``template_key``): on an eviction the phone call and the landlord pitch both
+# reach the landlord, so they make different offers (this one unit now vs. a
+# standing rate for every turnover), and Results compares methods within one
+# kind of lead at a time.
+PITCHES = {
+    "door_hanger": {
+        "who": "whoever is at the property: the tenant moving out, family, neighbours",
+        "offer": "a free quote to clear this property",
+    },
+    "phone": {
+        "who": "the owner of record of this property",
+        "offer": "clear this property before the City's deadline",
+    },
+    "phone_eviction": {
+        "who": "the landlord on the case",
+        "offer": "a one-time clean-out of this unit after the move-out",
+    },
+    "property_manager": {
+        "who": "the landlord, property manager or owning company",
+        "offer": "a standing clean-out rate for all of their turnovers, not one job",
+    },
+}
+
+# What Results compares within, and how the methods differ there.
+LEAD_KINDS = {"eviction": "evictions", "code_violation": "City code cases"}
+COMPARISON_BASIS = {
+    "eviction": (
+        "Compared on eviction leads only. The phone call and the landlord pitch both reach the landlord; "
+        "they differ in the offer (one clean-out of this unit vs. a standing rate for every turnover), "
+        "so this compares offers as well as methods. Door hangers reach whoever is at the property."
+    ),
+    "code_violation": (
+        "Compared on City code cases only. The phone call reaches the owner about this property; the landlord "
+        "pitch offers a company owner a standing rate; door hangers reach whoever is at the property."
+    ),
+    "": (
+        "All leads together mixes evictions and code cases, where the methods reach different people. "
+        "Pick evictions or code cases to compare like with like."
+    ),
+}
+
+
+def template_key(channel: str, lead_type: Optional[str]) -> str:
+    """The message template (and pitch) for a method on a kind of lead:
+    phone calls on evictions use the landlord script."""
+    return "phone_eviction" if channel == "phone" and lead_type == "eviction" else channel
+
+
 # The kinds of contact logged for each method, with their button labels.
 TOUCH_KINDS = {
     "door_hanger": [["visited", "Hanger left"], ["talked", "Talked in person"]],
@@ -562,16 +611,19 @@ def _mix(rows: list) -> dict:
     }
 
 
-def results(conn: Conn, today: Optional[date] = None) -> list[dict]:
-    """Per-channel funnel and cost numbers, and the mix of leads each got."""
+def results(conn: Conn, today: Optional[date] = None, lead_type: Optional[str] = None) -> list[dict]:
+    """Per-channel funnel and cost numbers, and the mix of leads each got;
+    only leads of ``lead_type`` when given (see ``COMPARISON_BASIS``)."""
+    where, args = ("AND l.lead_type = ?", (lead_type,)) if lead_type else ("", ())
     rows = conn.execute(
-        """
+        f"""
         SELECT l.*, COALESCE(t.n, 0) AS touch_count, COALESCE(t.cost_cents, 0) AS touch_cents
         FROM leads l
         LEFT JOIN (SELECT lead_id, COUNT(*) AS n, SUM(cost_cents) AS cost_cents
                    FROM touches GROUP BY lead_id) t ON t.lead_id = l.id
-        WHERE l.channel IS NOT NULL
-        """
+        WHERE l.channel IS NOT NULL {where}
+        """,
+        args,
     ).fetchall()
     owner_counts = {}
     for r in conn.execute(

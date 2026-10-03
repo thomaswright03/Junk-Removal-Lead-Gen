@@ -155,6 +155,11 @@ function fill(channel, l) {
     .replaceAll("{phone}", phone)
     .replaceAll("{business}", st.business_name || "");
 }
+// Who a method reaches on this lead and what it offers, in one line.
+function pitchLine(channel, l) {
+  const p = (S.pitches || {})[templateKey(channel, l)];
+  return p ? `<p class="small-line pitch" data-pitch="${esc(channel)}"><b>Reaches:</b> ${esc(p.who)} · <b>Offer:</b> ${esc(p.offer)}</p>` : "";
+}
 // Where the eviction case is: notice filed, judgment, writ (lockout), etc.
 function noticeChip(l) {
   if (l.lead_type === "code_violation") return ` <span class="chip acc" title="Open City of Tucson code-enforcement case (code cases cover the City of Tucson only)">city code case</span>`;

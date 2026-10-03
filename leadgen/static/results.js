@@ -1,16 +1,29 @@
 // Results tab: which outreach method turns leads into paid jobs.
 "use strict";
+// Methods are compared within one kind of lead (evictions or code cases),
+// where each reaches a different person or makes a different offer.
+function resultsKind() {
+  const by = S.results_by_kind || {};
+  if (ui.resultsKind != null && (ui.resultsKind === "" || by[ui.resultsKind])) return ui.resultsKind;
+  const assigned = k => ((by[k] || {}).results || []).reduce((s, r) => s + r.assigned, 0);
+  return Object.keys(S.lead_kinds || {}).sort((a, b) => assigned(b) - assigned(a))[0] || "";
+}
 function renderResults() {
-  const R = S.results;
+  const kind = resultsKind();
+  const pick = kind ? (S.results_by_kind || {})[kind] : { results: S.results, comparison: S.comparison };
+  const R = pick.results;
   const tot = k => R.reduce((s, r) => s + (r[k] || 0), 0);
   const touched = tot("touched");
   const maxRate = Math.max(0.0001, ...R.map(r => r.response_rate || 0));
   const maxRpd = Math.max(0.0001, ...R.map(r => r.revenue_per_dollar || 0));
-  const C = S.comparison || { fair: false, ready: false, reasons: [] };
+  const C = pick.comparison || { fair: false, ready: false, reasons: [] };
+  const kinds = [...Object.entries(S.lead_kinds || {}), ["", "all leads together"]];
   const ranked = R.filter(r => r.touched).sort((a, b) => (b.won - a.won) || ((b.response_rate || 0) - (a.response_rate || 0)));
   const leader = C.fair ? ranked[0] : null;
   const share = v => v == null ? "–" : Math.round(v * 100) + "%";
   $("#tab-results").innerHTML = `
+    <div class="row mb12"><label class="wide-pick">Compare methods on <select id="rKind">${kinds.map(([v, t]) => `<option value="${v}" ${v === kind ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></div>
+    <p class="hint" id="rBasis">${esc((S.comparison_basis || {})[kind] || "")}</p>
     <div class="grid4" style="margin-bottom:16px">
       <div class="kpi"><div class="v">${touched}</div><div class="l">leads contacted</div></div>
       <div class="kpi"><div class="v">${tot("responded")}</div><div class="l">responses</div></div>
@@ -40,5 +53,7 @@ function renderResults() {
     <div class="card"><h2>Revenue per dollar spent</h2><p class="hint">Phone and property-manager outreach cost Steve's time, not cash; add a cost per contact in Settings to compare them fairly.</p>
       <div class="bars">${R.map(r => bar(r, r.revenue_per_dollar || 0, maxRpd, r.revenue_per_dollar == null ? (r.revenue ? "free" : "–") : money(r.revenue_per_dollar))).join("")}</div></div>`;
 }
+// One listener for the kind picker, which is redrawn with the tab.
+document.addEventListener("change", e => { if (e.target && e.target.id === "rKind") { ui.resultsKind = e.target.value; renderResults(); $("#rKind").focus(); } });
 const bar = (r, v, max, label) => `<div class="bar"><div>${chDot(r.channel)}</div><div class="track"><div class="fill" style="width:${Math.round(100 * v / max)}%;background:var(--c-${r.channel})"></div></div><div class="num" style="text-align:right">${label}</div></div>`;
 

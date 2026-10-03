@@ -129,7 +129,13 @@ or set its limits to 0.
   round's number and are reported separately. Each method has its own work
   queue: a driving route for door hangers, a call list with a script, and a
   list of companies to pitch.
-- **Results**: per method, how many leads were contacted, responded, were
+- **Results**: compared within one kind of lead at a time (evictions or
+  City code cases; "all leads together" is offered but says it mixes them),
+  because the methods reach different people on each. On an eviction the
+  phone call and the landlord pitch both reach the landlord, so they make
+  different offers (one clean-out of this unit vs. a standing rate for every
+  turnover); the lead shows who its method reaches and what it offers, and
+  the Results tab says what it is comparing. Per method, how many leads were contacted, responded, were
   quoted and won, what was spent, revenue, cost per job and revenue per
   dollar, and the mix of leads each method got. Lead Desk names a leader
   only when the mixes match; otherwise it says why the comparison isn't
