@@ -59,6 +59,8 @@ or set the environment variable `LEADDESK_PAUSED=1` (on Vercel, and as a
 repository variable for the GitHub Actions daily check). While paused, the
 daily check, court case page reads and every phone/email lookup, Google
 included, make no requests at all; the buttons say Lead Desk is paused.
+Pausing also stops a check or job that is already running, before its next
+request to the court or a lookup service, and its result says it was paused.
 Leads and notes stay as they are. To stop only Google, untick **Use Google
 lookups** (this works even when the key comes from `GOOGLE_PLACES_API_KEY`)
 or set its limits to 0.
@@ -78,9 +80,19 @@ or set its limits to 0.
   whether they live elsewhere, whether it's an LLC or trust). Click a lead
   (or Tab to it and press Enter) for details, the owner's other properties,
   and to log outreach and results. Court case pages carry no property
-  address, so about half of eviction leads need one: type it into the lead
-  (or pick one of the landlord's other properties) and Lead Desk finds it on
-  the map, looks up the parcel and owner, and fills in the miles. Notes,
+  address. When a landlord owns just one residential property in the county
+  (never a condominium common area or vacant land), Lead Desk uses it, marked
+  "landlord's only complex — confirm" in the list, the lead and the route
+  sheet until you press **Confirm address** or type the address yourself.
+  About half of eviction leads need an address typed in (or picked from the
+  landlord's other properties); Lead Desk then finds it on the map, looks up
+  the parcel and owner, and fills in the miles. An apartment or condo
+  address needs a unit number (or **Confirm address**) before a door hanger
+  goes there. Every date says what it is: Filed, Judgment or Writ for a
+  case that has been read, Hearing for one that hasn't, Opened for a code
+  case. The list comes from the server a page (100 leads) at a time, so it
+  stays quick however many leads build up, and on a phone each lead is a
+  card. Notes,
   quotes and anything typed into a lead are kept while you do other things,
   and are saved with a status change. The tab, filters and open lead are in
   the address bar, so a reload or Back keeps your place.
@@ -90,7 +102,8 @@ or set its limits to 0.
   (whoever is there), a phone call to the owner about this one job, and a
   standing-rate pitch to the landlord or property manager. So the methods
   can be compared fairly, a round only uses leads that every ticked method
-  can work (door hangers need a property address), all of one landlord's
+  can work (door hangers need a property address, and a unit number or a
+  confirmed address at an apartment or condo complex), all of one landlord's
   leads go to the same method (now and in later rounds), and leads are dealt
   in small random blocks within each kind (address or not, eviction or code
   case) so each method gets the same mix and a similar spread of priority.
@@ -145,7 +158,15 @@ Priority: up to 40 points for what the case says (vacant building, dumping
 and trash/debris highest, weeds lowest; evictions 35, +25 more with a writ
 of restitution or +15 with a judgment for the landlord), +20 if the owner's
 mailing address is elsewhere, +10 for a company/trust owner, +10 if the
-owner has several leads, +15 if under a week old (+8 under two weeks).
+owner has several leads, +15 if the latest court or city event (filing,
+judgment, writ; opening for a code case) is under a week old (+8 under two
+weeks). An upcoming hearing, or any date in the future, earns nothing.
+
+A lead becomes Old (stale) 30 days after its latest event, so an eviction
+filed weeks ago that has just had a writ stays fresh, and an Old case that
+gets a new judgment or writ is New again. The daily summary says how many
+phone lookups failed (they are tried again the next day) and points to
+Settings when Google refused the key.
 
 ## Daily use from the command line
 
@@ -165,7 +186,7 @@ leadgen run
 
 That pulls new City of Tucson code cases, looks up each owner from the county
 assessor, geocodes addresses and checks they
-are in Pima County, marks leads older than 30 days as stale, and writes
+are in Pima County, marks leads whose latest event is older than 30 days as stale, and writes
 `exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`. Open the
 HTML file in a browser to search and filter; open the CSV in Excel or import it
 into a CRM.
