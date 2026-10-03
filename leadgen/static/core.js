@@ -210,7 +210,8 @@ function ownerLine(l) {
   const who = l.owner_name || l.plaintiff;
   if (!who) return `<span class="muted">${l.enriched_at ? "not found" : "lookup pending"}</span>`;
   let tags = "";
-  if (l.owner_absentee) tags += ` <span class="chip warn" title="Owner's mailing address is somewhere else">owner lives elsewhere</span>`;
+  // On an eviction the owner is the landlord, whose office is nearly always elsewhere: not worth a chip.
+  if (l.owner_absentee && l.lead_type !== "eviction") tags += ` <span class="chip warn" title="Owner's mailing address is somewhere else">owner lives elsewhere</span>`;
   if (l.owner_entity) tags += ` <span class="chip" title="Company, trust or estate">company owner</span>`;
   if (l.owner_lead_count > 1) tags += ` <span class="chip acc" title="Owner has several leads">${l.owner_lead_count} leads</span>`;
   return esc(title(who)) + tags;

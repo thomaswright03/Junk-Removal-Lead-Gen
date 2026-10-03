@@ -303,7 +303,11 @@ def score_parts(
         code = "VACANT" if "VACANT/NUISANCE" in desc else code_of(lead["description"])
         what = _SHORT_LABELS.get(code or "")
         parts.append((f"Code case: {what}" if what else "Code case", _TYPE_POINTS.get(code or "", 20)))
-    if lead["owner_absentee"]:
+    # An owner who lives elsewhere is a landlord, not someone living there:
+    # that says something about a code case. On an eviction the owner looked
+    # up is the landlord, whose mailing address is nearly always an office
+    # elsewhere, so it would add the same points to every eviction.
+    if lead["owner_absentee"] and lead["lead_type"] != "eviction":
         parts.append(("owner lives elsewhere", 20))
     if lead["owner_entity"]:
         parts.append(("company owner", 10))

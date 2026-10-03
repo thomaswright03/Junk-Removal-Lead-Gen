@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -149,6 +149,28 @@ def test_scores_rank_absentee_vacant_over_owner_occupied_weeds():
     assert leads["CE-3"]["score"] > leads["CE-2"]["score"]
     assert leads["CE-1"]["score"] > leads["CE-2"]["score"]
     assert leads["CV26-000001-EV"]["eligible"] == ["phone", "property_manager"]
+
+
+def test_owner_lives_elsewhere_counts_on_code_cases_not_evictions():
+    today = date(2026, 10, 3)
+    base = {
+        "lead_type": "eviction",
+        "event_date": "2026-09-01",
+        "description": None,
+        "owner_entity": 1,
+        "owner_name": "EXAMPLE RENTALS LLC",
+        "case_stage": None,
+    }
+    # Two evictions that differ only in the landlord's mailing address score the same.
+    office_elsewhere = outreach.score({**base, "owner_absentee": 1}, today=today)
+    assert office_elsewhere == outreach.score({**base, "owner_absentee": 0}, today=today)
+    assert "owner lives elsewhere" not in dict(outreach.score_parts({**base, "owner_absentee": 1}, today=today))
+    # On a code case it still means a landlord rather than someone living there.
+    code = {**base, "lead_type": "code_violation", "description": "Property Maintenance | Active | REFS / trash"}
+    assert (
+        outreach.score({**code, "owner_absentee": 1}, today=today)
+        == outreach.score({**code, "owner_absentee": 0}, today=today) + 20
+    )
 
 
 def seed_evictions(conn, with_address=30, without=30):

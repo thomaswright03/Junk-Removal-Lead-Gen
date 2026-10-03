@@ -100,8 +100,8 @@ function renderLeads() {
       <dt>Writ (lockout)</dt><dd>A writ of restitution: the court's order to put the tenant out. The unit needs clearing now.</dd>
       <dt>Hearing</dt><dd>The court date for the case. It hasn't happened yet, so it doesn't make a lead fresher.</dd>
       <dt>Parcel</dt><dd>The county's number for a piece of property; it tells Lead Desk the owner of record.</dd>
-      <dt>Owner lives elsewhere</dt><dd>The owner's mailing address isn't the property: a landlord, not someone living there.</dd>
-      <dt>Priority</dt><dd>Points for how far the eviction has got (or how much hauling a code case suggests), an owner who lives elsewhere or is a company, an owner with several leads, and how recent the latest court or city event is.</dd>
+      <dt>Owner lives elsewhere</dt><dd>On a City code case, the owner's mailing address isn't the property: a landlord, not someone living there. (On an eviction the owner is the landlord, whose office is nearly always elsewhere, so it isn't shown or counted there.)</dd>
+      <dt>Priority</dt><dd>Points for how far the eviction has got (or how much hauling a code case suggests), a code case owner who lives elsewhere, a company owner, an owner with several leads, and how recent the latest court or city event is.</dd>
       <dt>Phone-lookup service</dt><dd>A paid service (“skip tracing”) that finds phone numbers for a list of owners.</dd>
     </dl></details>`;
   const filter = (id, key) => $(id).onchange = async e => { ui[key] = e.target.value; ui.offset = 0; syncUrl(); await reloadList(); $(id).focus(); };

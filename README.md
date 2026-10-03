@@ -235,8 +235,10 @@ or a date couldn't be read.
 
 Priority: up to 40 points for what the case says (vacant building, dumping
 and trash/debris highest, weeds lowest; evictions 35, +25 more with a writ
-of restitution or +15 with a judgment for the landlord), +20 if the owner's
-mailing address is elsewhere, +10 for a company/trust owner, +10 if the
+of restitution or +15 with a judgment for the landlord), +20 on a code case
+if the owner's mailing address is elsewhere (not on an eviction, where the
+owner is the landlord and nearly always has an office elsewhere, so it would
+add the same to every eviction), +10 for a company/trust owner, +10 if the
 owner has several leads, +15 if the latest court or city event (filing,
 judgment, writ; opening for a code case) is under a week old (+8 under two
 weeks). An upcoming hearing, or any date in the future, earns nothing.
