@@ -39,6 +39,8 @@ DEFAULT_SETTINGS = {
     # Most Google searches per month; 0 means no limit. 1,000 is Google's free
     # monthly allowance for searches that return phone numbers.
     "google_monthly_limit": 1000,
+    # Most Google searches per day; 0 means no limit.
+    "google_daily_limit": 30,
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {

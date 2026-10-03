@@ -118,7 +118,9 @@ class App:
             public = dict(settings)
             key = public.pop("google_places_api_key", "") or ""
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
-            public["google_used_this_month"] = GoogleBudget(conn).used()
+            budget = GoogleBudget(conn)
+            public["google_used_this_month"] = budget.used()
+            public["google_used_today"] = budget.used_today()
             counts = conn.execute(
                 "SELECT COUNT(*) AS all_, "
                 "SUM(CASE WHEN lead_type = 'eviction' THEN 1 ELSE 0 END) AS evictions, "
@@ -228,11 +230,12 @@ class App:
             values = {k: v for k, v in body.items() if k in allowed}
             if "lead_view" in values and values["lead_view"] not in LEAD_VIEWS:
                 raise ValueError("lead_view must be one of " + ", ".join(LEAD_VIEWS))
-            if "google_monthly_limit" in values:
-                limit = int(values["google_monthly_limit"] or 0)
-                if limit < 0:
-                    raise ValueError("google_monthly_limit can't be negative")
-                values["google_monthly_limit"] = limit
+            for name in ("google_monthly_limit", "google_daily_limit"):
+                if name in values:
+                    limit = int(values[name] or 0)
+                    if limit < 0:
+                        raise ValueError(f"{name} can't be negative")
+                    values[name] = limit
             if not values.get("google_places_api_key"):
                 values.pop("google_places_api_key", None)  # blank field keeps the saved key
             if body.get("clear_google_key"):

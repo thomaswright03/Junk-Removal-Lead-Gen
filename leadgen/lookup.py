@@ -47,6 +47,11 @@ GOOGLE_MAX_AGE_DAYS = 30
 # Google's free monthly allowance for Text Search Enterprise, the search tier
 # that returns phone numbers (1,000 a month as of October 2026).
 GOOGLE_MONTHLY_LIMIT = 1000
+# Most Google searches in one day (Thomas's cap, October 2026).
+GOOGLE_DAILY_LIMIT = 30
+# Arizona keeps Mountain Standard Time all year, so days and months turn over
+# at local midnight.
+ARIZONA = timezone(timedelta(hours=-7))
 TUCSON = (32.2226, -110.9747)
 
 _NAME_NOISE = {
@@ -216,31 +221,56 @@ def pick_osm(elements, business_name):
 
 
 class GoogleBudget:
-    """Counts Google searches per calendar month in the settings table and
-    refuses more than ``limit`` (0 means no limit), so the lookup stays inside
-    the free allowance unless the limit is raised in Settings."""
+    """Counts Google searches per day and per calendar month (Arizona time) in
+    the settings table and refuses more than ``daily`` a day or ``limit`` a
+    month (0 means no limit), so the lookup stays inside the free allowance
+    unless the limits are raised in Settings."""
 
     KEY = "google_usage"
 
-    def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT):
+    def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT, daily=GOOGLE_DAILY_LIMIT):
         self.conn = conn
         self.limit = limit
+        self.daily = daily
+
+    def _usage(self, now=None):
+        local = (now or _now()).astimezone(ARIZONA)
+        month, day = local.strftime("%Y-%m"), local.strftime("%Y-%m-%d")
+        usage = db.get_settings(self.conn).get(self.KEY) or {}
+        count = usage.get("count", 0) if usage.get("month") == month else 0
+        today = usage.get("day_count", 0) if usage.get("day") == day else 0
+        return month, day, count, today
 
     def used(self, now=None):
-        month = (now or _now()).strftime("%Y-%m")
-        usage = db.get_settings(self.conn).get(self.KEY) or {}
-        return usage.get("count", 0) if usage.get("month") == month else 0
+        return self._usage(now)[2]
+
+    def used_today(self, now=None):
+        return self._usage(now)[3]
+
+    def blocked(self, now=None):
+        """Why no more searches are allowed right now, or None."""
+        _, _, count, today = self._usage(now)
+        if self.daily and today >= self.daily:
+            return f"daily limit of {self.daily} Google lookups reached; more tomorrow"
+        if self.limit and count >= self.limit:
+            return f"monthly limit of {self.limit} Google lookups reached; raise it in Settings"
+        return None
 
     def take(self, now=None):
-        n = self.used(now)
-        if self.limit and n >= self.limit:
+        if self.blocked(now):
             return False
-        db.put_settings(self.conn, {self.KEY: {"month": (now or _now()).strftime("%Y-%m"), "count": n + 1}})
+        month, day, count, today = self._usage(now)
+        db.put_settings(self.conn, {self.KEY: {"month": month, "count": count + 1,
+                                               "day": day, "day_count": today + 1}})
         return True
 
 
 class GooglePlacesProvider:
     name = "google"
+    # Google searches are capped (30 a day), so spend them only on eviction
+    # cases with an eviction notice filed; find_contacts reaches those newest
+    # first. The free providers still try every lead.
+    only_eviction_notices = True
 
     def __init__(self, api_key, session=None, budget=None):
         self.key = api_key
@@ -249,8 +279,7 @@ class GooglePlacesProvider:
 
     def _search(self, text, lat=None, lon=None):
         if self.budget is not None and not self.budget.take():
-            raise ProviderUnavailable(
-                f"monthly limit of {self.budget.limit} Google lookups reached; raise it in Settings")
+            raise ProviderUnavailable(self.budget.blocked() or "Google lookup limit reached")
         lat, lon = (lat, lon) if lat is not None else TUCSON
         resp = self.session.post(
             PLACES_URL,
@@ -403,7 +432,7 @@ def _now():
 
 def providers_from(settings=None, google_key=None, conn=None):
     """OpenStreetMap, plus Google when a key is set. With ``conn``, Google
-    searches are counted against the monthly limit in settings."""
+    searches are counted against the daily and monthly limits in settings."""
     import os
 
     settings = settings or {}
@@ -412,9 +441,15 @@ def providers_from(settings=None, google_key=None, conn=None):
     out = [OsmProvider()]
     if key:
         limit = settings.get("google_monthly_limit", GOOGLE_MONTHLY_LIMIT)
-        budget = GoogleBudget(conn, int(limit or 0)) if conn is not None else None
+        daily = settings.get("google_daily_limit", GOOGLE_DAILY_LIMIT)
+        budget = (GoogleBudget(conn, int(limit or 0), int(daily or 0))
+                  if conn is not None else None)
         out.append(GooglePlacesProvider(key, budget=budget))
     return out
+
+
+def _has_notice(lead):
+    return lead["lead_type"] == "eviction" and bool(lead["eviction_notice"])
 
 
 def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print,
@@ -436,7 +471,9 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
         WHERE duplicate_of IS NULL AND status NOT IN ('stale', 'skip', 'lost', 'won')
           AND COALESCE(contact_source, '') != 'manual'
           {due}
-        ORDER BY CASE WHEN lead_type = 'eviction' THEN 0 ELSE 1 END, event_date DESC
+        ORDER BY CASE WHEN lead_type = 'eviction' AND eviction_notice = 1 THEN 0
+                      WHEN lead_type = 'eviction' THEN 1 ELSE 2 END,
+                 event_date DESC, id DESC
         """,
         () if refresh else (stale_google,),
     ).fetchall()
@@ -459,6 +496,8 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
             contact, failed = None, False
             for name in names or [None]:
                 for prov in providers:
+                    if getattr(prov, "only_eviction_notices", False) and not _has_notice(lead):
+                        continue
                     try:
                         c = prov.find(lead, name)
                     except Exception as e:  # one provider failing shouldn't stop the run
@@ -483,6 +522,8 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
                     contact.source = f"{contact.source}+website"
             done[key] = (contact, failed)
         now = _now().isoformat()
+        if failed and not (contact and contact.phone):
+            continue  # a provider was down or over its limit: try again next run
         if contact and not contact.empty():
             counts["found"] += 1
             conn.execute(
@@ -492,8 +533,6 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
                 (contact.phone, contact.email, contact.website, contact.source,
                  contact.matched_name, now, lead["id"]),
             )
-        elif failed:
-            continue  # couldn't reach a provider: try this lead again next run
         else:
             counts["not_found"] += 1
             conn.execute("UPDATE leads SET contact_checked_at = ? WHERE id = ?", (now, lead["id"]))
