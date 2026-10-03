@@ -11,6 +11,14 @@ PG_URL = os.environ.get("TEST_DATABASE_URL")
 
 
 @pytest.fixture(autouse=True)
+def no_waiting_between_lookup_retries(monkeypatch):
+    """Lookups are retried after a pause of seconds; tests don't wait."""
+    from leadgen import lookup
+
+    monkeypatch.setattr(lookup, "RETRY_DELAYS", (0.0, 0.0))
+
+
+@pytest.fixture(autouse=True)
 def postgres_instead_of_sqlite(monkeypatch):
     if not PG_URL:
         yield

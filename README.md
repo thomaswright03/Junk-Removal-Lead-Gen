@@ -214,7 +214,11 @@ export, `leadgen list` and Assign leads use the same order.
 
 A lead becomes Old (stale) 30 days after its latest event, so an eviction
 filed weeks ago that has just had a writ stays fresh, and an Old case that
-gets a new judgment or writ is New again. The daily summary says how many
+gets a new judgment or writ is New again. A phone lookup that fails for a
+passing reason (connection dropped, timeout, busy server) is tried twice
+more within the run, a few seconds apart; once a service has failed every
+try for two companies it is treated as down for the rest of that run. The
+daily summary says how many
 phone lookups failed (they are tried again the next day) and points to
 Settings when Google refused the key.
 

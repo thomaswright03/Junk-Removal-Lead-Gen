@@ -368,6 +368,55 @@ def test_failed_lookups_show_in_the_daily_summary(tmp_path):
     assert "0 landlord contacts found, 6 lookups failed (will retry tomorrow)" in line
 
 
+def test_a_lookup_that_fails_once_is_tried_again_in_the_same_run(tmp_path):
+    conn = db.connect(tmp_path / "l.db")
+    eviction(conn, "CV26-000001-EA", "2026-09-30", plaintiff="EXAMPLE HOMES LLC")
+
+    class Blip:
+        name = "osm"
+        calls = 0
+
+        def find(self, lead, name):
+            self.calls += 1
+            if self.calls == 1:
+                raise requests.ConnectionError("connection reset")
+            return Contact(phone="(520) 555-0142", source="osm")
+
+    blip = Blip()
+    counts = find_contacts(conn, [blip], scanner=None, log=lambda *a: None)
+    assert blip.calls == 2 and counts["found"] == 1 and counts["errors"] == 0
+    assert row(conn, "CV26-000001-EA")["owner_phone"] == "(520) 555-0142"
+
+
+def test_retries_are_bounded_and_stop_once_a_service_is_down(tmp_path):
+    conn = db.connect(tmp_path / "l.db")
+    for i in range(5):
+        eviction(conn, f"CV26-00000{i}-EA", "2026-09-30", plaintiff=f"EXAMPLE {i} HOMES LLC")
+
+    class Down:
+        name = "osm"
+        calls = 0
+
+        def find(self, lead, name):
+            self.calls += 1
+            raise requests.ConnectionError("lookup service down")
+
+    class Refused:
+        name = "google"
+        calls = 0
+
+        def find(self, lead, name):
+            self.calls += 1
+            raise requests.HTTPError("403", response=type("R", (), {"status_code": 403})())
+
+    down, refused = Down(), Refused()
+    counts = find_contacts(conn, [down, refused], scanner=None, log=lambda *a: None, retry_delays=(0, 0))
+    # Three tries each for the first two companies, then one try each: the service is down.
+    assert down.calls == 3 + 3 + 1 + 1 + 1
+    assert refused.calls == 5  # a refused key isn't tried again
+    assert counts["errors"] == 10 and counts["found"] == 0
+
+
 def test_a_refused_google_key_points_to_settings(tmp_path):
     from leadgen.lookup import GooglePlacesProvider
 
