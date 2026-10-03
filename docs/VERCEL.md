@@ -12,6 +12,9 @@ browser. Three pieces work together:
 The daily check runs on GitHub, not Vercel, because it takes 10 to 20 minutes
 and Vercel stops a request after 5. Its log on GitHub shows step names and
 counts only, never names or addresses, because this repository is public.
+For the same reason, online the "Update court cases" and "Find landlord
+phones" buttons do one batch per press (about 40 seconds of work) instead of
+running in the background.
 
 ## 1. Add the Neon database in Vercel
 
@@ -37,6 +40,8 @@ In the Vercel project, open **Settings**, **Environment Variables**, and add:
 | `LEADDESK_PASSWORD` | the password Steve will type to open Lead Desk |
 | `GOOGLE_PLACES_API_KEY` | optional; the key can also be pasted in Lead Desk Settings |
 | `LEADDESK_GITHUB_TOKEN` | optional; lets the "Check for new evictions" button start the check (step 4) |
+| `LEADDESK_GITHUB_REF` | optional; the branch that check runs from (default `main`) |
+| `LEADDESK_PAUSED` | optional; `1` stops all checking and lookups (see "Stopping everything") |
 
 Under **Settings**, **Git**, make sure the production branch is `main`, then
 redeploy. The browser asks for the password once (any user name works). Until
@@ -66,6 +71,25 @@ needs a GitHub fine-grained personal access token
 repository only and the "Actions" permission set to "Read and write". Save it
 in Vercel as `LEADDESK_GITHUB_TOKEN`. Without it, the button explains that the
 check runs every morning.
+
+## Stopping everything
+
+If the court asks for the checks to stop, or the Google bill rises, either:
+
+- open Lead Desk, **Settings**, and tick **Pause Lead Desk** (anyone with the
+  password can do this; it takes effect on the next request and on the next
+  daily run), or
+- set `LEADDESK_PAUSED` to `1`: in Vercel under **Settings**, **Environment
+  Variables** (then redeploy), and in GitHub under **Settings**, **Secrets
+  and variables**, **Actions**, **Variables** as a repository variable, which
+  the daily workflow reads. This holds even if someone unticks the setting.
+
+While paused, the daily check exits without contacting the court, the
+county or any lookup service, and the buttons say Lead Desk is paused. To
+stop only Google lookups, untick **Use Google lookups** in Settings (this
+also covers a key set as `GOOGLE_PLACES_API_KEY`) or set the Google limits
+to 0; deleting the `GOOGLE_PLACES_API_KEY` secret in GitHub and Vercel
+removes the key for good.
 
 ## Running locally still works
 

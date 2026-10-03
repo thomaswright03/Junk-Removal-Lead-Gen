@@ -23,6 +23,9 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+      # Kill switch: set the repository variable LEADDESK_PAUSED to 1 to stop
+      # the check (Lead Desk's Settings "Pause" works too). See docs/VERCEL.md.
+      LEADDESK_PAUSED: ${{ vars.LEADDESK_PAUSED }}
     steps:
       - name: Check the database is set up
         run: |

@@ -15,7 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = [
+    "pytest>=7",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-requests",
+    # Browser tests (tests/test_browser.py); also run `python -m playwright install chromium`.
+    "playwright>=1.40",
+]
 
 [project.scripts]
 leadgen = "leadgen.cli:main"
@@ -32,3 +39,23 @@ entrypoint = "leadgen.wsgi:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+# pycodestyle errors/warnings, pyflakes (unused imports and variables, undefined
+# names), import order, and a few bug-prone patterns.
+select = ["E", "W", "F", "I", "B"]
+ignore = ["E731", "E741", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# The exported page's HTML/CSS/JS template.
+"leadgen/export.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["leadgen"]
+ignore_missing_imports = true
+warn_unused_ignores = true

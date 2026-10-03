@@ -24,6 +24,14 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
+      - name: Browser for the Lead Desk page tests
+        run: python -m playwright install --with-deps chromium
+      - name: Lint
+        run: ruff check .
+      - name: Format
+        run: ruff format --check .
+      - name: Type check
+        run: mypy
       - run: pytest -q
       - name: Same tests on Postgres (Lead Desk online uses Neon)
         run: pytest -q

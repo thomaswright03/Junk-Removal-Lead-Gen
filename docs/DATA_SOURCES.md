@@ -8,7 +8,8 @@ Researched October 2026. "Built" means there is a working importer in
 | Source | What it gives | Address? | Access | Status |
 |---|---|---|---|---|
 | City of Tucson code cases (last 60 days) | Junk/debris, weeds, outdoor storage, dumping, vacant buildings | Yes, plus parcel and lat/lon | Public ArcGIS REST API, no key | **Built, automatic** |
-| Pima County Consolidated Justice Court calendar | Every eviction hearing in the county: case number, landlord, tenant, hearing date | Usually no | Public web form, no CAPTCHA seen | **Built, from saved pages**; automatic fetch is next |
+| Pima County Consolidated Justice Court calendar | Every eviction hearing in the county: case number, landlord, tenant, hearing date | Usually no | Public web form, no CAPTCHA seen | **Built, automatic** (daily search of the next 30 days; saved pages can also be imported) |
+| Justice Court case pages | Eviction notice, judgment, writ of restitution, case status, next court date | No | Public page per case, read one at a time | **Built, automatic** for cases found on the calendar or pasted as links |
 | Justice Court records request | Eviction filings with property addresses | Yes | Online request form, may cost a fee | Import with `csv_import` once a file arrives |
 | Pima County Assessor parcels (owner lookup) | Owner name and mailing address, property use, year built | n/a (enrichment) | Public ArcGIS REST API, no key | **Built, automatic** |
 | Any CSV (constable lists, Steve's own leads) | Whatever columns it has | Usually | n/a | **Built** (`csv_import`) |
@@ -125,16 +126,26 @@ Action", a start and end date (`mm-dd-yyyy`), then reads every results page
 row carries the case number, the parties with their roles ("NAME
 (Plaintiff)"), the hearing date and a link to the case page. The daily run
 searches today through 30 days out once a day, which is about a dozen
-results pages, and reads only case pages it hasn't confirmed yet (capped at
-400 a day). That is the volume of someone checking the calendar each
-morning, not a bulk download; the case search form (which has a CAPTCHA) is
-not used.
+results pages. It then reads case pages, at most 400 a day: new cases first,
+then open cases whose court date has passed since they were last read (to
+catch the judgment and the writ of restitution, when a unit actually needs
+clearing), then other open cases every few days (daily while they have no
+eviction notice yet). Closed and dismissed cases aren't read again. That is
+the volume of someone checking the calendar each morning, not a bulk
+download; the case search form (which has a CAPTCHA) is not used, and case
+ID ranges are never scanned.
+
+Everything here stops while Lead Desk is paused (Settings, or
+`LEADDESK_PAUSED=1`).
 
 The calendar and case pages have no property address. For a company
 landlord, the daily run looks the name up in the assessor's parcel layer;
 when all of their residential parcels share one site address (a single
 apartment complex), that address is used for the lead. Otherwise the lead
-keeps the landlord's name and mailing address only.
+keeps the landlord's name and mailing address only, until Steve types the
+address into the lead (from the landlord, or by picking one of the
+landlord's other properties); Lead Desk then geocodes it and looks up the
+parcel and owner.
 
 ## Other options reviewed
 

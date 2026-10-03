@@ -11,11 +11,12 @@ that address, so exports show each property once.
 
 import json
 import sqlite3
-from datetime import date, datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 
 from . import pg
 from .normalize import extract_zip, normalize_address
+from .util import az_today, now_iso
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
@@ -54,6 +55,11 @@ CREATE TABLE IF NOT EXISTS touches (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS touches_lead ON touches(lead_id);
+-- Usage counters (Google lookups per day and month), updated atomically.
+CREATE TABLE IF NOT EXISTS counters (
+    key TEXT PRIMARY KEY,
+    n   INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -83,6 +89,8 @@ _ADDED_COLUMNS = {
     # Outreach experiment (see outreach.py).
     "channel": "TEXT",
     "assigned_at": "TEXT",
+    # Which "Assign leads" round dealt the lead; empty when set by hand.
+    "assign_round": "TEXT",
     "responded_at": "TEXT",
     "quote_amount": "REAL",
     "job_revenue": "REAL",
@@ -99,22 +107,44 @@ _ADDED_COLUMNS = {
     "case_status": "TEXT",
     "next_court_date": "TEXT",
     "case_checked_at": "TEXT",
+    # How far the case has got: filed, notice, judgment, writ or dismissed.
+    "case_stage": "TEXT",
+    "judgment_date": "TEXT",
+    "writ_date": "TEXT",
+    # 1 when Steve added the lead himself (pasted link or imported file).
+    "added_by_hand": "INTEGER",
+    # Unit / apartment number, and "manual" when Steve typed the address in.
+    "unit": "TEXT",
+    "address_source": "TEXT",
 }
 
 # Columns a fetch is allowed to refresh on an existing row. A blank value
 # from upstream never wipes out a value we already have.
 _REFRESHABLE = (
-    "lead_type", "event_date", "address", "address_norm", "city", "zip",
-    "lat", "lon", "in_pima", "plaintiff", "defendant", "description", "url",
-    "parcel", "eviction_notice", "case_status", "next_court_date",
+    "lead_type",
+    "event_date",
+    "address",
+    "address_norm",
+    "city",
+    "zip",
+    "lat",
+    "lon",
+    "in_pima",
+    "plaintiff",
+    "defendant",
+    "description",
+    "url",
+    "parcel",
+    "eviction_notice",
+    "case_status",
+    "next_court_date",
+    "case_stage",
+    "judgment_date",
+    "writ_date",
 )
 
 
-def _now():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-_READY_URLS = set()  # Postgres databases whose schema was checked by this process
+_READY_URLS: set = set()  # Postgres databases whose schema was checked by this process
 
 
 def connect(path):
@@ -125,8 +155,7 @@ def connect(path):
         if str(path) not in _READY_URLS:
             conn.executescript(pg.SCHEMA)
             for col, kind in _ADDED_COLUMNS.items():
-                conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} "
-                             f"{pg.TYPES.get(kind, kind)}")
+                conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             _READY_URLS.add(str(path))
         return conn
     path = Path(path)
@@ -146,9 +175,7 @@ def _migrate(conn):
         conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {_ADDED_COLUMNS[col]}")
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
-        for row in conn.execute(
-            "SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'"
-        ).fetchall():
+        for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
             parcel = (json.loads(row["raw_json"] or "{}").get("PARCEL") or "").strip()
             if parcel:
                 conn.execute("UPDATE leads SET parcel = ? WHERE id = ?", (parcel, row["id"]))
@@ -157,7 +184,7 @@ def _migrate(conn):
 
 def upsert(conn, lead):
     """Insert or refresh one Lead. Returns ``"new"``, ``"updated"``."""
-    now = _now()
+    now = now_iso()
     d = lead.to_dict()
     d["address_norm"] = normalize_address(d["address"])
     if not d["zip"]:
@@ -180,8 +207,7 @@ def upsert(conn, lead):
     ).fetchone()
 
     if existing:
-        if "jcdisplaycase" in (existing["url"] or "").lower() and \
-                "jcdisplaycase" not in (d["url"] or "").lower():
+        if "jcdisplaycase" in (existing["url"] or "").lower() and "jcdisplaycase" not in (d["url"] or "").lower():
             d["url"] = None  # a calendar re-import keeps the case page link
         if existing["case_checked_at"] and not d.get("case_checked_at"):
             # Keep the case page's filing date and summary over calendar rows.
@@ -206,11 +232,12 @@ def upsert(conn, lead):
         INSERT INTO leads (source, source_id, lead_type, event_date, address,
             address_norm, city, zip, lat, lon, in_pima, parcel, plaintiff,
             defendant, description, url, eviction_notice, case_status, next_court_date,
-            case_checked_at, first_seen, last_seen, raw_json)
+            case_stage, judgment_date, writ_date, case_checked_at, first_seen, last_seen, raw_json)
         VALUES (:source, :source_id, :lead_type, :event_date, :address,
             :address_norm, :city, :zip, :lat, :lon, :in_pima, :parcel, :plaintiff,
             :defendant, :description, :url, :eviction_notice, :case_status,
-            :next_court_date, :case_checked_at, :now, :now, :raw)
+            :next_court_date, :case_stage, :judgment_date, :writ_date, :case_checked_at,
+            :now, :now, :raw)
         """,
         {"case_checked_at": None, **d, "now": now, "raw": raw},
     )
@@ -221,8 +248,7 @@ def upsert(conn, lead):
 
 def _link_duplicate(conn, row_id, address_norm):
     first = conn.execute(
-        "SELECT id FROM leads WHERE address_norm = ? AND id != ? AND duplicate_of IS NULL "
-        "ORDER BY id LIMIT 1",
+        "SELECT id FROM leads WHERE address_norm = ? AND id != ? AND duplicate_of IS NULL ORDER BY id LIMIT 1",
         (address_norm, row_id),
     ).fetchone()
     if first and first["id"] < row_id:
@@ -231,11 +257,10 @@ def _link_duplicate(conn, row_id, address_norm):
 
 def mark_stale(conn, days, today=None):
     """Move ``new`` leads whose event is older than ``days`` to ``stale``."""
-    today = today or date.today()
+    today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
-        "UPDATE leads SET status = 'stale' WHERE status = 'new' "
-        "AND event_date IS NOT NULL AND event_date < ?",
+        "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ?",
         (cutoff,),
     )
     return cur.rowcount
@@ -247,14 +272,11 @@ def set_status(conn, lead_id, status, notes=None):
     if notes is None:
         cur = conn.execute("UPDATE leads SET status = ? WHERE id = ?", (status, lead_id))
     else:
-        cur = conn.execute(
-            "UPDATE leads SET status = ?, notes = ? WHERE id = ?", (status, notes, lead_id)
-        )
+        cur = conn.execute("UPDATE leads SET status = ?, notes = ? WHERE id = ?", (status, notes, lead_id))
     return cur.rowcount
 
 
-def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=False,
-          only_pima=False):
+def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=False, only_pima=False):
     sql = ["SELECT * FROM leads WHERE 1=1"]
     args = []
     if since:
@@ -275,10 +297,7 @@ def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=F
 
 
 def needs_geocode(conn, limit=None):
-    sql = (
-        "SELECT * FROM leads WHERE address IS NOT NULL AND lat IS NULL "
-        "AND geocode_tried = 0 ORDER BY id"
-    )
+    sql = "SELECT * FROM leads WHERE address IS NOT NULL AND lat IS NULL AND geocode_tried = 0 ORDER BY id"
     if limit:
         sql += f" LIMIT {int(limit)}"
     return conn.execute(sql).fetchall()
@@ -302,7 +321,6 @@ def get_settings(conn):
 def put_settings(conn, values):
     for k, v in values.items():
         conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (k, json.dumps(v)),
         )

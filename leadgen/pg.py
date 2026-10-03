@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS touches (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS touches_lead ON touches(lead_id);
+CREATE TABLE IF NOT EXISTS counters (
+    key TEXT PRIMARY KEY,
+    n   INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -95,6 +99,7 @@ def translate(sql):
             named = True
             return f"%({m.group(1)})s"
         return tok + " NULLS LAST"  # DESC
+
     return _TOKEN.sub(sub, sql), named
 
 
@@ -146,7 +151,7 @@ class Cursor:
         return self.rows[self._i - 1]
 
     def fetchall(self):
-        rest, self._i = self.rows[self._i:], len(self.rows)
+        rest, self._i = self.rows[self._i :], len(self.rows)
         return rest
 
     def __iter__(self):
@@ -157,6 +162,7 @@ class Connection:
     def __init__(self, url, connect=None):
         if connect is None:
             import psycopg
+
             connect = psycopg.connect
         # prepare_threshold=None: no server-side prepared statements, which
         # Neon's connection pooler (PgBouncer) may not keep between requests.
@@ -173,12 +179,6 @@ class Connection:
         lastrowid = rows[0][0] if returning and rows else None
         return Cursor(cols, [] if returning else rows, cur.rowcount, lastrowid)
 
-    def executemany(self, sql, seq):
-        total = 0
-        for params in seq:
-            total += max(self.execute(sql, params).rowcount, 0)
-        return Cursor(rowcount=total)
-
     def executescript(self, script):
         for stmt in (s.strip() for s in script.split(";")):
             if stmt:
@@ -186,9 +186,6 @@ class Connection:
         return Cursor()
 
     def commit(self):
-        pass
-
-    def rollback(self):
         pass
 
     def close(self):

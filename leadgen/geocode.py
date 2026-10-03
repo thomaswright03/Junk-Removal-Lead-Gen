@@ -7,6 +7,7 @@ https://geocoding.geo.census.gov/geocoder/
 
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 import requests
 
@@ -21,8 +22,8 @@ class GeocodeResult:
     lon: float
     in_pima: bool
     matched_address: str = ""
-    city: str = None
-    zip: str = None
+    city: Optional[str] = None
+    zip: Optional[str] = None
 
 
 def in_pima_bbox(lat, lon):

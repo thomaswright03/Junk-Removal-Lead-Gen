@@ -4,8 +4,7 @@ import requests
 
 from leadgen import db
 from leadgen.sources.pima_jp_calendar import parse_calendar_html
-from leadgen.sources.pima_jp_case import (
-    add_cases, case_id, parse_case_html, split_case_inputs, update_cases)
+from leadgen.sources.pima_jp_case import add_cases, case_id, parse_case_html, split_case_inputs, update_cases
 from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"
@@ -24,8 +23,7 @@ class FakeCases:
         self.calls.append(cid)
         if cid not in self.pages:
             raise requests.ConnectionError("offline")
-        return parse_case_html(self.pages[cid],
-                               url=f"https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID={cid}")
+        return parse_case_html(self.pages[cid], url=f"https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID={cid}")
 
 
 def test_parse_case_page():
@@ -59,9 +57,11 @@ def test_case_links_and_ids():
 def test_calendar_row_and_case_page_share_one_row():
     conn = db.connect(":memory:")
     html = CASE_HTML  # reuse parties from the case page in a calendar row
-    cal = ('<table><tr><th>Date</th><th>Case Number</th><th>Case Name</th><th>Event</th></tr>'
-           '<tr><td>10/14/2026</td><td><a href="jcDisplayCase.aspx?ID=1000001">CV26-012345-EA</a></td>'
-           '<td>SAGUARO VISTA APARTMENTS LLC vs. DOE, JANE A</td><td>Eviction Action</td></tr></table>')
+    cal = (
+        "<table><tr><th>Date</th><th>Case Number</th><th>Case Name</th><th>Event</th></tr>"
+        '<tr><td>10/14/2026</td><td><a href="jcDisplayCase.aspx?ID=1000001">CV26-012345-EA</a></td>'
+        "<td>SAGUARO VISTA APARTMENTS LLC vs. DOE, JANE A</td><td>Eviction Action</td></tr></table>"
+    )
     cal_lead = parse_calendar_html(cal)[0]
     assert cal_lead.url == CASE_URL
     assert db.upsert(conn, cal_lead) == "new"
@@ -77,12 +77,25 @@ def test_calendar_row_and_case_page_share_one_row():
 
 def test_lead_desk_shows_only_evictions_with_notice(tmp_path):
     path = tmp_path / "l.db"
-    app = App(path, case_client=FakeCases({"1000001": CASE_HTML, "1000002": NO_NOTICE_HTML.replace(
-        "CV26-012345-EA", "CV26-012346-EA")}))
+    app = App(
+        path,
+        case_client=FakeCases(
+            {"1000001": CASE_HTML, "1000002": NO_NOTICE_HTML.replace("CV26-012345-EA", "CV26-012346-EA")}
+        ),
+    )
     with app.conn() as conn:
         from leadgen.models import Lead
-        db.upsert(conn, Lead(source="tucson_code_cases", source_id="T1", lead_type="code_violation",
-                             address="1 MAIN ST", in_pima=True))
+
+        db.upsert(
+            conn,
+            Lead(
+                source="tucson_code_cases",
+                source_id="T1",
+                lead_type="code_violation",
+                address="1 MAIN ST",
+                in_pima=True,
+            ),
+        )
     counts = app.add_cases({"text": f"{CASE_URL} 1000002 9999999"})
     assert counts["new"] == 2 and counts["with_notice"] == 1 and counts["failed"] == 1
 
@@ -102,7 +115,7 @@ def test_update_cases_rereads_open_evictions(tmp_path):
     conn.execute("UPDATE leads SET case_checked_at = '2000-01-01T00:00:00+00:00'")
     fake = FakeCases({"1000001": CASE_HTML})
     counts = update_cases(conn, fake, log=lambda m: None)
-    assert counts == {"checked": 1, "with_notice": 1, "failed": 0}
+    assert counts == {"checked": 1, "with_notice": 1, "failed": 0, "total": 1}
     assert conn.execute("SELECT eviction_notice FROM leads").fetchone()[0] == 1
     # Just checked, so a second run skips it.
     assert update_cases(conn, fake, log=lambda m: None)["checked"] == 0
@@ -111,7 +124,7 @@ def test_update_cases_rereads_open_evictions(tmp_path):
 def test_import_saved_case_page(tmp_path):
     app = App(tmp_path / "l.db")
     counts = app.import_file("pima_jp_calendar", "case.html", CASE_HTML.encode())
-    assert counts == {"new": 1, "updated": 0, "with_notice": 1}
+    assert (counts["new"], counts["updated"], counts["with_notice"]) == (1, 0, 1)
     assert app.state()["leads"][0]["url"] == CASE_URL
 
 

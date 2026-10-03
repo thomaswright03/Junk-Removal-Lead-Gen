@@ -50,26 +50,57 @@ which cover only some businesses. A Google Places API key (Settings) finds
 most apartment complexes and property managers; without one, expect many
 evictions to still need a number (use the skip-trace export below).
 Google gives 1,000 of these searches a month free, then charges about $35
-per 1,000; Lead Desk stops at 30 a day and 1,000 a month unless you raise
-the limits in Settings.
+per 1,000; Lead Desk stops at 30 a day and 1,000 a month unless you change
+the limits in Settings. A limit of 0 allows no Google searches; "no limit" is
+a separate box.
 
-- **Leads**: by default only eviction cases with an eviction notice filed in
-  the court case (the "Show" menu switches to all evictions, or all leads
-  including Tucson code cases). Paste Justice Court case links
-  (`jcDisplayCase.aspx?ID=...`) into **Add cases** to add cases by hand; Lead Desk reads each
-  case page for the eviction notice, parties and next court date. Each open
-  lead is ranked by score, with the owner of record from
-  the Pima County Assessor (name, mailing address, whether they live
-  elsewhere, whether it's an LLC or trust). Click a lead for details, the
-  owner's other properties, and to log outreach and results.
-- **Outreach**: the experiment. "Assign leads" deals the best unassigned
-  leads evenly across three channels: door hanger at the property, phone
-  call to the owner, and landlord / property-manager outreach. Each channel
-  has its own work queue: a driving route for door hangers, a call list with a
-  script, and a list of companies to pitch.
-- **Results**: per channel, how many leads were contacted, responded, were
+**Stopping everything (kill switch).** Tick **Pause Lead Desk** in Settings,
+or set the environment variable `LEADDESK_PAUSED=1` (on Vercel, and as a
+repository variable for the GitHub Actions daily check). While paused, the
+daily check, court case page reads and every phone/email lookup, Google
+included, make no requests at all; the buttons say Lead Desk is paused.
+Leads and notes stay as they are. To stop only Google, untick **Use Google
+lookups** (this works even when the key comes from `GOOGLE_PLACES_API_KEY`)
+or set its limits to 0.
+
+- **Leads**: by default eviction cases with an eviction notice filed in the
+  court case, or further along (a judgment for the landlord, or a writ of
+  restitution, the lockout that leaves belongings behind), plus cases you
+  imported whose case page hasn't been read yet (marked "case not checked").
+  Dismissed cases, and closed cases that never reached a judgment, drop out.
+  The "Show" menu switches to all evictions, or all leads including Tucson
+  code cases. The header says how many court cases are still waiting to be
+  checked and when the next check runs. Paste Justice Court case links
+  (`jcDisplayCase.aspx?ID=...`) into **Add cases** to add cases by hand;
+  Lead Desk reads each case page for the eviction notice, judgment, writ,
+  parties and next court date. Each open lead is ranked by priority, with the
+  owner of record from the Pima County Assessor (name, mailing address,
+  whether they live elsewhere, whether it's an LLC or trust). Click a lead
+  (or Tab to it and press Enter) for details, the owner's other properties,
+  and to log outreach and results. Court case pages carry no property
+  address, so about half of eviction leads need one: type it into the lead
+  (or pick one of the landlord's other properties) and Lead Desk finds it on
+  the map, looks up the parcel and owner, and fills in the miles. Notes,
+  quotes and anything typed into a lead are kept while you do other things,
+  and are saved with a status change. The tab, filters and open lead are in
+  the address bar, so a reload or Back keeps your place.
+- **Outreach**: the experiment. "Assign leads" hands out the best
+  unassigned leads across three outreach methods, each reaching someone
+  different or making a different offer: a door hanger at the property
+  (whoever is there), a phone call to the owner about this one job, and a
+  standing-rate pitch to the landlord or property manager. So the methods
+  can be compared fairly, a round only uses leads that every ticked method
+  can work (door hangers need a property address), all of one landlord's
+  leads go to the same method (now and in later rounds), and leads are dealt
+  in small random blocks within each kind (address or not, eviction or code
+  case) so each method gets the same mix and a similar spread of priority.
+  Each method has its own work queue: a driving route for door hangers, a
+  call list with a script, and a list of companies to pitch.
+- **Results**: per method, how many leads were contacted, responded, were
   quoted and won, what was spent, revenue, cost per job and revenue per
-  dollar.
+  dollar, and the mix of leads each method got. Lead Desk names a leader
+  only when the mixes match; otherwise it says why the comparison isn't
+  fair yet.
 - **Settings**: business name and phone, a tracking phone number and cost
   per contact for each channel, and the message templates.
 
@@ -89,22 +120,32 @@ columns:
    Send it to one (BatchSkipTracing, PropStream and similar charge per
    record), then **Import phones / emails** (or `leadgen contacts import
    --file ...`) the file they send back. Rows are matched by lead id, parcel,
-   property address or owner name.
+   property address or owner name, and each row fills every open lead with
+   the same owner and mailing address. An import only fills empty phone and
+   email fields; it never changes a number entered by hand, and the result
+   says how many rows were skipped for that reason. UTF-8 and Excel
+   (Windows-1252) CSV files both work.
 3. Type a number into a lead by hand. Hand-entered contacts are never
-   overwritten by a lookup.
+   overwritten by a lookup or an import.
 
 Check found numbers before calling, and scrub personal cell numbers against
 the Do Not Call registry before any cold call.
 
 **Check for new evictions** runs the daily check now (it runs in the
 background; the page fills in as cases come in). **Update court cases**
-re-reads every open eviction case page. **Import court page / CSV** takes a saved Justice Court
-case page or calendar page, or any CSV.
+re-reads every open eviction case page, and **Find landlord phones &
+emails** runs the lookup; both run in the background with progress in the
+header and a Cancel button (online they do one batch per press). **Import
+court page / CSV** takes a saved Justice Court case page or calendar page,
+or any CSV (UTF-8 or Excel's Windows-1252); imported leads show on the Leads
+tab right away, and the result says when nothing in a file was recognised
+or a date couldn't be read.
 
-Score: up to 40 points for what the case says (vacant building, dumping and
-trash/debris highest, weeds lowest; evictions 35), +20 if the owner's mailing
-address is elsewhere, +10 for a company/trust owner, +10 if the owner has
-several leads, +15 if under a week old (+8 under two weeks).
+Priority: up to 40 points for what the case says (vacant building, dumping
+and trash/debris highest, weeds lowest; evictions 35, +25 more with a writ
+of restitution or +15 with a judgment for the landlord), +20 if the owner's
+mailing address is elsewhere, +10 for a company/trust owner, +10 if the
+owner has several leads, +15 if under a week old (+8 under two weeks).
 
 ## Daily use from the command line
 
@@ -197,8 +238,32 @@ later runs. Addresses are normalized ("123 North Main Street Apt 4" and
 already listed, it is linked to the first one and hidden from exports
 (`--include-duplicates` shows it).
 
+## Environment variables
+
+| Variable | What it does | Default |
+|---|---|---|
+| `LEADGEN_DATA_DIR` | Folder for the local SQLite database | `data` |
+| `LEADGEN_DB` | Path of the local SQLite database | `$LEADGEN_DATA_DIR/leads.db` |
+| `DATABASE_URL` | Postgres (Neon) database; when set, used instead of the SQLite file | unset |
+| `POSTGRES_URL` | Read when `DATABASE_URL` isn't set (some Vercel integrations name it this) | unset |
+| `LEADDESK_PASSWORD` | Password for Lead Desk online (required there) | unset |
+| `LEADDESK_PAUSED` | `1` pauses the daily check, case page reads and all lookups | unset (running) |
+| `GOOGLE_PLACES_API_KEY` | Google Places key for phone lookups; overrides the key in Settings | unset |
+| `LEADDESK_GITHUB_TOKEN` | Online, lets "Check for new evictions" start the GitHub Actions check | unset |
+| `LEADDESK_GITHUB_REF` | Branch that check runs from | `main` |
+| `VERCEL_GIT_REPO_OWNER`, `VERCEL_GIT_REPO_SLUG` | Set by Vercel; name the repository for that check | set by Vercel |
+| `TEST_DATABASE_URL` | Tests only: run the suite against this Postgres database | unset (SQLite) |
+
 ## Tests
 
 ```sh
-pytest
+pytest                                  # Python tests (SQLite)
+TEST_DATABASE_URL=postgresql://... pytest   # the same tests on Postgres
+ruff check . && ruff format --check .   # lint and format
+mypy                                    # type check
 ```
+
+The browser tests (`tests/test_browser.py`) drive Lead Desk in headless
+Chromium; they run when Playwright is installed
+(`pip install -e ".[dev]" && python -m playwright install chromium`) and
+are skipped otherwise. CI runs all of these.

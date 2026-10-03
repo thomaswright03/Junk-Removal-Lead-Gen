@@ -10,40 +10,59 @@ that turn into clean-outs. Coverage is City of Tucson only; unincorporated Pima 
 the other towns are not in this layer.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import requests
 
 from .. import config
 from ..models import Lead
 from ..tucson_codes import code_of
+from ..util import ARIZONA
 from .base import Source
 
 LAYER_URL = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PermitsCode/MapServer/103"
 PAGE_SIZE = 1000
-# Arizona does not observe daylight saving time.
-ARIZONA = timezone(timedelta(hours=-7))
 
 # Inspectors start DESCRIPTION with a violation code ("WEEDS / overgrown
 # weeds in front yard"). These are the codes that mean stuff has to be hauled
 # away. Seen in the live layer in October 2026.
 CLEANOUT_CODES = {
     "PMMULT",  # multiple property-maintenance violations: trash, debris, weeds
-    "REFS",    # refuse / trash accumulation
-    "DUMP",    # illegal dumping, items piled in alley
-    "RSTOR",   # outdoor storage of items on the property
-    "DILAP",   # dilapidated structure
-    "WEEDS",   # overgrown weeds (yard debris)
-    "TREES",   # overgrown trees (yard debris)
+    "REFS",  # refuse / trash accumulation
+    "DUMP",  # illegal dumping, items piled in alley
+    "RSTOR",  # outdoor storage of items on the property
+    "DILAP",  # dilapidated structure
+    "WEEDS",  # overgrown weeds (yard debris)
+    "TREES",  # overgrown trees (yard debris)
 }
 CLEANOUT_CASE_TYPES = {"VACANT/NUISANCE BUILDINGS"}
 
 KEYWORDS = (
-    "JUNK", "DEBRIS", "TRASH", "RUBBISH", "LITTER", "GARBAGE", "REFUSE",
-    "ACCUMULAT", "VACANT", "ABANDONED HOUSE", "ABANDONED HOME", "OVERGROWN",
-    "DILAPIDAT", "HOARD", "OUTDOOR STORAGE", "FURNITURE", "APPLIANCE",
-    "MATTRESS", "BLIGHT", "CLEAN UP", "CLEANUP", "GREEN WASTE", "YARD WASTE",
+    "JUNK",
+    "DEBRIS",
+    "TRASH",
+    "RUBBISH",
+    "LITTER",
+    "GARBAGE",
+    "REFUSE",
+    "ACCUMULAT",
+    "VACANT",
+    "ABANDONED HOUSE",
+    "ABANDONED HOME",
+    "OVERGROWN",
+    "DILAPIDAT",
+    "HOARD",
+    "OUTDOOR STORAGE",
+    "FURNITURE",
+    "APPLIANCE",
+    "MATTRESS",
+    "BLIGHT",
+    "CLEAN UP",
+    "CLEANUP",
+    "GREEN WASTE",
+    "YARD WASTE",
 )
+
 
 def _epoch_ms_to_date(value):
     if value in (None, ""):
@@ -86,9 +105,7 @@ def feature_to_lead(feature):
         lon=lon,
         in_pima=True,
         parcel=(a.get("PARCEL") or "").strip() or None,
-        description=" | ".join(
-            str(x) for x in (a.get("CaseType"), a.get("status"), a.get("DESCRIPTION")) if x
-        ),
+        description=" | ".join(str(x) for x in (a.get("CaseType"), a.get("status"), a.get("DESCRIPTION")) if x),
         url="https://gisdata.tucsonaz.gov/datasets/code-cases-last-60-days",
         raw=a,
     )

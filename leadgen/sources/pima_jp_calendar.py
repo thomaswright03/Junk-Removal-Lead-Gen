@@ -32,7 +32,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..config import USER_AGENT
-
 from ..models import Lead
 from .base import Source
 
@@ -103,20 +102,20 @@ def parse_calendar_html(html, assume_eviction=False):
             if not assume_eviction and not EVICTION_RE.search(row_text):
                 continue
 
-            def col(key):
+            def col(key, header=header, cells=cells):
                 i = header.get(key)
                 return cells[i] if i is not None and i < len(cells) else None
 
             plaintiff, defendant = col("plaintiff"), col("defendant")
-            if not (plaintiff and defendant) and header.get("parties") is not None \
-                    and header["parties"] < len(tds):
+            if not (plaintiff and defendant) and header.get("parties") is not None and header["parties"] < len(tds):
                 # Live calendar: one party per line, "NAME (Plaintiff)".
                 roles = {"P": [], "D": []}
                 for line in tds[header["parties"]].stripped_strings:
                     m = ROLE_RE.match(_clean(line))
                     if m:
                         roles["P" if m.group(2).upper() in ("PLAINTIFF", "PETITIONER") else "D"].append(
-                            _clean(m.group(1)))
+                            _clean(m.group(1))
+                        )
                 plaintiff = plaintiff or "; ".join(roles["P"]) or None
                 defendant = defendant or "; ".join(roles["D"]) or None
             if not (plaintiff and defendant):
@@ -157,8 +156,11 @@ def _form_fields(html):
     form = soup.find("form")
     if form is None:
         raise RuntimeError("calendar page has no form; the court site may have changed")
-    return {i["name"]: i.get("value") or "" for i in form.find_all("input")
-            if i.get("name") and i.get("type") not in ("submit", "button", "image")}
+    return {
+        i["name"]: i.get("value") or ""
+        for i in form.find_all("input")
+        if i.get("name") and i.get("type") not in ("submit", "button", "image")
+    }
 
 
 def has_page_link(html, n):
@@ -190,13 +192,19 @@ class CalendarClient:
         page = self.session.get(CALENDAR_URL, timeout=30)
         page.raise_for_status()
         data = _form_fields(page.text)
-        data.update({
-            "startDate": start.strftime("%m-%d-%Y"), "endDate": end.strftime("%m-%d-%Y"),
-            "Party": "All", "Attorney": "All", "ARSCode": "All", "drpDnJudge": "All",
-            "drpDnCaseType": "Eviction Actions",
-            "ctl00$MainContent$drpDnEventType": "Eviction Action",
-            "ctl00$MainContent$submitFilter": "submit",
-        })
+        data.update(
+            {
+                "startDate": start.strftime("%m-%d-%Y"),
+                "endDate": end.strftime("%m-%d-%Y"),
+                "Party": "All",
+                "Attorney": "All",
+                "ARSCode": "All",
+                "drpDnJudge": "All",
+                "drpDnCaseType": "Eviction Actions",
+                "ctl00$MainContent$drpDnEventType": "Eviction Action",
+                "ctl00$MainContent$submitFilter": "submit",
+            }
+        )
         html = self._post(data)
         self.pages = 1
         yield html

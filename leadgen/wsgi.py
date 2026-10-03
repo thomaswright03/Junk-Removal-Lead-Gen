@@ -67,13 +67,26 @@ class Headers:
 
 def _respond(start_response, status, body, ctype, extra=()):
     data = encode_body(body)
-    reasons = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
-               404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error",
-               503: "Service Unavailable"}
-    start_response(f"{status} {reasons.get(status, '')}".strip(), [
-        ("Content-Type", ctype), ("Content-Length", str(len(data))),
-        ("Cache-Control", "no-store"), ("X-Robots-Tag", "noindex"), *extra,
-    ])
+    reasons = {
+        200: "OK",
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        405: "Method Not Allowed",
+        500: "Internal Server Error",
+        503: "Service Unavailable",
+    }
+    start_response(
+        f"{status} {reasons.get(status, '')}".strip(),
+        [
+            ("Content-Type", ctype),
+            ("Content-Length", str(len(data))),
+            ("Cache-Control", "no-store"),
+            ("X-Robots-Tag", "noindex"),
+            *extra,
+        ],
+    )
     return [data]
 
 
@@ -90,13 +103,19 @@ def app(environ, start_response):
         items = "".join(f"<li><code>{k}</code></li>" for k in missing)
         return _respond(start_response, 503, SETUP_PAGE.format(items=items), "text/html; charset=utf-8")
     if not password_ok(environ.get("HTTP_AUTHORIZATION"), os.environ["LEADDESK_PASSWORD"]):
-        return _respond(start_response, 401, {"error": "password needed"}, "application/json",
-                        [("WWW-Authenticate", f'Basic realm="{REALM}", charset="UTF-8"')])
+        return _respond(
+            start_response,
+            401,
+            {"error": "password needed"},
+            "application/json",
+            [("WWW-Authenticate", f'Basic realm="{REALM}", charset="UTF-8"')],
+        )
     method = environ.get("REQUEST_METHOD", "GET")
     body = b""
     if method == "POST":
         n = int(environ.get("CONTENT_LENGTH") or 0)
         body = environ["wsgi.input"].read(n) if n else b""
-    status, out, ctype = handle(get_app(), method, environ.get("PATH_INFO") or "/",
-                                environ.get("QUERY_STRING", ""), Headers(environ), body)
+    status, out, ctype = handle(
+        get_app(), method, environ.get("PATH_INFO") or "/", environ.get("QUERY_STRING", ""), Headers(environ), body
+    )
     return _respond(start_response, status, out, ctype)

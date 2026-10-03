@@ -63,15 +63,18 @@ def install(db_path, hour=6, minute=0):
         PLIST.write_text(plist(db_path, hour, minute, workdir, log_path), encoding="utf-8")
         subprocess.run(["launchctl", "unload", str(PLIST)], capture_output=True)
         subprocess.run(["launchctl", "load", str(PLIST)], check=True)
-        return (f"Daily run scheduled for {hour}:{minute:02d} every day. "
-                f"Log: {log_path}. Remove with: leadgen schedule remove")
+        return (
+            f"Daily run scheduled for {hour}:{minute:02d} every day. "
+            f"Log: {log_path}. Remove with: leadgen schedule remove"
+        )
     cmd = " ".join(f'"{a}"' if " " in a else a for a in command(db_path))
     if system == "Windows":
-        return ("Run this once in a Command Prompt to schedule it:\n"
-                f'schtasks /Create /SC DAILY /ST {hour:02d}:{minute:02d} /TN "Lead Desk daily" '
-                f'/TR "cmd /c cd /d {workdir} && {cmd} >> {log_path} 2>&1"')
-    return ("Add this line with `crontab -e`:\n"
-            f"{minute} {hour} * * * cd {workdir} && {cmd} >> {log_path} 2>&1")
+        return (
+            "Run this once in a Command Prompt to schedule it:\n"
+            f'schtasks /Create /SC DAILY /ST {hour:02d}:{minute:02d} /TN "Lead Desk daily" '
+            f'/TR "cmd /c cd /d {workdir} && {cmd} >> {log_path} 2>&1"'
+        )
+    return f"Add this line with `crontab -e`:\n{minute} {hour} * * * cd {workdir} && {cmd} >> {log_path} 2>&1"
 
 
 def remove():

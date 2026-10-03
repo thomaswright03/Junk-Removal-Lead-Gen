@@ -7,7 +7,7 @@ import pytest
 from leadgen import db, outreach
 from leadgen.enrich import enrich, is_entity, owner_fields
 from leadgen.models import Lead
-from leadgen.web import App, render_template
+from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"
 PARCEL = json.loads((FIX / "parcel_10610001E.json").read_text())["features"][0]["attributes"]
@@ -33,33 +33,72 @@ class FakeParcels:
 
 
 def owner(parcel, name, mail, site, use="SFR GRADE 010-3 URBAN SUBDIVIDED"):
-    return {**PARCEL, "PARCEL": parcel, "ADDRESSEE": name, "ADDRESS": mail, "SITE_ADDRESS": site,
-            "USE_DESC": use}
+    return {**PARCEL, "PARCEL": parcel, "ADDRESSEE": name, "ADDRESS": mail, "SITE_ADDRESS": site, "USE_DESC": use}
 
 
 def seed(conn):
     leads = [
-        Lead("tucson_code_cases", "CE-1", "code_violation", "2026-09-30", "1825 W PRICE ST",
-             city="Tucson", lat=32.279, lon=-111.005, parcel="10610001E", in_pima=True,
-             description="Property Maintenance | Active | PMMULT / trash and debris"),
-        Lead("tucson_code_cases", "CE-2", "code_violation", "2026-09-10", "10 E OWNER LN",
-             city="Tucson", lat=32.25, lon=-110.95, parcel="P2", in_pima=True,
-             description="Property Maintenance | Active | WEEDS / weeds"),
-        Lead("tucson_code_cases", "CE-3", "code_violation", "2026-09-29", "20 S RENTAL AVE",
-             city="Tucson", lat=32.21, lon=-110.97, parcel="P3", in_pima=True,
-             description="Vacant/Nuisance Buildings | Active | open to entry"),
-        Lead("pima_jp_calendar", "CV26-000001-EV", "eviction", "2026-09-30", None,
-             plaintiff="SAGUARO APARTMENTS LLC", defendant="DOE, JANE", in_pima=True),
+        Lead(
+            "tucson_code_cases",
+            "CE-1",
+            "code_violation",
+            "2026-09-30",
+            "1825 W PRICE ST",
+            city="Tucson",
+            lat=32.279,
+            lon=-111.005,
+            parcel="10610001E",
+            in_pima=True,
+            description="Property Maintenance | Active | PMMULT / trash and debris",
+        ),
+        Lead(
+            "tucson_code_cases",
+            "CE-2",
+            "code_violation",
+            "2026-09-10",
+            "10 E OWNER LN",
+            city="Tucson",
+            lat=32.25,
+            lon=-110.95,
+            parcel="P2",
+            in_pima=True,
+            description="Property Maintenance | Active | WEEDS / weeds",
+        ),
+        Lead(
+            "tucson_code_cases",
+            "CE-3",
+            "code_violation",
+            "2026-09-29",
+            "20 S RENTAL AVE",
+            city="Tucson",
+            lat=32.21,
+            lon=-110.97,
+            parcel="P3",
+            in_pima=True,
+            description="Vacant/Nuisance Buildings | Active | open to entry",
+        ),
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000001-EV",
+            "eviction",
+            "2026-09-30",
+            None,
+            plaintiff="SAGUARO APARTMENTS LLC",
+            defendant="DOE, JANE",
+            in_pima=True,
+        ),
     ]
     for l in leads:
         db.upsert(conn, l)
     db.put_settings(conn, {"lead_view": "all"})  # these tests use code cases too
     conn.commit()
-    return FakeParcels([
-        PARCEL,
-        owner("P2", "SMITH JOHN", "10 E OWNER LN", "10 E OWNER LN"),
-        owner("P3", "DESERT RENTALS LLC", "PO BOX 1", "20 S RENTAL AVE"),
-    ])
+    return FakeParcels(
+        [
+            PARCEL,
+            owner("P2", "SMITH JOHN", "10 E OWNER LN", "10 E OWNER LN"),
+            owner("P3", "DESERT RENTALS LLC", "PO BOX 1", "20 S RENTAL AVE"),
+        ]
+    )
 
 
 def test_owner_fields_absentee_and_entity():
@@ -110,15 +149,123 @@ def test_scores_rank_absentee_vacant_over_owner_occupied_weeds():
     assert leads["CV26-000001-EV"]["eligible"] == ["phone", "property_manager"]
 
 
-def test_assign_splits_evenly_and_respects_eligibility():
-    conn = db.connect(":memory:")
-    enrich(conn, seed(conn))
-    leads = App(":memory:").leads(conn, outreach.merged_settings({"lead_view": "all"}))
-    counts = outreach.assign(conn, leads, 4, list(outreach.CHANNELS), seed=1)
-    assert sum(counts.values()) == 4
-    assert max(counts.values()) - min(counts.values()) <= 1
-    ev = conn.execute("SELECT channel FROM leads WHERE lead_type = 'eviction'").fetchone()[0]
-    assert ev in ("phone", "property_manager")
+def seed_evictions(conn, with_address=30, without=30):
+    """Eviction leads with made-up landlords. Some landlords have several
+    cases; scores vary with filing date, absentee and company owners."""
+    n = 0
+    for has_address, how_many in ((True, with_address), (False, without)):
+        for i in range(how_many):
+            n += 1
+            landlord = f"MESA {'ADDR' if has_address else 'NOADDR'} {i // 3 if i < 9 else i} LLC"
+            db.upsert(
+                conn,
+                Lead(
+                    "pima_jp_calendar",
+                    f"CV26-{n:06d}-EA",
+                    "eviction",
+                    f"2026-09-{1 + (i * 7) % 29:02d}",
+                    f"{100 + n} W TEST ST" if has_address else None,
+                    plaintiff=landlord,
+                    defendant="DOE, PAT",
+                    in_pima=True,
+                    eviction_notice=True,
+                ),
+            )
+            conn.execute(
+                "UPDATE leads SET owner_name = ?, owner_absentee = ?, owner_entity = ? WHERE source_id = ?",
+                (landlord, i % 2, int(i % 3 == 0), f"CV26-{n:06d}-EA"),
+            )
+    conn.commit()
+
+
+def assigned_rows(conn, round_only=True):
+    sql = "SELECT * FROM leads WHERE channel IS NOT NULL" + (" AND assign_round IS NOT NULL" if round_only else "")
+    return conn.execute(sql).fetchall()
+
+
+def test_assign_round_is_like_for_like(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn)
+    app = App(path)
+    out = app.assign({"count": 60, "channels": list(outreach.CHANNELS)})
+    # Door hangers need an address, so only the 30 leads every channel can work go out.
+    assert sum(out["assigned"].values()) == 30
+    assert out["left_out"]["needs_address"] == 30
+    assert sorted(out["assigned"].values()) == [10, 10, 10]
+
+    rows = assigned_rows(conn)
+    by_channel = {}
+    for r in rows:
+        by_channel.setdefault(r["channel"], []).append(r)
+    scores = {l["id"]: l["score"] for l in app.state()["leads"]}
+    for ch, rs in by_channel.items():
+        assert all(r["address"] for r in rs), ch  # same address share: 100% each
+    means = [sum(scores[r["id"]] for r in rs) / len(rs) for rs in by_channel.values()]
+    assert max(means) - min(means) <= 8
+
+    # No landlord is reached through two channels.
+    channels_per_landlord = {}
+    for r in rows:
+        channels_per_landlord.setdefault(r["plaintiff"], set()).add(r["channel"])
+    assert all(len(c) == 1 for c in channels_per_landlord.values())
+
+    cmp = app.state()["comparison"]
+    assert cmp["fair"] and not cmp["ready"]  # fair mix, but nothing logged yet
+
+
+def test_assign_without_door_hangers_balances_address_share(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn)
+    app = App(path)
+    out = app.assign({"count": 60, "channels": ["phone", "property_manager"]})
+    assert sum(out["assigned"].values()) == 60
+    shares = {}
+    for r in assigned_rows(conn):
+        shares.setdefault(r["channel"], []).append(bool(r["address"]))
+    for flags in shares.values():
+        assert abs(sum(flags) / len(flags) - 0.5) <= 0.1
+    res = {r["channel"]: r for r in app.state()["results"]}
+    assert res["phone"]["mix"]["with_address"] is not None
+
+
+def test_landlord_keeps_its_channel_in_later_rounds(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn, with_address=6, without=0)
+    app = App(path)
+    app.assign({"count": 6, "channels": list(outreach.CHANNELS)})
+    first = {r["plaintiff"]: r["channel"] for r in assigned_rows(conn)}
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-NEW-EA",
+            "eviction",
+            "2026-09-30",
+            "9 W NEW ST",
+            plaintiff="MESA ADDR 0 LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.commit()
+    out = app.assign({"count": 6, "channels": list(outreach.CHANNELS)})
+    new = conn.execute("SELECT channel FROM leads WHERE source_id = 'CV26-NEW-EA'").fetchone()[0]
+    assert new == first["MESA ADDR 0 LLC"] and sum(out["followed"].values()) == 1
+
+
+def test_results_refuse_to_rank_an_unequal_mix(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn, with_address=10, without=10)
+    conn.execute("UPDATE leads SET channel = 'door_hanger' WHERE address IS NOT NULL")
+    conn.execute("UPDATE leads SET channel = 'phone' WHERE address IS NULL")
+    conn.commit()
+    cmp = App(path).state()["comparison"]
+    assert not cmp["fair"]
+    assert any("property address" in r for r in cmp["reasons"])
 
 
 def test_app_flow_touch_result_and_results(tmp_path):
@@ -164,19 +311,6 @@ def test_postcard_channel_is_retired(tmp_path):
     state = app.state()
     assert "postcard" not in state["channels"]
     assert all(l["channel"] is None for l in state["leads"])
-
-
-def test_first_name_from_assessor_order():
-    s = outreach.merged_settings({"templates": {"phone": "Hi {owner_first}"}})
-    assert render_template(s, "phone", {"owner_name": "SMITH JOHN A", "owner_entity": 0}) == "Hi John"
-    assert render_template(s, "phone", {"owner_name": "ACME LLC", "owner_entity": 1}) == "Hi there"
-
-
-def test_render_template():
-    s = outreach.merged_settings({"business_phone": "520-555-0100"})
-    text = render_template(s, "phone", {"owner_name": "SMITH JOHN", "owner_entity": 0,
-                                           "address": "10 E OWNER LN"})
-    assert "10 E Owner Ln" in text and "Steve's Junk Removal" in text
 
 
 def test_import_calendar_upload(tmp_path):

@@ -10,13 +10,14 @@ Typical daily run::
 
 import argparse
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 from . import config, db, export
 from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
+from .util import PAUSED_MESSAGE, az_today, decode_text, is_paused
 
 
 def _connect(args):
@@ -25,8 +26,8 @@ def _connect(args):
 
 def cmd_fetch(args, conn=None):
     conn = conn or _connect(args)
-    until = args.until or date.today().isoformat()
-    since = args.since or (date.today() - timedelta(days=args.days)).isoformat()
+    until = args.until or az_today().isoformat()
+    since = args.since or (az_today() - timedelta(days=args.days)).isoformat()
     names = args.source or list(AUTOMATIC)
     total = {"new": 0, "updated": 0}
     for name in names:
@@ -68,8 +69,7 @@ def cmd_geocode(args, conn=None):
 
 def cmd_enrich(args, conn=None):
     conn = conn or _connect(args)
-    counts = enrich(conn, limit=getattr(args, "enrich_limit", None),
-                    refresh=getattr(args, "refresh", False))
+    counts = enrich(conn, limit=getattr(args, "enrich_limit", None), refresh=getattr(args, "refresh", False))
     print(f"owners: {counts['found']} found, {counts['not_found']} not found")
 
 
@@ -81,31 +81,37 @@ def cmd_contacts(args):
     conn = _connect(args)
     if args.action == "find":
         settings = outreach.merged_settings(db.get_settings(conn))
+        if is_paused(settings):
+            sys.exit(PAUSED_MESSAGE)
         providers = providers_from(settings, google_key=args.google_key, conn=conn)
         names = ", ".join(p.name for p in providers)
         print(f"looking up business contacts with: {names} (+ company websites)")
         counts = find_contacts(conn, providers, limit=args.limit, refresh=args.refresh)
-        print(f"companies checked {counts['checked']}; leads with a contact found "
-              f"{counts['found']}, not found {counts['not_found']}; individuals skipped "
-              f"{counts['skipped_people']}; errors {counts['errors']}")
+        print(
+            f"companies checked {counts['checked']}; leads with a contact found "
+            f"{counts['found']}, not found {counts['not_found']}; individuals skipped "
+            f"{counts['skipped_people']}; errors {counts['errors']}"
+        )
     elif args.action == "import":
         if not args.file:
             sys.exit("contacts import needs --file")
-        text = Path(args.file).read_text(encoding="utf-8-sig", errors="replace")
+        text = decode_text(Path(args.file).read_bytes())
         print(contacts.import_contacts(conn, text))
     else:
-        out = Path(args.file or f"exports/skiptrace-{date.today().isoformat()}.csv")
+        out = Path(args.file or f"exports/skiptrace-{az_today().isoformat()}.csv")
         out.parent.mkdir(parents=True, exist_ok=True)
-        leads = [l for l in App(args.db).leads(conn)
-                 if l["status"] not in ("stale", "skip", "lost", "won")]
+        leads = [l for l in App(args.db).leads(conn) if l["status"] not in ("stale", "skip", "lost", "won")]
         out.write_text(contacts.skiptrace_csv(leads), encoding="utf-8")
         print(f"wrote owners missing a phone to {out}")
 
 
 def cmd_cases(args):
+    from . import outreach
     from .sources.pima_jp_case import add_cases, update_cases
 
     conn = _connect(args)
+    if is_paused(outreach.merged_settings(db.get_settings(conn))):
+        sys.exit(PAUSED_MESSAGE)
     if args.action == "add":
         if not args.links:
             sys.exit("cases add needs one or more case links or IDs")
@@ -141,8 +147,7 @@ def cmd_schedule(args):
 def cmd_serve(args):
     from .web import serve
 
-    serve(args.db, host=args.host, port=args.port, stale_days=args.stale_days,
-          open_browser=not args.no_browser)
+    serve(args.db, host=args.host, port=args.port, stale_days=args.stale_days, open_browser=not args.no_browser)
 
 
 def cmd_age(args, conn=None):
@@ -155,9 +160,10 @@ def cmd_age(args, conn=None):
 def _rows_for_export(args, conn):
     since = None
     if not args.include_stale:
-        since = (date.today() - timedelta(days=args.stale_days)).isoformat()
-    statuses = args.status or ([s for s in db.STATUSES if s not in ("stale", "skip", "lost")]
-                               if not args.include_stale else None)
+        since = (az_today() - timedelta(days=args.stale_days)).isoformat()
+    statuses = args.status or (
+        [s for s in db.STATUSES if s not in ("stale", "skip", "lost")] if not args.include_stale else None
+    )
     return db.query(
         conn,
         since=since,
@@ -171,7 +177,7 @@ def _rows_for_export(args, conn):
 def cmd_export(args, conn=None):
     conn = conn or _connect(args)
     rows = _rows_for_export(args, conn)
-    out = Path(args.out or f"exports/leads-{date.today().isoformat()}.{args.format}")
+    out = Path(args.out or f"exports/leads-{az_today().isoformat()}.{args.format}")
     out.parent.mkdir(parents=True, exist_ok=True)
     if args.format == "csv":
         export.write_csv(rows, out)
@@ -206,8 +212,10 @@ def cmd_list(args):
     rows = _rows_for_export(args, conn)
     for r in rows[: args.limit]:
         who = r["plaintiff"] or ""
-        print(f"{r['id']:>5}  {r['event_date'] or '':10}  {r['lead_type']:<14} "
-              f"{(r['address'] or '(address needed)')[:40]:<40}  {who[:30]}")
+        print(
+            f"{r['id']:>5}  {r['event_date'] or '':10}  {r['lead_type']:<14} "
+            f"{(r['address'] or '(address needed)')[:40]:<40}  {who[:30]}"
+        )
     print(f"{len(rows)} leads")
 
 
@@ -219,24 +227,38 @@ def cmd_sources(args):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="leadgen", description=__doc__.splitlines()[0])
-    p.add_argument("--db", default=config.DATABASE_URL or str(config.DB_PATH),
-                   help="SQLite file or postgres:// URL (default: DATABASE_URL if set, "
-                        f"else {config.DB_PATH})")
-    p.add_argument("--stale-days", type=int, default=config.STALE_AFTER_DAYS,
-                   help="leads older than this are stale (default %(default)s)")
+    p.add_argument(
+        "--db",
+        default=config.DATABASE_URL or str(config.DB_PATH),
+        help=f"SQLite file or postgres:// URL (default: DATABASE_URL if set, else {config.DB_PATH})",
+    )
+    p.add_argument(
+        "--stale-days",
+        type=int,
+        default=config.STALE_AFTER_DAYS,
+        help="leads older than this are stale (default %(default)s)",
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
     def fetch_args(sp):
-        sp.add_argument("--source", action="append", choices=sorted(SOURCES),
-                        help="source to run; repeatable (default: all automatic sources)")
+        sp.add_argument(
+            "--source",
+            action="append",
+            choices=sorted(SOURCES),
+            help="source to run; repeatable (default: all automatic sources)",
+        )
         sp.add_argument("--file", nargs="+", help="input files for file-based sources")
         sp.add_argument("--since", help="start date YYYY-MM-DD")
         sp.add_argument("--until", help="end date YYYY-MM-DD (default today)")
         sp.add_argument("--days", type=int, default=30, help="look-back if --since is not given")
-        sp.add_argument("--all-cases", action="store_true",
-                        help="tucson_code_cases: keep every case, not only junk/debris/vacant")
-        sp.add_argument("--assume-eviction", action="store_true",
-                        help="pima_jp_calendar: page is already filtered to eviction hearings")
+        sp.add_argument(
+            "--all-cases", action="store_true", help="tucson_code_cases: keep every case, not only junk/debris/vacant"
+        )
+        sp.add_argument(
+            "--assume-eviction",
+            action="store_true",
+            help="pima_jp_calendar: page is already filtered to eviction hearings",
+        )
         sp.add_argument("--lead-type", help="csv_import: lead type for rows without one")
 
     def export_args(sp):
@@ -259,30 +281,29 @@ def build_parser():
     sp.set_defaults(func=cmd_enrich)
 
     sp = sub.add_parser(
-        "contacts",
-        help="find business phone/email for landlords and owners; import or export contacts")
+        "contacts", help="find business phone/email for landlords and owners; import or export contacts"
+    )
     sp.add_argument("action", choices=("find", "import", "export"))
     sp.add_argument("--file", help="import: CSV with phone/email; export: output path")
     sp.add_argument("--limit", type=int, help="find: max companies to look up")
     sp.add_argument("--refresh", action="store_true", help="find: re-check leads already done")
-    sp.add_argument("--google-key", help="find: Google Places API key "
-                    "(or set GOOGLE_PLACES_API_KEY)")
+    sp.add_argument("--google-key", help="find: Google Places API key (or set GOOGLE_PLACES_API_KEY)")
     sp.set_defaults(func=cmd_contacts)
 
-    sp = sub.add_parser(
-        "cases",
-        help="read Justice Court case pages: add cases by link, or update eviction cases")
+    sp = sub.add_parser("cases", help="read Justice Court case pages: add cases by link, or update eviction cases")
     sp.add_argument("action", choices=("add", "update"))
-    sp.add_argument("links", nargs="*",
-                    help="add: case page links (jcDisplayCase.aspx?ID=...) or IDs")
+    sp.add_argument("links", nargs="*", help="add: case page links (jcDisplayCase.aspx?ID=...) or IDs")
     sp.add_argument("--limit", type=int, help="update: max cases to re-read")
     sp.set_defaults(func=cmd_cases)
 
     sp = sub.add_parser(
-        "daily",
-        help="the daily run: new evictions, eviction notices, owners, landlord phones, code cases")
-    sp.add_argument("--counts-only", action="store_true",
-                    help="print step names and counts only, no names or error details (public logs)")
+        "daily", help="the daily run: new evictions, eviction notices, owners, landlord phones, code cases"
+    )
+    sp.add_argument(
+        "--counts-only",
+        action="store_true",
+        help="print step names and counts only, no names or error details (public logs)",
+    )
     sp.set_defaults(func=cmd_daily)
 
     sp = sub.add_parser("schedule", help="run `leadgen daily` automatically every morning")

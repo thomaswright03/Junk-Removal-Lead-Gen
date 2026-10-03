@@ -80,8 +80,7 @@ def test_parse_calendar_vs_column():
 
 
 def test_parse_calendar_split_columns_with_address():
-    leads = parse_calendar_html((FIX / "jp_calendar_split.html").read_text(),
-                                assume_eviction=True)
+    leads = parse_calendar_html((FIX / "jp_calendar_split.html").read_text(), assume_eviction=True)
     assert len(leads) == 1
     l = leads[0]
     assert (l.plaintiff, l.defendant) == ("CASA GRANDE HOMES", "DOE, JOHN")
@@ -106,8 +105,7 @@ def test_census_parse():
 
 def test_upsert_is_idempotent_and_keeps_steves_edits():
     conn = db.connect(":memory:")
-    lead = Lead(source="s", source_id="1", lead_type="eviction", event_date="2026-09-30",
-                address="1 N Main St")
+    lead = Lead(source="s", source_id="1", lead_type="eviction", event_date="2026-09-30", address="1 N Main St")
     assert db.upsert(conn, lead) == "new"
     row_id = conn.execute("SELECT id FROM leads").fetchone()["id"]
     db.set_status(conn, row_id, "contacted", "left voicemail")
@@ -121,10 +119,19 @@ def test_upsert_is_idempotent_and_keeps_steves_edits():
 
 def test_same_address_from_two_sources_is_one_lead():
     conn = db.connect(":memory:")
-    db.upsert(conn, Lead(source="a", source_id="1", lead_type="code_violation",
-                         event_date="2026-09-20", address="100 North Main Street"))
-    db.upsert(conn, Lead(source="b", source_id="X", lead_type="eviction",
-                         event_date="2026-09-25", address="100 N MAIN ST"))
+    db.upsert(
+        conn,
+        Lead(
+            source="a",
+            source_id="1",
+            lead_type="code_violation",
+            event_date="2026-09-20",
+            address="100 North Main Street",
+        ),
+    )
+    db.upsert(
+        conn, Lead(source="b", source_id="X", lead_type="eviction", event_date="2026-09-25", address="100 N MAIN ST")
+    )
     assert len(db.query(conn)) == 1
     assert len(db.query(conn, include_duplicates=True)) == 2
 
@@ -138,8 +145,17 @@ def test_mark_stale():
 
 def test_exports(tmp_path):
     conn = db.connect(":memory:")
-    db.upsert(conn, Lead(source="a", source_id="1", lead_type="eviction", event_date="2026-09-30",
-                         address="1 Main", plaintiff="</script><b>x</b>"))
+    db.upsert(
+        conn,
+        Lead(
+            source="a",
+            source_id="1",
+            lead_type="eviction",
+            event_date="2026-09-30",
+            address="1 Main",
+            plaintiff="</script><b>x</b>",
+        ),
+    )
     rows = db.query(conn)
     export.write_csv(rows, tmp_path / "l.csv")
     export.write_html(rows, tmp_path / "l.html")
@@ -150,8 +166,19 @@ def test_exports(tmp_path):
 
 def test_cli_fetch_csv_and_export(tmp_path, capsys):
     dbfile = tmp_path / "leads.db"
-    cli.main(["--db", str(dbfile), "fetch", "--source", "csv_import",
-              "--file", str(FIX / "leads.csv"), "--lead-type", "eviction"])
+    cli.main(
+        [
+            "--db",
+            str(dbfile),
+            "fetch",
+            "--source",
+            "csv_import",
+            "--file",
+            str(FIX / "leads.csv"),
+            "--lead-type",
+            "eviction",
+        ]
+    )
     out = tmp_path / "out.csv"
     cli.main(["--db", str(dbfile), "--stale-days", "3650", "export", "--out", str(out)])
     text = out.read_text()
