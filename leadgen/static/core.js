@@ -10,8 +10,6 @@ const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined,
 const pct = v => v == null ? "–" : (v * 100).toFixed(v < 0.1 && v > 0 ? 1 : 0) + "%";
 const title = s => String(s ?? "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
   .replace(/\b(Llc|Lllp|Lp|Po|Nw|Ne|Sw|Se|Hoa|Usa|Az)\b/g, w => w.toUpperCase());
-// Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
-const firstName = name => { const w = String(name || "").replace(/[&,].*$/, "").trim().split(/\s+/); return w.length > 1 && /^[A-Za-z]{2,}$/.test(w[1]) ? title(w[1]) : ""; };
 
 const OFFLINE = "Lead Desk didn't answer. Check that it is still running (and your internet connection), then try again.";
 async function api(path, body) {
@@ -145,7 +143,8 @@ function addressNote(l, plain) {
 const templateKey = (channel, l) => channel === "phone" && l.lead_type === "eviction" ? "phone_eviction" : channel;
 function fill(channel, l) {
   const st = S.settings, owner = (l.owner_name || l.plaintiff || "").trim();
-  const first = owner && !l.owner_entity ? firstName(owner) : "";
+  // Worked out on the server: blank for companies, trusts and apartments.
+  const first = l.owner_first || "";
   const phone = (st.tracking_numbers || {})[channel] || st.business_phone || "[phone]";
   const addr = title(fullAddress(l));
   return (st.templates[templateKey(channel, l)] || st.templates[channel] || "")

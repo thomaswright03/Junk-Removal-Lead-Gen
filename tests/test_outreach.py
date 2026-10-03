@@ -550,3 +550,39 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
     after = app.state({"list": "leads"})["counts"]
     # Three filled or kept, plus the new case from the file.
     assert (after["evictions_open"], after["evictions_with_address"]) == (8, 5)
+
+
+@pytest.mark.parametrize(
+    "owner_name, owner_entity, plaintiff, first",
+    [
+        # Eviction with no assessor match: the landlord on the case.
+        (None, 0, "SEDONA POINTE LLC", ""),
+        (None, 0, "ROMERO, RAYNALDO M", "Raynaldo"),
+        (None, 0, "ROMERO, RAYNALDO M; ROMERO, ANA", "Raynaldo"),
+        (None, 0, "DESERT VISTA APTS", ""),
+        (None, 0, "PALO VERDE TRUST", ""),
+        (None, 0, "SAGUARO GROUP LTD", ""),
+        (None, 0, "MARIA LOPEZ", ""),  # no comma: which word is the first name isn't known
+        # Assessor owners are "LAST FIRST MIDDLE".
+        ("SMITH JOHN A & MARY", 0, None, "John"),
+        ("O'BRIEN MARY-KATE", 0, None, "Mary-Kate"),
+        ("DESERT RENTALS LLC", 1, None, ""),
+        ("CANYON HOLDINGS", 1, None, ""),
+        ("SMITH J", 0, None, ""),  # only an initial
+    ],
+)
+def test_call_script_greets_people_by_first_name_and_companies_with_there(owner_name, owner_entity, plaintiff, first):
+    lead = {"owner_name": owner_name, "owner_entity": owner_entity, "plaintiff": plaintiff}
+    assert outreach.owner_first_name(lead) == first
+
+
+def test_lead_carries_the_greeting_name(tmp_path):
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    for case, plaintiff in (("CV26-000001-EA", "SEDONA POINTE LLC"), ("CV26-000002-EA", "ROMERO, RAYNALDO M")):
+        db.upsert(conn, Lead("pima_jp_calendar", case, "eviction", "2026-09-30", plaintiff=plaintiff, in_pima=True))
+    db.put_settings(conn, {"lead_view": "all"})
+    conn.commit()
+    leads = {l["source_id"]: l for l in App(path).state({"list": "leads"})["list"]["leads"]}
+    assert leads["CV26-000001-EA"]["owner_first"] == ""
+    assert leads["CV26-000002-EA"]["owner_first"] == "Raynaldo"

@@ -38,6 +38,7 @@ import uuid
 from datetime import date
 from typing import Any, Optional
 
+from .enrich import is_entity
 from .tucson_codes import code_of
 from .util import Conn, LeadRow, az_today, is_multifamily, now_iso
 
@@ -140,6 +141,36 @@ def _get(row: LeadRow, key: str) -> Any:
         return row[key]
     except (KeyError, IndexError):
         return None
+
+
+def owner_first_name(lead: LeadRow) -> str:
+    """The first name to greet on a call, or "" when it isn't known to be a
+    person (the script then says "Hi there"). The owner of record comes
+    first, else the eviction's landlord (first plaintiff).
+
+    - Companies, trusts, apartments and the like (``is_entity``, or the
+      assessor's company flag on the owner): "".
+    - "LAST, FIRST M" (court and most lists): the word after the comma.
+    - The assessor's "LAST FIRST MIDDLE": the second word. A plaintiff
+      without a comma is not split this way, as its order isn't known.
+    """
+    owner = (_get(lead, "owner_name") or "").strip()
+    name, from_assessor = (owner, True) if owner else ((_get(lead, "plaintiff") or "").strip(), False)
+    name = name.split(";")[0].strip()
+    if not name or is_entity(name) or (from_assessor and _get(lead, "owner_entity")):
+        return ""
+    if "," in name:
+        words = name.split(",", 1)[1].split("&")[0].split()
+        word = words[0] if words else ""
+    elif from_assessor:
+        words = name.split("&")[0].split()
+        word = words[1] if len(words) > 1 else ""
+    else:
+        return ""
+    word = word.strip(".")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z'-]+", word):
+        return ""
+    return re.sub(r"(^|[-'])([a-z])", lambda m: m.group(1) + m.group(2).upper(), word.lower())
 
 
 def merged_settings(stored: Optional[dict]) -> dict:

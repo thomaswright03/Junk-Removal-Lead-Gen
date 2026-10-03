@@ -300,6 +300,8 @@ def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):
     eviction = page.inner_text("[data-script=eviction]")
     code = page.inner_text("[data-script=code]")
     assert "eviction" in eviction and "[address]" not in eviction and "City has opened a case" in code
+    # The landlord is a company (EXAMPLE HOMES LLC): no made-up first name.
+    assert "Hi there, this is Steve" in eviction and "Homes," not in eviction
 
 
 def test_reload_keeps_the_filter_and_the_open_lead(server, page):

@@ -155,6 +155,7 @@ def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[da
     d["score_parts"] = outreach.score_parts(r, owner_counts, today=today)
     d["score"] = sum(points for _label, points in d["score_parts"])
     d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
+    d["owner_first"] = outreach.owner_first_name(r)
     d["eligible"] = outreach.eligible_channels(r)
     d["door_hanger_problem"] = outreach.door_hanger_problem(r)
     d["date_label"] = outreach.date_label(r)
