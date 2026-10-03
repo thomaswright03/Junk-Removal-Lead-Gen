@@ -65,7 +65,11 @@ STEP_LABELS = {
 
 
 def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
-    log(f"checking {STEP_LABELS.get(name, name)}")
+    """Run one step. A failure is recorded in the summary (the error itself
+    under "error", for ``--debug`` and the server log; the website in words
+    under "site") and logged as a plain sentence, and the next step runs."""
+    label = STEP_LABELS.get(name, name)
+    log(f"checking {label}")
     try:
         summary[name] = fn()
     except Exception as e:  # one source being down shouldn't stop the rest
@@ -75,9 +79,11 @@ def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
         if isinstance(e, requests.RequestException):
             from .cli import site_name
 
-            log(f"{STEP_LABELS.get(name, name)} failed: {site_name(e)} couldn't be reached ({type(e).__name__})")
+            summary[name]["site"] = site_name(e)
+            log(f"{label} failed: {summary[name]['site']} couldn't be reached")
         else:
-            log(f"{STEP_LABELS.get(name, name)} failed: {type(e).__name__}: {e}")
+            log(f"{label} failed because of an unexpected problem (run with --debug for details)")
+        log_.debug("%s failed", label, exc_info=True)
 
 
 def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
@@ -192,8 +198,9 @@ def run_daily(
     summary["finished_at"] = now_iso()
     try:
         leadlist.record_address_share(conn, settings, today)
-    except Exception as e:  # a progress number must never fail the check
-        log(f"address progress not saved: {type(e).__name__}")
+    except Exception:  # a progress number must never fail the check
+        log("address progress not saved because of an unexpected problem")
+        log_.debug("address progress not saved", exc_info=True)
     values: dict[str, Any] = {"last_daily_summary": summary}
     failed = failed_steps(summary)
     if summary.get("paused_during"):
@@ -319,7 +326,13 @@ def describe(summary: dict) -> str:
             parts.append(f"{failed} {what} lookup{'' if failed == 1 else 's'} failed (will retry tomorrow)")
     errors = failed_steps(summary)
     if errors:
-        parts.append("failed: " + ", ".join(STEP_LABELS.get(e, e) for e in errors))
+
+        def failed_step(step: str) -> str:
+            site = (summary.get(step) or {}).get("site")
+            label = STEP_LABELS.get(step, step)
+            return f"{label} ({site} couldn't be reached)" if site else label
+
+        parts.append("failed: " + ", ".join(failed_step(e) for e in errors))
     if summary.get("retry_at"):
         parts.append(f"trying again at {_clock(datetime.fromisoformat(summary['retry_at']))}")
     if summary.get("paused_during"):
@@ -363,6 +376,23 @@ def counts_only(summary: dict) -> dict:
     return out
 
 
-def main_log(summary: dict, out: TextIO = sys.stdout, public: bool = False) -> None:
-    print(datetime.now().strftime("%Y-%m-%d %H:%M"), describe(summary), file=out)
-    print(json.dumps(counts_only(summary) if public else summary, default=str), file=out)
+def when_line(when: Optional[datetime] = None) -> str:
+    """ "Oct 3, 2026 2:57 PM", in Arizona time like every other time shown."""
+    when = az_now(when)
+    return f"{when:%b} {when.day}, {when.year} {_clock(when)}"
+
+
+def main_log(
+    summary: dict,
+    out: Optional[TextIO] = None,
+    public: bool = False,
+    debug: bool = False,
+    now: Optional[datetime] = None,
+) -> None:
+    """What ``leadgen daily`` prints: one plain line (Arizona time, counts,
+    what failed and when it is tried again). ``debug`` adds the whole
+    summary, error details included (cut to the error type when ``public``)."""
+    out = out or sys.stdout
+    print(when_line(now), describe(summary), file=out)
+    if debug:
+        print(json.dumps(counts_only(summary) if public else summary, default=str), file=out)

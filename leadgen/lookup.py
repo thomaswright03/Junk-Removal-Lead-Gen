@@ -189,6 +189,10 @@ class ProviderUnavailable(Exception):
     pass
 
 
+# The lookup services in words, for messages.
+PROVIDER_LABELS = {"osm": "OpenStreetMap", "google": "Google Places"}
+
+
 class LimitReached(ProviderUnavailable):
     """The Google daily or monthly lookup limit is used up: not a failure."""
 
@@ -658,6 +662,10 @@ def find_contacts(
         return counts
     done: dict[str, tuple[Optional[Contact], bool]] = {}  # business name -> (Contact or None, failed)
     gave_up: dict[str, int] = {}  # provider -> companies it failed every retry for
+    # Provider -> lookups that failed; and the providers that stopped
+    # answering this run (skipped from then on). Reported once each at the end.
+    failures: dict[str, int] = {}
+    down: set[str] = set()
     retry_delays = RETRY_DELAYS if retry_delays is None else retry_delays
     for i, lead in enumerate(rows):
         if progress and i:
@@ -682,6 +690,11 @@ def find_contacts(
                 for prov in providers:
                     if getattr(prov, "only_eviction_notices", False) and not _has_notice(lead):
                         continue
+                    if prov.name in down:
+                        counts["errors"] += 1
+                        failures[prov.name] = failures.get(prov.name, 0) + 1
+                        failed = True
+                        continue  # not answering this run: don't wait on it again
                     delays = retry_delays if gave_up.get(prov.name, 0) < RETRY_GIVE_UP_AFTER else ()
                     try:
                         c = _find_with_retry(prov, lead, name, delays, should_stop)
@@ -693,10 +706,13 @@ def find_contacts(
                         if delays and _is_transient(e):
                             gave_up[prov.name] = gave_up.get(prov.name, 0) + 1
                         counts["errors"] += 1
+                        failures[prov.name] = failures.get(prov.name, 0) + 1
+                        if isinstance(e, ProviderUnavailable):
+                            down.add(prov.name)
                         if _is_key_problem(prov, e):
                             counts["error_cause"] = "google_key"
                         failed = True
-                        log(f"  {prov.name} lookup failed: {type(e).__name__}: {e}")
+                        _log.debug("%s lookup failed for lead %s: %s: %s", prov.name, lead["id"], type(e).__name__, e)
                         continue
                     if c and not c.empty() and (contact is None or _reach(c) > _reach(contact)):
                         contact = c
@@ -731,4 +747,13 @@ def find_contacts(
             counts["not_found"] += 1
             conn.execute("UPDATE leads SET contact_checked_at = ? WHERE id = ?", (now, lead["id"]))
         conn.commit()
+    for name, n in failures.items():
+        label = PROVIDER_LABELS.get(name, name)
+        lookups = f"{n} lookup{'' if n == 1 else 's'}"
+        if name in down:
+            log(f"  {label} wasn't responding: {lookups} skipped or failed this run; they're tried again next run")
+        elif name == "google" and counts.get("error_cause") == "google_key":
+            log(f"  {label} refused the key: {lookups} failed; check the Google key in Settings")
+        else:
+            log(f"  {label}: {lookups} failed; they're tried again next run")
     return counts

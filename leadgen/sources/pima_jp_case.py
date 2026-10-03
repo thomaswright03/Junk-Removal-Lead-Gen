@@ -15,6 +15,7 @@ Case pages are read one at a time, only for case links someone saved or
 pasted, with a pause between requests. This module never walks ID ranges.
 """
 
+import logging
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -32,6 +33,7 @@ from .base import Source
 from .pima_jp_calendar import CASE_RE, JP_SOURCE
 
 CASE_URL = "https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID={id}"
+_log = logging.getLogger(__name__)
 
 DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 LONG_DATE_RE = re.compile(r"([A-Z][a-z]+ \d{1,2}, \d{4})(?:\s+at\s+(\d{1,2}:\d{2}\s*[AP]M))?")
@@ -440,7 +442,8 @@ def add_cases(conn: Conn, text: str, client: Any = None, log: Log = print, shoul
             lead = client.fetch(cid)
         except requests.RequestException as e:
             counts["failed"] += 1
-            log(f"case {cid}: {type(e).__name__}")
+            log(f"case {cid}: the court's case page couldn't be read")
+            _log.debug("case %s: %s: %s", cid, type(e).__name__, e)
             continue
         if not lead:
             counts["failed"] += 1
@@ -619,7 +622,8 @@ def update_cases(
         except requests.RequestException as e:
             counts["failed"] += 1
             failures += 1
-            log(f"lead {r['id']}: {type(e).__name__}")
+            log(f"lead {r['id']}: the court's case page couldn't be read")
+            _log.debug("lead %s: %s: %s", r["id"], type(e).__name__, e)
             if failures >= 5:
                 log("court case pages not responding; stopping for this run")
                 break

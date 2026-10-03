@@ -150,4 +150,4 @@ def test_add_cases_reports_network_failure():
     log = []
     counts = add_cases(conn, "1000001", FakeCases({}), log=log.append)
     assert counts["failed"] == 1 and counts["new"] == 0
-    assert log == ["case 1000001: ConnectionError"]
+    assert log == ["case 1000001: the court's case page couldn't be read"]

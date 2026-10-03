@@ -172,7 +172,7 @@ def cmd_cases(args: argparse.Namespace) -> None:
 
 
 def cmd_daily(args: argparse.Namespace) -> None:
-    from .daily import due, main_log, run_daily
+    from .daily import due, failed_steps, main_log, run_daily
 
     conn = _connect(args)
     if args.if_due and not due(conn, hour=0):
@@ -185,7 +185,11 @@ def cmd_daily(args: argparse.Namespace) -> None:
     else:
         log = lambda m: print("  " + m)  # noqa: E731
     summary = run_daily(conn, stale_days=args.stale_days, log=log)
-    main_log(summary, public=args.counts_only)
+    main_log(summary, public=args.counts_only, debug=args.debug or env_flag("LEADGEN_DEBUG"))
+    if failed_steps(summary):
+        # A whole source failed: schedulers and CI see a failed run (the
+        # same-day retry is still set, and the line above says when).
+        sys.exit(1)
 
 
 def cmd_schedule(args: argparse.Namespace) -> None:
@@ -460,8 +464,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def names_of(providers: list) -> str:
-    names = {"osm": "OpenStreetMap", "google": "Google Places"}
-    return " and ".join(names.get(p.name, p.name) for p in providers) or "the lookup services"
+    from .lookup import PROVIDER_LABELS
+
+    return " and ".join(PROVIDER_LABELS.get(p.name, p.name) for p in providers) or "the lookup services"
 
 
 def _exit_if_all_failed(failed: int, done: int, error: Optional[BaseException], site: str, what: str) -> None:
@@ -519,6 +524,10 @@ def network_message(error: BaseException) -> str:
 def main(argv: Optional[list] = None) -> None:
     args = build_parser().parse_args(argv)
     debug = args.debug or env_flag("LEADGEN_DEBUG")
+    if debug:
+        import logging
+
+        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
     try:
         args.func(args)
     except requests.exceptions.RequestException as e:
