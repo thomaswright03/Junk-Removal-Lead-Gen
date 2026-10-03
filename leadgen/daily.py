@@ -140,6 +140,17 @@ def describe(summary):
     return ", ".join(parts)
 
 
-def main_log(summary, out=sys.stdout):
+def counts_only(summary):
+    """The summary with error messages cut to the error type, for public logs
+    (an error message can quote a request that carries a landlord's name)."""
+    out = {}
+    for k, v in summary.items():
+        if isinstance(v, dict) and "error" in v:
+            v = {"error": str(v["error"]).split(":", 1)[0]}
+        out[k] = v
+    return out
+
+
+def main_log(summary, out=sys.stdout, public=False):
     print(datetime.now().strftime("%Y-%m-%d %H:%M"), describe(summary), file=out)
-    print(json.dumps(summary, default=str), file=out)
+    print(json.dumps(counts_only(summary) if public else summary, default=str), file=out)

@@ -119,8 +119,12 @@ def cmd_daily(args):
     from .daily import main_log, run_daily
 
     conn = _connect(args)
-    summary = run_daily(conn, stale_days=args.stale_days, log=lambda m: print("  " + m))
-    main_log(summary)
+    if args.counts_only:  # public logs (GitHub Actions): step names and counts, nothing else
+        log = lambda m: print("  " + m) if m.startswith("checking ") else None  # noqa: E731
+    else:
+        log = lambda m: print("  " + m)  # noqa: E731
+    summary = run_daily(conn, stale_days=args.stale_days, log=log)
+    main_log(summary, public=args.counts_only)
 
 
 def cmd_schedule(args):
@@ -215,7 +219,9 @@ def cmd_sources(args):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="leadgen", description=__doc__.splitlines()[0])
-    p.add_argument("--db", default=str(config.DB_PATH), help="SQLite file (default %(default)s)")
+    p.add_argument("--db", default=config.DATABASE_URL or str(config.DB_PATH),
+                   help="SQLite file or Turso libsql:// URL (default: TURSO_DATABASE_URL if set, "
+                        f"else {config.DB_PATH})")
     p.add_argument("--stale-days", type=int, default=config.STALE_AFTER_DAYS,
                    help="leads older than this are stale (default %(default)s)")
     sub = p.add_subparsers(dest="command", required=True)
@@ -275,6 +281,8 @@ def build_parser():
     sp = sub.add_parser(
         "daily",
         help="the daily run: new evictions, eviction notices, owners, landlord phones, code cases")
+    sp.add_argument("--counts-only", action="store_true",
+                    help="print step names and counts only, no names or error details (public logs)")
     sp.set_defaults(func=cmd_daily)
 
     sp = sub.add_parser("schedule", help="run `leadgen daily` automatically every morning")

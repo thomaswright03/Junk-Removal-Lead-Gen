@@ -30,6 +30,9 @@ leadgen serve
 Opens http://127.0.0.1:8765 in your browser. It only runs on your computer and
 uses the same database as the commands below.
 
+To put Lead Desk online (Vercel, behind a password, with the daily check on
+GitHub Actions), follow [docs/VERCEL.md](docs/VERCEL.md).
+
 **New evictions arrive by themselves.** Every morning (and whenever you press
 **Check for new evictions**) Lead Desk searches the Justice Court calendar
 for eviction hearings in the next 30 days, reads each new case page for the

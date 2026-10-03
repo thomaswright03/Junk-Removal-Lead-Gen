@@ -186,7 +186,7 @@ def enrich_landlords(conn, client=None, limit=None):
 def enrich(conn, client=None, limit=None, refresh=False):
     """Fill owner_* columns. Returns counts by outcome."""
     client = client or ParcelClient()
-    landlords = enrich_landlords(conn, client)
+    landlords = enrich_landlords(conn, client, limit=limit)
     sql = ("SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL "
            "AND (parcel IS NOT NULL OR address IS NOT NULL)")
     if not refresh:

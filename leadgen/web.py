@@ -53,8 +53,12 @@ def _now():
 
 class App:
     def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None,
-                 case_client=None, calendar=None, code_cases=None, providers=None):
+                 case_client=None, calendar=None, code_cases=None, providers=None,
+                 serverless=False):
         self.db_path = db_path
+        # Online (Vercel): a request can't keep running after it answers, so
+        # the daily check runs on GitHub Actions instead (see wsgi.py).
+        self.serverless = serverless
         self.case_client = case_client
         self.calendar = calendar
         self.code_cases = code_cases
@@ -265,8 +269,15 @@ class App:
     def _progress(self, message):
         self.daily_message = message
 
+    def _cap(self, n):
+        """Online, a request must finish within Vercel's time limit, so the
+        buttons do a batch at a time; the daily run does the rest."""
+        return n if self.serverless else None
+
     def start_daily(self, body=None):
         """Start the daily check in the background; the page polls /api/state."""
+        if self.serverless:
+            return start_github_check()
         if self.daily_lock.locked():
             return {"started": False, "running": True}
 
@@ -300,7 +311,7 @@ class App:
             settings = self.settings(conn)
             log = []
             counts = find_contacts(conn, providers_from(settings, conn=conn),
-                                   limit=int(body.get("limit") or 0) or None,
+                                   limit=int(body.get("limit") or 0) or self._cap(25),
                                    refresh=bool(body.get("refresh")), log=log.append)
             counts["google_used"] = any(p.name == "google" for p in providers_from(settings))
             counts["messages"] = log[:10]
@@ -316,14 +327,14 @@ class App:
     def update_cases(self, body):
         log = []
         with self.lock, self.conn() as conn:
-            counts = update_cases(conn, self.case_client, limit=int(body.get("limit") or 0) or None,
+            counts = update_cases(conn, self.case_client, limit=int(body.get("limit") or 0) or self._cap(60),
                                   max_age_hours=0 if body.get("force") else 12, log=log.append)
         counts["messages"] = log[:10]
         return counts
 
     def run_enrich(self, body):
         with self.lock, self.conn() as conn:
-            return enrich(conn, self.parcel_client or ParcelClient(),
+            return enrich(conn, self.parcel_client or ParcelClient(), limit=self._cap(150),
                           refresh=bool(body.get("refresh")))
 
     def import_file(self, source, filename, data, lead_type="eviction"):
@@ -369,6 +380,29 @@ class App:
         ]
 
 
+def start_github_check(session=None):
+    """Online, "Check for new evictions" starts the daily GitHub Actions run
+    (.github/workflows/daily.yml). Needs LEADDESK_GITHUB_TOKEN: a GitHub token
+    allowed to run this repository's workflows."""
+    import requests
+
+    token = os.environ.get("LEADDESK_GITHUB_TOKEN")
+    owner, repo = os.environ.get("VERCEL_GIT_REPO_OWNER"), os.environ.get("VERCEL_GIT_REPO_SLUG")
+    if not (token and owner and repo):
+        return {"started": False, "running": False,
+                "message": "The check runs by itself every morning at 6. To start it from here too, "
+                           "add LEADDESK_GITHUB_TOKEN in Vercel (see docs/VERCEL.md)."}
+    resp = (session or requests).post(
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/daily.yml/dispatches",
+        json={"ref": os.environ.get("LEADDESK_GITHUB_REF", "main")},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        timeout=30)
+    if resp.status_code >= 300:
+        raise ValueError(f"GitHub didn't start the check ({resp.status_code}): {resp.text[:200]}")
+    return {"started": True, "running": False,
+            "message": "Started. The check takes about 15 minutes; reload then to see new leads."}
+
+
 def render_template(settings, channel, lead):
     owner = (lead.get("owner_name") or lead.get("plaintiff") or "").strip()
     # Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
@@ -389,6 +423,64 @@ def render_template(settings, channel, lead):
     return text
 
 
+def handle(app, method, path, query, headers, body):
+    """Answer one request. ``headers`` needs only ``.get``. Returns
+    (status, body, content type); a body that isn't bytes or str is JSON."""
+    q = parse_qs(query or "")
+    try:
+        if method == "GET":
+            if path in ("/", "/index.html"):
+                return 200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8"
+            if path == "/api/state":
+                return 200, app.state(), "application/json"
+            if path == "/api/skiptrace.csv":
+                with app.conn() as conn:
+                    leads = [l for l in app.leads(conn)
+                             if l["status"] not in ("stale", "skip", "lost", "won")]
+                return 200, skiptrace_csv(leads), "text/csv; charset=utf-8"
+            if path == "/api/owner":
+                return 200, app.owner_properties(q.get("name", [""])[0]), "application/json"
+            return 404, {"error": "not found"}, "application/json"
+        if method != "POST":
+            return 405, {"error": "method not allowed"}, "application/json"
+        # Only accept requests from this app's own page.
+        origin = headers.get("Origin")
+        if origin and urlparse(origin).netloc != headers.get("Host"):
+            return 403, {"error": "cross-origin request refused"}, "application/json"
+        if path == "/api/import":
+            return 200, app.import_file(
+                q.get("source", ["pima_jp_calendar"])[0], q.get("filename", [""])[0],
+                body, q.get("lead_type", ["eviction"])[0]), "application/json"
+        data = json.loads(body or b"{}")
+        routes = {
+            "/api/lead": app.update_lead,
+            "/api/touch": app.add_touches,
+            "/api/assign": app.assign,
+            "/api/settings": app.save_settings,
+            "/api/refresh": app.start_daily,
+            "/api/enrich": app.run_enrich,
+            "/api/find-contacts": app.find_contacts,
+            "/api/cases/add": app.add_cases,
+            "/api/cases/update": app.update_cases,
+        }
+        if path not in routes:
+            return 404, {"error": "not found"}, "application/json"
+        return 200, routes[path](data), "application/json"
+    except (ValueError, KeyError) as e:
+        return 400, {"error": str(e)}, "application/json"
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        return 500, {"error": f"{type(e).__name__}: {e}"}, "application/json"
+
+
+def encode_body(body):
+    if isinstance(body, bytes):
+        return body
+    if isinstance(body, str):
+        return body.encode()
+    return json.dumps(body, default=str).encode()
+
+
 class Handler(BaseHTTPRequestHandler):
     app = None
 
@@ -396,8 +488,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code, body, ctype="application/json"):
-        data = body if isinstance(body, bytes) else (
-            body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode())
+        data = encode_body(body)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
@@ -409,58 +500,16 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(n) if n else b""
 
-    def do_GET(self):
+    def _handle(self, method):
         url = urlparse(self.path)
-        q = parse_qs(url.query)
-        try:
-            if url.path in ("/", "/index.html"):
-                return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-            if url.path == "/api/state":
-                return self._send(200, self.app.state())
-            if url.path == "/api/skiptrace.csv":
-                with self.app.conn() as conn:
-                    leads = [l for l in self.app.leads(conn)
-                             if l["status"] not in ("stale", "skip", "lost", "won")]
-                return self._send(200, skiptrace_csv(leads), "text/csv; charset=utf-8")
-            if url.path == "/api/owner":
-                return self._send(200, self.app.owner_properties(q.get("name", [""])[0]))
-            return self._send(404, {"error": "not found"})
-        except Exception as e:
-            traceback.print_exc(file=sys.stderr)
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        body = self._body() if method == "POST" else b""
+        self._send(*handle(self.app, method, url.path, url.query, self.headers, body))
+
+    def do_GET(self):
+        self._handle("GET")
 
     def do_POST(self):
-        url = urlparse(self.path)
-        q = parse_qs(url.query)
-        # Only accept requests from this app's own page.
-        origin = self.headers.get("Origin")
-        if origin and urlparse(origin).netloc != self.headers.get("Host"):
-            return self._send(403, {"error": "cross-origin request refused"})
-        try:
-            if url.path == "/api/import":
-                return self._send(200, self.app.import_file(
-                    q.get("source", ["pima_jp_calendar"])[0], q.get("filename", [""])[0],
-                    self._body(), q.get("lead_type", ["eviction"])[0]))
-            body = json.loads(self._body() or b"{}")
-            routes = {
-                "/api/lead": self.app.update_lead,
-                "/api/touch": self.app.add_touches,
-                "/api/assign": self.app.assign,
-                "/api/settings": self.app.save_settings,
-                "/api/refresh": self.app.start_daily,
-                "/api/enrich": self.app.run_enrich,
-                "/api/find-contacts": self.app.find_contacts,
-                "/api/cases/add": self.app.add_cases,
-                "/api/cases/update": self.app.update_cases,
-            }
-            if url.path not in routes:
-                return self._send(404, {"error": "not found"})
-            return self._send(200, routes[url.path](body))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e)})
-        except Exception as e:
-            traceback.print_exc(file=sys.stderr)
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        self._handle("POST")
 
 
 def serve(db_path, host="127.0.0.1", port=8765, stale_days=30, open_browser=True):

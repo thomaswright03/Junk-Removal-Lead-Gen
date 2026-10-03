@@ -154,7 +154,12 @@ async function load() {
   render();
 }
 async function act(fn, okMsg) {
-  try { const r = await fn(); if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); await load(); return r; }
+  try {
+    const r = await fn();
+    const msg = okMsg && (typeof okMsg === "function" ? okMsg(r) : okMsg);
+    if (msg) toast(msg, Math.max(3200, msg.length * 60));
+    await load(); return r;
+  }
   catch (e) { toast("Error: " + e.message, 6000); }
 }
 
@@ -656,7 +661,7 @@ function render() {
 }
 document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; render(); });
 $("#refreshBtn").onclick = async () => {
-  await act(() => api("/api/refresh", {}), "Checking the court calendar. This page updates as cases come in.");
+  await act(() => api("/api/refresh", {}), r => r.message || "Checking the court calendar. This page updates as cases come in.");
 };
 // While the daily check runs, reload every few seconds so new cases appear.
 function watchDaily() {
