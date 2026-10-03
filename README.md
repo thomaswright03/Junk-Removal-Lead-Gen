@@ -50,8 +50,8 @@ which cover only some businesses. A Google Places API key (Settings) finds
 most apartment complexes and property managers; without one, expect many
 evictions to still need a number (use the skip-trace export below).
 Google gives 1,000 of these searches a month free, then charges about $35
-per 1,000; Lead Desk stops at 1,000 a month unless you raise the limit in
-Settings.
+per 1,000; Lead Desk stops at 30 a day and 1,000 a month unless you raise
+the limits in Settings.
 
 - **Leads**: by default only eviction cases with an eviction notice filed in
   the court case (the "Show" menu switches to all evictions, or all leads

@@ -47,6 +47,11 @@ GOOGLE_MAX_AGE_DAYS = 30
 # Google's free monthly allowance for Text Search Enterprise, the search tier
 # that returns phone numbers (1,000 a month as of October 2026).
 GOOGLE_MONTHLY_LIMIT = 1000
+# Most Google searches in one day (Thomas's cap, October 2026).
+GOOGLE_DAILY_LIMIT = 30
+# Arizona keeps Mountain Standard Time all year, so days and months turn over
+# at local midnight.
+ARIZONA = timezone(timedelta(hours=-7))
 TUCSON = (32.2226, -110.9747)
 
 _NAME_NOISE = {
@@ -216,26 +221,47 @@ def pick_osm(elements, business_name):
 
 
 class GoogleBudget:
-    """Counts Google searches per calendar month in the settings table and
-    refuses more than ``limit`` (0 means no limit), so the lookup stays inside
-    the free allowance unless the limit is raised in Settings."""
+    """Counts Google searches per day and per calendar month (Arizona time) in
+    the settings table and refuses more than ``daily`` a day or ``limit`` a
+    month (0 means no limit), so the lookup stays inside the free allowance
+    unless the limits are raised in Settings."""
 
     KEY = "google_usage"
 
-    def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT):
+    def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT, daily=GOOGLE_DAILY_LIMIT):
         self.conn = conn
         self.limit = limit
+        self.daily = daily
+
+    def _usage(self, now=None):
+        local = (now or _now()).astimezone(ARIZONA)
+        month, day = local.strftime("%Y-%m"), local.strftime("%Y-%m-%d")
+        usage = db.get_settings(self.conn).get(self.KEY) or {}
+        count = usage.get("count", 0) if usage.get("month") == month else 0
+        today = usage.get("day_count", 0) if usage.get("day") == day else 0
+        return month, day, count, today
 
     def used(self, now=None):
-        month = (now or _now()).strftime("%Y-%m")
-        usage = db.get_settings(self.conn).get(self.KEY) or {}
-        return usage.get("count", 0) if usage.get("month") == month else 0
+        return self._usage(now)[2]
+
+    def used_today(self, now=None):
+        return self._usage(now)[3]
+
+    def blocked(self, now=None):
+        """Why no more searches are allowed right now, or None."""
+        _, _, count, today = self._usage(now)
+        if self.daily and today >= self.daily:
+            return f"daily limit of {self.daily} Google lookups reached; more tomorrow"
+        if self.limit and count >= self.limit:
+            return f"monthly limit of {self.limit} Google lookups reached; raise it in Settings"
+        return None
 
     def take(self, now=None):
-        n = self.used(now)
-        if self.limit and n >= self.limit:
+        if self.blocked(now):
             return False
-        db.put_settings(self.conn, {self.KEY: {"month": (now or _now()).strftime("%Y-%m"), "count": n + 1}})
+        month, day, count, today = self._usage(now)
+        db.put_settings(self.conn, {self.KEY: {"month": month, "count": count + 1,
+                                               "day": day, "day_count": today + 1}})
         return True
 
 
@@ -249,8 +275,7 @@ class GooglePlacesProvider:
 
     def _search(self, text, lat=None, lon=None):
         if self.budget is not None and not self.budget.take():
-            raise ProviderUnavailable(
-                f"monthly limit of {self.budget.limit} Google lookups reached; raise it in Settings")
+            raise ProviderUnavailable(self.budget.blocked() or "Google lookup limit reached")
         lat, lon = (lat, lon) if lat is not None else TUCSON
         resp = self.session.post(
             PLACES_URL,
@@ -403,7 +428,7 @@ def _now():
 
 def providers_from(settings=None, google_key=None, conn=None):
     """OpenStreetMap, plus Google when a key is set. With ``conn``, Google
-    searches are counted against the monthly limit in settings."""
+    searches are counted against the daily and monthly limits in settings."""
     import os
 
     settings = settings or {}
@@ -412,7 +437,9 @@ def providers_from(settings=None, google_key=None, conn=None):
     out = [OsmProvider()]
     if key:
         limit = settings.get("google_monthly_limit", GOOGLE_MONTHLY_LIMIT)
-        budget = GoogleBudget(conn, int(limit or 0)) if conn is not None else None
+        daily = settings.get("google_daily_limit", GOOGLE_DAILY_LIMIT)
+        budget = (GoogleBudget(conn, int(limit or 0), int(daily or 0))
+                  if conn is not None else None)
         out.append(GooglePlacesProvider(key, budget=budget))
     return out
 
