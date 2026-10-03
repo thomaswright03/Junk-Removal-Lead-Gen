@@ -52,9 +52,16 @@ def decode_text(data: bytes) -> str:
         return data.decode("cp1252", errors="replace")
 
 
-# One definition of "apartment-style" property use (assessor USE_DESC text):
-# buildings with several units, where a leasing office or manager answers.
-_MULTIFAMILY_RE = re.compile(r"APART|MULTI|MFR|CONDO|TOWNHOUSE|MOBILE HOME PARK")
+# One definition of a parcel with more than one home (assessor USE_DESC
+# text): apartments, condos, townhouses, duplexes and the like, mobile or
+# manufactured home and RV parks, "multiple residence" and a house with an
+# additional residence. A door hanger there needs a unit number; a leasing
+# office or park manager often answers the phone.
+_MULTIFAMILY_RE = re.compile(
+    r"APART|MULTI|MFR|CONDO|TOWN ?HOUSE|TOWNHOME|DUPLEX|TRIPLEX|FOURPLEX|QUADPLEX|\b[2-4] ?-? ?PLEX\b"
+    r"|(?:MOBILE|MANUFACTURED|TRAILER|RV)(?: HOME)? (?:PARK|COURT|COMMUNITY)|\bM ?H ?P\b"
+    r"|ADD(?:'?L|NL|ITIONAL|TL) RESID|RESIDENCES\b|UNITS\b"
+)
 # Parcels nobody lives in, even when the use names a kind of housing: a
 # condominium's common area, vacant land, parking, a clubhouse.
 _NOT_A_HOME_RE = re.compile(

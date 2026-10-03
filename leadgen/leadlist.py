@@ -6,8 +6,9 @@ from datetime import date, timedelta
 from typing import Any, Optional
 
 from . import db, outreach
+from .sources.pima_jp_case import ENDED_SQL
 from .tucson_codes import CODE_LABELS, code_of
-from .util import Conn, LeadRow, az_today
+from .util import Conn, LeadRow, az_today, is_multifamily
 
 LEAD_FIELDS = (
     "id",
@@ -63,13 +64,9 @@ LEAD_FIELDS = (
 # Evictions with a notice filed or further along (judgment, writ), plus
 # cases Steve imported himself whose case page hasn't been read yet (so an
 # import shows up at once, marked "case not checked"; once read, the notice
-# rule applies). Dismissed cases, and closed ones that never reached a
-# judgment, drop out.
-_ENDED = (
-    "(COALESCE(case_stage, '') = 'dismissed' OR LOWER(COALESCE(case_status, '')) LIKE 'dismiss%' "
-    "OR (LOWER(COALESCE(case_status, '')) LIKE 'closed%' "
-    "AND COALESCE(case_stage, '') NOT IN ('judgment', 'writ')))"
-)
+# rule applies). Cases that ended (dismissed, judgment satisfied, closed or
+# disposed with no judgment or writ) drop out; see pima_jp_case.ENDED_SQL.
+_ENDED = ENDED_SQL
 _EVICTION_NOTICE = (
     "lead_type = 'eviction' AND (eviction_notice = 1 OR case_stage IN ('judgment', 'writ') "
     f"OR (added_by_hand = 1 AND eviction_notice IS NULL)) AND NOT {_ENDED}"
@@ -143,11 +140,14 @@ def in_view(settings: Optional[dict]) -> str:
 
 def reach(lead: Any) -> str:
     """How Steve can reach a lead now: ``"both"`` (a phone or email and a
-    known property address), ``"contact"`` (phone or email only),
-    ``"address"`` (a known address only: a door hanger or a visit) or
-    ``"none"``. A guess from the landlord's parcels isn't a known address."""
-    contact = bool(lead["owner_phone"] or lead["owner_email"])
-    address = bool(lead["address"]) and lead["address_source"] != "landlord"
+    usable property address), ``"contact"`` (phone or email only),
+    ``"address"`` (a usable address only: a door hanger or a visit) or
+    ``"none"``. Usable is what a door hanger can go to (see
+    ``outreach.door_hanger_problem``): not a guess from the landlord's
+    parcels until confirmed, and with a unit number where the parcel has
+    several homes. The Outreach split uses the same rule."""
+    contact = outreach.has_contact(lead)
+    address = outreach.door_hanger_problem(lead) is None
     return "both" if contact and address else "contact" if contact else "address" if address else "none"
 
 
@@ -168,8 +168,12 @@ def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[da
     d["score"] = sum(points for _label, points in d["score_parts"])
     d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
     d["owner_first"] = outreach.owner_first_name(r)
-    d["eligible"] = outreach.eligible_channels(r)
+    # Methods that can work it now (Assign leads), and those that could
+    # once a phone or email is found (the lead page lets Steve pick those).
+    d["ready"] = outreach.eligible_channels(r)
+    d["eligible"] = outreach.eligible_channels(r, need_contact=False)
     d["door_hanger_problem"] = outreach.door_hanger_problem(r)
+    d["multi_home"] = is_multifamily(r["property_use"])  # more than one home on the parcel
     d["reach"] = reach(r)
     d["date_label"] = outreach.date_label(r)
     d["latest_label"], d["latest_date"] = outreach.latest_event(r, today)
@@ -245,7 +249,7 @@ def _keep(l: dict, p: dict, touched: set) -> bool:
         "guessed_address": l["address_source"] == "landlord",
         # The address work queue: evictions with no address, or only a
         # guess from the landlord's parcels.
-        "address_work": l["lead_type"] == "eviction" and (not l["address"] or l["address_source"] == "landlord"),
+        "address_work": l["lead_type"] == "eviction" and l["door_hanger_problem"] is not None,
         # Can be called, emailed or visited now; or not yet (no phone, email
         # or known address).
         "reachable": l["reach"] != "none",
@@ -315,7 +319,6 @@ def page(conn: Conn, settings: dict, params: dict) -> dict:
 def counts(conn: Conn, settings: dict) -> dict:
     """The numbers the header and the Outreach tab show, counted in the database."""
     inactive = ", ".join(f"'{s}'" for s in INACTIVE)
-    closed = ", ".join(f"'{s}'" for s in CLOSED)
     untouched = "NOT EXISTS (SELECT 1 FROM touches t WHERE t.lead_id = leads.id)"
     r = conn.execute(
         "SELECT COUNT(*) AS total, "
@@ -324,28 +327,14 @@ def counts(conn: Conn, settings: dict) -> dict:
         "SUM(CASE WHEN enriched_at IS NULL THEN 1 ELSE 0 END) AS owners_pending, "
         "SUM(CASE WHEN owner_phone IS NOT NULL THEN 1 ELSE 0 END) AS with_phone, "
         "SUM(CASE WHEN owner_email IS NOT NULL THEN 1 ELSE 0 END) AS with_email, "
-        "SUM(CASE WHEN channel IS NULL AND status = 'new' THEN 1 ELSE 0 END) AS unassigned, "
-        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) THEN 1 ELSE 0 END) AS evictions_open, "
-        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND {KNOWN_ADDRESS} "
-        "THEN 1 ELSE 0 END) AS evictions_with_address, "
-        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND {HAS_CONTACT} "
-        "THEN 1 ELSE 0 END) AS evictions_with_contact, "
-        f"SUM(CASE WHEN lead_type = 'eviction' AND status NOT IN ({closed}) AND ({HAS_CONTACT} OR {KNOWN_ADDRESS}) "
-        "THEN 1 ELSE 0 END) AS evictions_reachable "
+        "SUM(CASE WHEN channel IS NULL AND status = 'new' THEN 1 ELSE 0 END) AS unassigned "
         f"FROM leads WHERE {in_view(settings)}"
     ).fetchone()
     out: dict[str, Any] = {
         k: int(r[k] or 0) for k in ("total", "active", "assigned", "owners_pending", "with_phone", "with_email")
     }
     out["unassigned"] = int(r["unassigned"] or 0)
-    # Open eviction leads, and how many of them have a property address that
-    # is not a guess from the landlord's parcels (typed, confirmed, imported).
-    out["evictions_open"] = int(r["evictions_open"] or 0)
-    out["evictions_with_address"] = int(r["evictions_with_address"] or 0)
-    # How many open eviction leads can be reached now: a phone or email, or a
-    # known address (see ``reach``); the rest can't be contacted yet.
-    out["evictions_with_contact"] = int(r["evictions_with_contact"] or 0)
-    out["evictions_reachable"] = int(r["evictions_reachable"] or 0)
+    out.update(eviction_reach(conn, settings))
     out["channels"] = {c: {"active": 0, "to_do": 0} for c in outreach.CHANNELS}
     for row in conn.execute(
         "SELECT channel, COUNT(*) AS n, "
@@ -355,6 +344,56 @@ def counts(conn: Conn, settings: dict) -> dict:
     ).fetchall():
         if row["channel"] in out["channels"]:
             out["channels"][row["channel"]] = {"active": int(row["n"] or 0), "to_do": int(row["to_do"] or 0)}
+    return out
+
+
+def eviction_reach(conn: Conn, settings: dict) -> dict:
+    """How many open eviction leads can be reached now, by the same rules
+    the Outreach split uses (``reach``): ``evictions_open``,
+    ``evictions_with_address`` (an address a door hanger can go to: typed,
+    confirmed, imported or from the court, with a unit where the parcel
+    has several homes), ``evictions_with_contact`` (a phone or email) and
+    ``evictions_reachable`` (either).
+
+    And what each way of reaching more would yield, for the Leads tab's
+    setup guide: ``lookup_leads`` (leads with no phone or email whose
+    landlord or owner is a company not looked up yet; a business lookup
+    can only find companies) and how many companies that is
+    (``lookup_companies``); ``records_leads`` (leads with no usable address,
+    which a court records request can fill)."""
+    from .lookup import lookup_targets
+
+    closed = ", ".join(f"'{s}'" for s in CLOSED)
+    rows = conn.execute(
+        "SELECT address, address_source, unit, property_use, owner_phone, owner_email, plaintiff, owner_name, "
+        f"contact_checked_at FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' "
+        f"AND status NOT IN ({closed})"
+    ).fetchall()
+    out = dict.fromkeys(
+        (
+            "evictions_open",
+            "evictions_with_address",
+            "evictions_with_contact",
+            "evictions_reachable",
+            "lookup_leads",
+            "records_leads",
+        ),
+        0,
+    )
+    companies = set()
+    for r in rows:
+        how = reach(r)
+        out["evictions_open"] += 1
+        out["evictions_with_address"] += how in ("address", "both")
+        out["evictions_with_contact"] += how in ("contact", "both")
+        out["evictions_reachable"] += how != "none"
+        out["records_leads"] += how not in ("address", "both")
+        if how not in ("contact", "both") and not r["contact_checked_at"]:
+            names, _site = lookup_targets(r)
+            if names:
+                out["lookup_leads"] += 1
+                companies.add(names[0].upper())
+    out["lookup_companies"] = len(companies)
     return out
 
 

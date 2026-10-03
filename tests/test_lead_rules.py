@@ -61,6 +61,19 @@ def test_late_writ_keeps_an_old_filing_fresh(tmp_path):
     assert row(conn, "CV26-000002-EA")["status"] == "stale"
 
 
+def test_a_case_with_a_hearing_ahead_is_never_stale(tmp_path):
+    conn = db.connect(tmp_path / "l.db")
+    filed = (TODAY - timedelta(days=40)).isoformat()
+    next_week = (TODAY + timedelta(days=7)).isoformat()
+    eviction(conn, "CV26-000003-EA", filed, next_court_date=next_week + " 14:00")
+    eviction(conn, "CV26-000004-EA", filed, next_court_date=TODAY.isoformat())  # in court today
+    eviction(conn, "CV26-000005-EA", filed, next_court_date=(TODAY - timedelta(days=1)).isoformat())
+    assert db.mark_stale(conn, 30, today=TODAY) == 1
+    assert row(conn, "CV26-000003-EA")["status"] == "new"
+    assert row(conn, "CV26-000004-EA")["status"] == "new"
+    assert row(conn, "CV26-000005-EA")["status"] == "stale"  # the hearing passed and nothing since
+
+
 def test_won_or_skipped_cases_are_not_reopened_by_a_writ(tmp_path):
     conn = db.connect(tmp_path / "l.db")
     eviction(conn, "CV26-012345-EA", "2026-08-01")

@@ -10,29 +10,42 @@ const methodList = chans => chans.map(chName).join(" + ");
 const KIND_LABEL = { eviction: "Evictions only", code_violation: "City code cases only", "": "Evictions and code cases" };
 const kindWord = (k, n) => k === "eviction" ? `eviction${n === 1 ? "" : "s"}` : k === "code_violation" ? `code case${n === 1 ? "" : "s"}` : `lead${n === 1 ? "" : "s"}`;
 // The split numbers for one kind of round ("" is both kinds).
-function splitFor(kind) {
-  const sp = S.split || { combos: {}, followed: 0, suggested: [], by_kind: {} };
+// With “Include leads with no phone or email” ticked, the numbers that
+// count those too (Steve looks the numbers up himself).
+function splitFor(kind, all = ui.aAll) {
+  const top = S.split || { combos: {}, followed: 0, suggested: [], by_kind: {} };
+  const sp = all && top.with_unreachable ? top.with_unreachable : top;
   const k = kind && (sp.by_kind || {})[kind];
   return k ? { combos: k.combos, followed: k.followed, suggested: k.suggested } : sp;
+}
+// How many more leads the ticked methods could take if those with no phone
+// or email were included.
+function noContactExtra(chans, kind) {
+  if (!chans.length) return 0;
+  const key = comboKey(chans);
+  return (splitFor(kind, true).combos[key] || 0) - (splitFor(kind, false).combos[key] || 0);
 }
 function splitLine(chans, kind) {
   const sp = splitFor(kind);
   const n = chans.length ? sp.combos[comboKey(chans)] || 0 : 0;
+  const extra = noContactExtra(chans, kind);
+  const extraNote = extra && !ui.aAll ? ` ${extra} more ${kindWord(kind, extra)} ${extra === 1 ? "has" : "have"} no phone or email yet, so ${chans.filter(c => c !== "door_hanger").map(chName).join(" and ")} can't take them: find their numbers on the Leads tab, or tick “Include leads with no phone or email”.`
+    : extra ? ` ${extra} of them have no phone or email yet: you look those numbers up yourself.` : "";
   const followed = sp.followed ? ` ${sp.followed} more go to the method already working their landlord.` : "";
   if (!chans.length) return { n, html: "Tick at least one method." };
   const idle = Object.keys(S.channels).filter(c => !chans.includes(c) && !sp.combos[c]);
   const idleNote = idle.length ? ` ${esc(methodList(idle))}: no unassigned lead ${idle.length > 1 ? "they" : "it"} can work yet${idle.includes("door_hanger") ? " (door hangers need a property address)" : ""}.` : "";
   // In a round of both kinds, how many of them are evictions.
-  const ev = !kind && S.split && S.split.evictions ? S.split.evictions[comboKey(chans)] || 0 : null;
+  const ev = !kind && sp.evictions ? sp.evictions[comboKey(chans)] || 0 : null;
   const mix = ev != null ? ` (${ev} eviction${ev === 1 ? "" : "s"}, ${n - ev} code case${n - ev === 1 ? "" : "s"})` : "";
-  if (n) return { n, html: `<strong>${n} ${kindWord(kind, n)}</strong>${mix} can be split between ${esc(methodList(chans))}.${followed}${idleNote}` };
+  if (n) return { n, extra, html: `<strong>${n} ${kindWord(kind, n)}</strong>${mix} can be split between ${esc(methodList(chans))}.${esc(extraNote)}${followed}${idleNote}` };
   // Nothing every ticked method can work: name the method that blocks it.
   const fixes = chans.map(c => chans.filter(x => x !== c)).filter(rest => rest.length && sp.combos[comboKey(rest)])
     .sort((a, b) => sp.combos[comboKey(b)] - sp.combos[comboKey(a)]);
   const fix = fixes[0];
   const drop = fix ? chans.find(c => !fix.includes(c)) : null;
   const why = chans.includes("door_hanger") ? " Door hangers need a property address (and a unit number at an apartment or condo complex)." : "";
-  return { n, html: `<strong>No unassigned ${kindWord(kind, 2)}</strong> can be worked by all of ${esc(methodList(chans))}.${why}${followed}`
+  return { n, extra, html: `<strong>No unassigned ${kindWord(kind, 2)}</strong> can be worked by all of ${esc(methodList(chans))}.${why}${esc(extraNote)}${followed}`
     + (drop ? ` <button class="btn small" id="aDrop" data-drop="${drop}">Untick ${esc(chName(drop))} (${sp.combos[comboKey(fix)]} leads)</button>` : "") };
 }
 function otherChoices(chans, kind) {
@@ -58,7 +71,7 @@ function kindsLine(kinds) {
 }
 // The last round's result stays on the Outreach tab until the next round or
 // until dismissed (kept for this browser tab across reloads).
-const LEFT_OUT_WHY = { needs_address: "no property address", needs_unit: "an apartment or condo with no unit number", no_contact: "no one a ticked method can contact" };
+const LEFT_OUT_WHY = { needs_address: "no property address", needs_confirm: "an address guessed from the landlord's parcels, not confirmed", needs_unit: "several homes on the parcel and no unit number", no_contact: "no phone or email yet" };
 try { ui.lastRound = JSON.parse(sessionStorage.getItem("leaddesk.lastRound") || "null"); } catch (e) { ui.lastRound = null; }
 function setLastRound(r) {
   ui.lastRound = r;
@@ -70,7 +83,8 @@ function roundSummary(r) {
   const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
   const lo = r.left_out || {}, nLeft = Object.values(lo).reduce((a, b) => a + b, 0);
   const why = Object.entries(lo).filter(([, n]) => n).map(([k, n]) => `${n} with ${LEFT_OUT_WHY[k] || k}`).join("; ");
-  const fix = lo.needs_address || lo.needs_unit ? " Add the address (or unit) on the lead, or untick Door hanger next round." : "";
+  const fix = (lo.needs_address || lo.needs_unit || lo.needs_confirm ? " Add or confirm the address (or the unit) on the lead, or untick Door hanger next round." : "")
+    + (lo.no_contact ? " Find their phone numbers first (Leads tab), or tick “Include leads with no phone or email” next round." : "");
   const leads = (r.left_out_leads || []).map(l => `<button class="linkbtn" data-lead="${l.id}" title="${esc(LEFT_OUT_WHY[l.reason] || "")}">${esc(title(l.label))}</button>`).join(" · ");
   return `<div class="notice info mt8" id="roundSummary" role="status">
     <div class="row" style="justify-content:space-between"><strong>Last round${r.lead_type ? ` (${esc(KIND_LABEL[r.lead_type].toLowerCase())})` : ""}: ${esc(kindsLine(r.kinds))} assigned</strong>
@@ -86,7 +100,12 @@ function renderOutreach() {
   const sp = S.split || { suggested: [], kind: "" };
   if (ui.aKind == null) ui.aKind = sp.kind || "";
   const kind = ui.aKind;
-  if (!ui.aChannels) { const sug = splitFor(kind).suggested || []; ui.aChannels = sug.length ? sug.slice() : Object.keys(S.channels); }
+  if (!ui.aChannels) {
+    // No lead is ready for any pair of methods (day one: no phones yet): tick
+    // the methods that could work them once found, so the line says how many.
+    const sug = (splitFor(kind).suggested || []).length ? splitFor(kind).suggested : splitFor(kind, true).suggested || [];
+    ui.aChannels = sug.length ? sug.slice() : Object.keys(S.channels);
+  }
   const chans = ui.aChannels;
   const line = splitLine(chans, kind), others = otherChoices(chans, kind);
   $("#tab-outreach").innerHTML = `
@@ -103,6 +122,7 @@ function renderOutreach() {
         <label>Which leads <select id="aKind">${kindOptions(kind)}</select></label>
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
+        ${line.extra || ui.aAll ? `<label class="ch" title="Call methods normally get only leads with a phone or email. Tick this to deal the others too and look their numbers up yourself."><input type="checkbox" id="aAll" ${ui.aAll ? "checked" : ""}>Include leads with no phone or email</label>` : ""}
         <button class="btn primary" id="aGo" ${line.n ? "" : "disabled"}>Assign leads</button>
         ${fieldError("aCount")}
       </div>
@@ -116,6 +136,8 @@ function renderOutreach() {
   $("#aKind").onchange = e => { ui.aKind = e.target.value; ui.aChannels = null; renderOutreach(); $("#aKind").focus(); };
   document.querySelectorAll(".aCh").forEach(b => b.onchange = () =>
     setChans([...document.querySelectorAll(".aCh:checked")].map(x => x.value), `.aCh[value="${b.value}"]`));
+  const all = $("#aAll");
+  if (all) all.onchange = () => { ui.aAll = all.checked; ui.aChannels = null; renderOutreach(); const a = $("#aAll"); if (a) a.focus(); };
   const drop = $("#aDrop");
   if (drop) drop.onclick = () => setChans(chans.filter(c => c !== drop.dataset.drop), "#aGo");
   document.querySelectorAll("[data-combo]").forEach(b => b.onclick = () => setChans(b.dataset.combo.split("+"), "#aGo"));
@@ -131,7 +153,7 @@ function renderOutreach() {
     if (!checkFields(countCheck)) return;
     const n = +$("#aCount").value;
     const single = chans.length === 1;
-    const body = { count: n, channels: chans, single_method: single, lead_type: kind };
+    const body = { count: n, channels: chans, single_method: single, lead_type: kind, include_unreachable: !!ui.aAll };
     // Work the round out first, so the question says exactly which leads it takes.
     let pre;
     btn.disabled = true;
@@ -143,7 +165,8 @@ function renderOutreach() {
     if (!most && !followedPre) return toast("No lead can go out with these methods. Untick one, or pick another kind of lead.", 8000);
     if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}${single ? ` to ${chName(chans[0])} only` : ""}?`,
       body: `This round: ${kindsLine(pre.kinds)}. ` + (single ? `Only one method is ticked, so this round won't compare methods: all ${most} go to ${chName(chans[0])}. Tick another method to compare.`
-        : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + (followedPre ? ` ${followedPre} more go to the method already working their landlord.` : ""),
+        : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + (followedPre ? ` ${followedPre} more go to the method already working their landlord.` : "")
+        + (pre.without_contact ? ` ${pre.without_contact} of them have no phone or email yet: you'll need to look those numbers up before calling.` : ""),
       ok: `Assign ${most} lead${most === 1 ? "" : "s"}` }))) return;
     ui.aChannels = null;  // the next suggestion fits the leads that are left
     const r = await act(() => api("/api/assign", body), r => `Assigned ${Object.values(r.assigned).reduce((a, b) => a + b, 0)} leads. The summary stays on the Outreach tab.`, btn);
@@ -183,16 +206,20 @@ function renderRoute(el, q) {
     <div class="row">
       ${dirUrl ? `<a class="btn" href="${dirUrl}" target="_blank" rel="noopener">Directions for first ${gmaps.length}</a>` : ""}
       <button class="btn" id="rPrint" ${r.length ? "" : "disabled"}>Print route sheet</button>
-    </div></div>
+    </div>${phoneMissing("door_hanger")}</div>
     ${r.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>#</th><th>Address</th><th>What</th><th class="num">Miles</th><th></th></tr></thead><tbody>
       ${r.map((l, i) => `<tr class="click" data-id="${l.id}"><td data-th="Stop">${i + 1}</td><td data-th="Address"><span>${esc(title(fullAddress(l)))}${addressNote(l)}</span></td><td data-th="What">${esc(whatLabel(l))}</td><td class="num" data-th="Miles">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
       <td data-th="Log"><button class="btn small" data-quick="${l.id}" data-kind="visited">Hanger left</button></td></tr>`).join("")}</tbody></table></div>` : emptyQueue()}`;
-  if (r.length) $("#rPrint").onclick = () => {
+  if (r.length) $("#rPrint").onclick = async () => {
+    if (phoneMissing("door_hanger") && !(await confirmBox({ title: "Print hangers with no phone number?",
+      body: "Your phone number isn't set in Settings, so the hanger text says “[phone]” instead of how to reach you.",
+      ok: "Print anyway" }))) return;
     $("#print").innerHTML = `<div class="route"><h2>Door hanger route · ${esc(fmtDate(S.today))}</h2><p>${esc(fill("door_hanger", {}))}</p><table><tr><th>#</th><th>Address</th><th>What</th><th>Done</th></tr>
       ${r.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(title(fullAddress(l)))}${addressNote(l, true) ? ` (${esc(addressNote(l, true))})` : ""}</td><td>${esc(whatLabel(l))}</td><td>☐</td></tr>`).join("")}</table></div>`;
     window.print();
   };
   bindQuick(el);
+  bindGotoSettings(el);
 }
 function bindQuick(el) {
   el.querySelectorAll("[data-quick]").forEach(b => b.onclick = () =>
@@ -221,7 +248,7 @@ function renderCalls(el, q, ch) {
   el.innerHTML = `<div class="card">
     <h2>Calls: ${q.length} to make</h2>
     <p class="hint">Numbers found by the lookup or imported show here; otherwise use the search link. Check each number against the Do Not Call registry before cold-calling a cell phone, and log every attempt. Never auto-dial or mass-text.</p>
-    ${noPhoneNote(q, "calls")}
+    ${noPhoneNote(q, "calls")}${phoneMissing(ch)}
     ${q.some(l => l.lead_type === "eviction") || !q.length ? `<h3>Script for eviction landlords</h3><div class="script" data-script="eviction">${esc(fill(ch, { lead_type: "eviction", owner_entity: 1 }))}</div>` : ""}
     ${q.some(l => l.lead_type !== "eviction") ? `<h3>Script for code-case owners</h3><div class="script" data-script="code">${esc(fill(ch, { lead_type: "code_violation", address: "[address]" }))}</div>` : ""}
     <p class="hint">Each lead's own page shows the script filled in with its owner and address.</p></div>
@@ -232,6 +259,7 @@ function renderCalls(el, q, ch) {
     </tbody></table></div>` : emptyQueue()}`;
   bindQuick(el);
   bindNoPhoneNote(el);
+  bindGotoSettings(el);
 }
 function renderManagers(el, leads) {
   const groups = {};
@@ -243,7 +271,7 @@ function renderManagers(el, leads) {
     <h2>Landlords and property managers: ${list.length}</h2>
     <p class="hint">One pitch per company, not per property: offer a standing move-out clean-out rate. Companies with a phone or email come first, then those on several leads. Use “Other properties this owner has” on a lead to see their portfolio.</p>
     ${noPhoneNote(leads.filter(l => l.status !== "won"), "leads here")}
-    <div class="script">${esc(fill("property_manager", {}))}</div></div>
+    ${phoneMissing("property_manager")}<div class="script">${esc(fill("property_manager", {}))}</div></div>
     ${list.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
         return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:13px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
@@ -254,6 +282,7 @@ function renderManagers(el, leads) {
         ${touchButtons("property_manager").map(([k, t]) => `<button class="btn small" data-group="${ids}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;
   bindNoPhoneNote(el);
+  bindGotoSettings(el);
   el.querySelectorAll("[data-group]").forEach(b => b.onclick = () => {
     const ids = b.dataset.group.split(",").map(Number);
     // One contact covers the company; cost is logged once, on the first lead.

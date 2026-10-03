@@ -169,6 +169,7 @@ def test_writs_then_judgments_come_before_every_notice_only_case(desk):
         ("BUSY RENTALS LLC",),
     )
     conn.execute("UPDATE leads SET owner_name = plaintiff WHERE owner_name IS NULL")
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")  # landlord phones found
     conn.commit()
     rows = app.state({"list": "leads"})["list"]["leads"]
     order = [l["source_id"] for l in rows]
@@ -195,6 +196,8 @@ def test_assign_with_a_count_that_is_not_a_number(desk):
 def test_assign_refuses_unknown_methods_and_asks_before_a_one_method_round(desk):
     app, conn = desk
     many_leads(conn, 40)
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")
+    conn.commit()
     status, body, _ = post(app, "/api/assign", {"count": 40, "channels": ["phone", "landlord"]})
     assert status == 400 and "Unknown outreach method: landlord" in body["error"]
     status, body, _ = post(app, "/api/assign", {"count": 40, "channels": ["phone"]})
@@ -294,9 +297,20 @@ def test_apartment_lead_needs_a_unit_or_confirmation_for_a_door_hanger(tmp_path)
     eviction(conn, "CV26-000001-EA", "2026-09-30")
     enrich_landlords(conn, Assessor([parcel("111", "100 W EXAMPLE APTS", "APARTMENTS 25+ UNITS")]))
     app = App(path, geocoder=type("G", (), {"geocode": lambda *a: None})(), parcel_client=Assessor([]))
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")  # the landlord's office
+    conn.commit()
     lead = app.state()["leads"][0]
-    assert lead["door_hanger_problem"] == "needs_unit" and "door_hanger" not in lead["eligible"]
+    # A guess from the landlord's parcels: never a door hanger until confirmed.
+    assert lead["address_source"] == "landlord"
+    assert lead["door_hanger_problem"] == "unconfirmed" and "door_hanger" not in lead["eligible"]
+    out = app.assign({"count": 10, "channels": ["door_hanger", "phone"]})
+    assert out["left_out"]["needs_confirm"] == 1 and sum(out["assigned"].values()) == 0
 
+    # Confirmed, but a complex with no unit: still no single door.
+    conn.execute("UPDATE leads SET address_source = NULL")  # as if the court had listed it
+    conn.commit()
+    lead = app.state()["leads"][0]
+    assert lead["door_hanger_problem"] == "needs_unit" and lead["reach"] == "contact"
     out = app.assign({"count": 10, "channels": ["door_hanger", "phone"]})
     assert out["left_out"]["needs_unit"] == 1 and sum(out["assigned"].values()) == 0
 

@@ -196,8 +196,9 @@ def seed_evictions(conn, with_address=30, without=30):
                 ),
             )
             conn.execute(
-                "UPDATE leads SET owner_name = ?, owner_absentee = ?, owner_entity = ? WHERE source_id = ?",
-                (landlord, i % 2, int(i % 3 == 0), f"CV26-{n:06d}-EA"),
+                "UPDATE leads SET owner_name = ?, owner_absentee = ?, owner_entity = ?, owner_phone = ? "
+                "WHERE source_id = ?",
+                (landlord, i % 2, int(i % 3 == 0), f"(520) 555-{n:04d}", f"CV26-{n:06d}-EA"),
             )
     conn.commit()
 
@@ -274,6 +275,7 @@ def test_landlord_keeps_its_channel_in_later_rounds(tmp_path):
             eviction_notice=True,
         ),
     )
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0199' WHERE source_id = 'CV26-NEW-EA'")
     conn.commit()
     out = app.assign({"count": 6, "channels": list(outreach.CHANNELS)})
     new = conn.execute("SELECT channel FROM leads WHERE source_id = 'CV26-NEW-EA'").fetchone()[0]
@@ -404,10 +406,40 @@ def seed_real_mix(conn):
     conn.commit()
 
 
+def with_phones(conn):
+    """Every owner and landlord's phone found (a Google key, a lookup service)."""
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")
+    conn.commit()
+
+
+def test_day_one_no_lead_goes_to_a_call_method_without_a_number(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)  # no phone or email for anyone yet
+    app = App(path)
+    preview = app.state({"list": "queue", "channel": "phone"})["split"]
+    assert not any(preview["combos"].values()) and preview["suggested"] == []
+    # The page can say how many more there are and offer to include them.
+    assert preview["with_unreachable"]["combos"]["phone+property_manager"] == 7
+    assert preview["kind"] == "eviction"
+    out = app.assign({"count": 40, "channels": ["phone", "property_manager"]})
+    assert sum(out["assigned"].values()) == 0 and out["left_out"]["no_contact"] == 7
+    assert conn.execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
+    # Two landlords' office numbers found: those two go out.
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0101' WHERE plaintiff IN ('CACTUS 0 LLC', 'CACTUS 1 LLC')")
+    conn.commit()
+    out = app.assign({"count": 40, "channels": ["phone", "property_manager"]})
+    assert out["assigned"] == {"phone": 1, "property_manager": 1} and out["left_out"]["no_contact"] == 5
+    # Steve chose to look the rest up himself.
+    out = app.assign({"count": 40, "channels": ["phone", "property_manager"], "include_unreachable": True})
+    assert sum(out["assigned"].values()) == 5
+
+
 def test_default_settings_assign_more_than_zero_on_a_real_mix(tmp_path):
     path = tmp_path / "leads.db"
     conn = db.connect(path)
     seed_real_mix(conn)
+    with_phones(conn)
     app = App(path)  # default settings: evictions with a notice
     preview = app.state({"list": "queue", "channel": "door_hanger"})["split"]
     combos = preview["combos"]
@@ -445,6 +477,7 @@ def test_an_eviction_only_round_and_its_preview(tmp_path):
     path = tmp_path / "leads.db"
     conn = db.connect(path)
     seed_real_mix(conn)
+    with_phones(conn)
     app = App(path)
     app.save_settings({"lead_view": "all"})
     channels = ["phone", "property_manager"]
@@ -467,6 +500,7 @@ def test_a_round_names_the_leads_it_left_out(tmp_path):
     path = tmp_path / "leads.db"
     conn = db.connect(path)
     seed_real_mix(conn)
+    with_phones(conn)
     app = App(path)
     out = app.assign({"count": 40, "channels": ["door_hanger", "phone"]})
     assert out["left_out"]["needs_address"] + out["left_out"]["needs_unit"] == 7
@@ -509,6 +543,7 @@ def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):
             eviction_notice=True,
         ),
     )
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100' WHERE owner_phone IS NULL")
     conn.commit()
     out = app.assign({"count": 3, "channels": ["door_hanger", "phone"]})
     # The 3 followed leads don't use up the round's 3.
@@ -601,10 +636,11 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
     app = App(path, parcel_client=FakeParcels([]))
     state = app.state({"list": "leads", "type": "address_work"})
     before = state["counts"]
-    assert (before["evictions_open"], before["evictions_with_address"]) == (7, 2)
-    # The work queue: open evictions with no address or only a guess.
+    # Only the typed one: a guess isn't an address, nor a complex with no unit.
+    assert (before["evictions_open"], before["evictions_with_address"]) == (7, 1)
+    # The work queue: open evictions with no address a door hanger can go to.
     queue = {l["source_id"] for l in state["list"]["leads"]}
-    assert "CV26-000001-EA" in queue and "CV26-000002-EA" not in queue
+    assert {"CV26-000001-EA", "CV26-000099-EA"} <= queue and "CV26-000002-EA" not in queue
     assert all(l["lead_type"] == "eviction" for l in state["list"]["leads"])
     records = state["addresses"]["records"]
     assert records["last_import"] is None and records["due"]
@@ -616,19 +652,20 @@ def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
         "CV26-777777-EA,13 N NEW AVE,SOMEONE NEW LLC\n"
     )
     counts = app.import_file("csv_import", "records.csv", csv.encode(), lead_type="eviction")
-    assert counts["addresses_filled"] == 3 and counts["new"] == 1
+    # Two filled in; the one Steve typed matched but was kept.
+    assert (counts["addresses_filled"], counts["addresses_kept"], counts["new"]) == (2, 1, 1)
     rows = {r["source_id"]: r for r in conn.execute("SELECT * FROM leads").fetchall()}
     assert rows["CV26-000000-EA"]["address"] == "10 N FOUND AVE"
     assert rows["CV26-000000-EA"]["address_source"] == "import"
     assert rows["CV26-000001-EA"]["address"] == "11 N FOUND AVE"  # a guess is replaced
     assert rows["CV26-000002-EA"]["address"] == "2 W TYPED ST"  # what Steve typed is kept
     after = app.state({"list": "leads"})["counts"]
-    # Three filled or kept, plus the new case from the file.
-    assert (after["evictions_open"], after["evictions_with_address"]) == (8, 5)
+    # Two filled, one kept, plus the new case from the file.
+    assert (after["evictions_open"], after["evictions_with_address"]) == (8, 4)
     # The next request asks from today on, in two weeks.
     records = app.state({"list": "leads"})["addresses"]["records"]
     today = az_today()
-    assert records["last_import"] == today.isoformat() and records["last_filled"] == 3
+    assert records["last_import"] == today.isoformat() and records["last_filled"] == 2
     assert records["request_from"] == today.isoformat() and not records["due"]
     assert records["due_on"] == (today + timedelta(days=14)).isoformat()
 
@@ -645,7 +682,7 @@ def test_address_share_is_kept_daily_and_compared_with_a_week_ago(tmp_path):
     conn.commit()
     history = db.get_settings(conn)["address_history"]
     assert "2020-01-01" not in history  # only the last two months are kept
-    assert history[today.isoformat()] == [1, 7] and history[week_ago] == [1, 10]
+    assert history[today.isoformat()] == [0, 7] and history[week_ago] == [1, 10]
     progress = App(path).state({"list": "leads"})["addresses"]
     assert progress["week_ago"] == {"date": week_ago, "with_address": 1, "open": 10}
 
@@ -712,3 +749,94 @@ def test_results_compare_methods_within_one_kind_of_lead(tmp_path):
     # All together the two methods look comparable; within each kind there's nothing to compare yet.
     assert not by_kind["eviction"]["comparison"]["fair"]
     assert "eviction leads only" in state["comparison_basis"]["eviction"]
+
+
+def test_small_rounds_are_split_evenly_across_the_methods(tmp_path):
+    # Three landlords' leads of different kinds (with and without an
+    # address): each kind used to be dealt on its own, so one method could
+    # get all three.
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    for i, address in enumerate(("1 W ONE ST", None, None, "4 W FOUR ST", None)):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                f"CV26-00000{i}-EA",
+                "eviction",
+                "2026-09-28",
+                address,
+                plaintiff=f"LANDLORD {i} LLC",
+                in_pima=True,
+                eviction_notice=True,
+            ),
+        )
+    with_phones(conn)
+    app = App(path)
+    for seed in range(25):
+        for n in (2, 3, 5):
+            out = outreach.assign(conn, app.leads(conn), n, ["phone", "property_manager"], seed=seed, preview=True)
+            got = sorted(out["assigned"].values())
+            assert got == [n // 2, n - n // 2], (seed, n, out["assigned"])
+        out = outreach.assign(conn, app.leads(conn), 5, list(outreach.CHANNELS), seed=seed, preview=True)
+        # Only two have an address, so a round with door hangers deals those two, one each.
+        assert sorted(out["assigned"].values()) == [0, 1, 1]
+
+
+def test_guessed_landlord_addresses_and_parks_never_get_a_door_hanger(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    rows = [
+        # A guess from the landlord's parcels: the tenant may never have lived there.
+        ("CV26-000001-EA", "1 W GUESS ST", "landlord", "SFR GRADE 010-3"),
+        # The court's address at a manufactured home park, no space number.
+        ("CV26-000002-EA", "2 W PARK RD", None, "MANUFACTURED HOME PARK W/ ADDNL RESIDENCE"),
+        ("CV26-000003-EA", "3 W HOUSE ST", "import", "SFR GRADE 010-3"),
+    ]
+    for case, address, source, use in rows:
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                case,
+                "eviction",
+                "2026-09-28",
+                address,
+                plaintiff=f"{case} LLC",
+                in_pima=True,
+                eviction_notice=True,
+            ),
+        )
+        conn.execute("UPDATE leads SET address_source = ?, property_use = ? WHERE source_id = ?", (source, use, case))
+    with_phones(conn)
+    app = App(path)
+    state = app.state({"list": "queue", "channel": "door_hanger"})
+    problems = {l["source_id"]: l["door_hanger_problem"] for l in app.leads(conn)}
+    assert problems == {"CV26-000001-EA": "unconfirmed", "CV26-000002-EA": "needs_unit", "CV26-000003-EA": None}
+    # Leads, Outreach and Results count the same usable addresses.
+    assert state["split"]["combos"]["door_hanger"] == state["counts"]["evictions_with_address"] == 1
+    out = app.assign({"count": 10, "channels": ["door_hanger", "phone"]})
+    assert (out["left_out"]["needs_confirm"], out["left_out"]["needs_unit"]) == (1, 1)
+    # Steve confirms the guess, and types the park space: both can get one.
+    ids = {l["source_id"]: l["id"] for l in app.leads(conn)}
+    app.update_lead({"id": ids["CV26-000001-EA"], "fields": {"confirm_address": True}})
+    conn.execute("UPDATE leads SET unit = '14' WHERE source_id = 'CV26-000002-EA'")
+    conn.commit()
+    state = app.state({"list": "queue", "channel": "door_hanger"})
+    assert state["counts"]["evictions_with_address"] == 3
+
+
+def test_records_import_counts_what_it_filled_and_what_it_kept(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    for case in ("CV26-000001-EA", "CV26-000002-EA"):
+        db.upsert(conn, Lead("pima_jp_case", case, "eviction", "2026-09-28", plaintiff="A LLC", in_pima=True))
+    conn.execute(
+        "UPDATE leads SET address = '5 W TYPED ST', address_source = 'manual' WHERE source_id = ?", ("CV26-000001-EA",)
+    )
+    conn.commit()
+    app = App(path, parcel_client=FakeParcels([]))
+    csv = "Case Number,Property Address\nCV26-000001-EA,1 N FILE AVE\nCV26-000002-EA,2 N FILE AVE\n"
+    counts = app.import_file("csv_import", "records.csv", csv.encode(), lead_type="eviction")
+    assert (counts["addresses_filled"], counts["addresses_kept"], counts["new"]) == (1, 1, 0)
+    assert app.state({"list": "leads"})["addresses"]["records"]["last_filled"] == 1

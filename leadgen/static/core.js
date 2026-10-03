@@ -218,14 +218,16 @@ function ownerLine(l) {
   return esc(title(who)) + tags;
 }
 const fullAddress = l => l.address ? l.address + (l.unit ? " #" + String(l.unit).replace(/^#/, "") : "") : "";
-const isMultifamily = l => /APART|MULTI|MFR|CONDO|TOWNHOUSE|MOBILE HOME PARK/i.test(l.property_use || "");
+// More than one home on the parcel (apartments, condos, a mobile or
+// manufactured home park...): the server decides, with one rule.
+const isMultifamily = l => !!l.multi_home;
 // Where an address came from, when it isn't certain: a guess from the
 // landlord's parcels, or an apartment complex with no unit number.
 function addressNote(l, plain) {
   const notes = [];
   if (l.address_source === "landlord") notes.push([`landlord's only ${isMultifamily(l) ? "complex" : "property"} — confirm`,
-    "Court cases list no address. The landlord owns one property in the county, so the eviction is probably there. Check it, then press Confirm address on the lead."]);
-  if (l.door_hanger_problem === "needs_unit") notes.push(["unit needed for a door hanger", "An apartment or condo parcel: type the unit number, or confirm the address, before a door hanger goes out."]);
+    "Court cases list no address. The landlord owns one property in the county, so the eviction is probably there. It's a guess, so no door hanger goes there until you check it and press Confirm address on the lead."]);
+  if (l.door_hanger_problem === "needs_unit") notes.push(["unit needed for a door hanger", "More than one home on this parcel (apartments, condos, a mobile or manufactured home park): type the unit or space number, or confirm the address, before a door hanger goes out."]);
   if (plain) return notes.map(n => n[0]).join("; ");
   return notes.map(([t, tip]) => ` <span class="chip warn" title="${esc(tip)}">${esc(t)}</span>`).join("");
 }
@@ -256,6 +258,22 @@ function fillText(text, channel, l) {
     .replaceAll("{phone}", phone)
     .replaceAll("{business}", st.business_name || "");
 }
+// A warning when this method's message would go out with no phone number:
+// the template has {phone} but neither a tracking number nor the main phone
+// is set in Settings. "" when all is well.
+function phoneMissing(channel, l = {}) {
+  const st = S.settings, text = st.templates[templateKey(channel, l)] || st.templates[channel] || "";
+  if (!text.includes("{phone}") || (st.tracking_numbers || {})[channel] || (st.business_phone || "").trim()) return "";
+  return `<p class="notice warn phone-missing" role="alert">Your phone number isn't set, so this message shows “[phone]” where customers should see how to reach you.
+    <button class="linkbtn" data-goto-settings>Add your phone in Settings</button></p>`;
+}
+function bindGotoSettings(el) {
+  el.querySelectorAll("[data-goto-settings]").forEach(b => b.onclick = async () => {
+    if (ui.open != null) { await closeDrawer(); if (ui.open != null) return; }  // kept open: unsaved typing
+    ui.tab = "settings"; syncUrl(true); await reloadList();
+    const f = $("#sPhone"); if (f) f.focus();
+  });
+}
 // Who a method reaches on this lead and what it offers, in one line.
 function pitchLine(channel, l) {
   const p = (S.pitches || {})[templateKey(channel, l)];
@@ -268,7 +286,9 @@ function noticeChip(l) {
   const stage = l.case_stage;
   if (stage === "writ") return ` <span class="chip bad" title="Writ of restitution: the tenant is being locked out, so the unit needs clearing now">writ issued${l.writ_date ? " " + esc(fmtDate(l.writ_date)) : ""}</span>`;
   if (stage === "judgment") return ` <span class="chip warn" title="The court ruled for the landlord; a writ (lockout) usually follows within days">judgment${l.judgment_date ? " " + esc(fmtDate(l.judgment_date)) : ""}</span>`;
-  if (stage === "dismissed") return ` <span class="chip" title="The case was dismissed">dismissed</span>`;
+  if (stage === "dismissed") return ` <span class="chip" title="The case was dismissed, or the court ruled for the tenant: no clean-out">dismissed</span>`;
+  if (stage === "satisfied") return ` <span class="chip" title="Satisfaction of judgment: the tenant paid, so the eviction is over">judgment paid</span>`;
+  if (stage === "closed") return ` <span class="chip" title="The court closed the case with no judgment for the landlord and no writ">case closed</span>`;
   if (l.eviction_notice === 1) return ` <span class="chip good" title="An eviction notice is filed in the court case">notice filed</span>`;
   if (l.eviction_notice === 0) return ` <span class="chip" title="No eviction notice in the case documents yet">no notice yet</span>`;
   return ` <span class="chip warn" title="${l.url ? "Case page not read yet; the daily check reads it, or press Update court cases." : "Added by you, with no court case link to check."}">${l.url ? "case not checked" : "added by you"}</span>`;
@@ -364,8 +384,6 @@ function renderHeader() {
   const unchecked = (S.view_counts || {}).unchecked || 0;
   const msg = d.message || "starting the daily check";
   const problems = d.problems || [];
-  $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson code cases`;
-  $("#purpose").title = $("#purpose").textContent.slice(2);  // in full, when a wide header cuts it short
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`

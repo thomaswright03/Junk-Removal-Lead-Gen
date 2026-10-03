@@ -29,7 +29,8 @@ class Lead:
     eviction_notice: Optional[bool] = None  # an eviction notice is filed in the case
     case_status: Optional[str] = None
     next_court_date: Optional[str] = None
-    # filed, notice, judgment, writ or dismissed; and when the judgment / writ came.
+    # filed, notice, judgment, writ, dismissed, satisfied or closed; and when
+    # the judgment / writ came.
     case_stage: Optional[str] = None
     judgment_date: Optional[str] = None
     writ_date: Optional[str] = None

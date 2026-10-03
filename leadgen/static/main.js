@@ -77,8 +77,9 @@ $("#importFile").onchange = async e => {
 async function importLeadsFile(f) {
   const source = /\.csv$/i.test(f.name) ? "csv_import" : "pima_jp_calendar";
   await act(async () => send(`/api/import?source=${source}&filename=${encodeURIComponent(f.name)}`, { method: "POST", body: await f.arrayBuffer() }),
-    r => (r.addresses_filled ? `${r.addresses_filled} court case${r.addresses_filled === 1 ? "" : "s"} already in Lead Desk matched by case number; their property address is filled in (an address you typed or confirmed is kept). ` : "")
-      + (r.imported || !r.addresses_filled ? `Imported ${r.imported} lead${r.imported === 1 ? "" : "s"}: ${r.new} new, ${r.updated} already listed.` : "")
+    r => (r.addresses_filled || r.addresses_kept ? `${r.addresses_filled || 0} propert${r.addresses_filled === 1 ? "y address" : "y addresses"} filled in for court cases already in Lead Desk (matched by case number).` +
+        (r.addresses_kept ? ` ${r.addresses_kept} more matched but kept the address already on the lead (typed, confirmed or from the court).` : "") + " " : "")
+      + (r.imported || !(r.addresses_filled || r.addresses_kept) ? `Imported ${r.imported} lead${r.imported === 1 ? "" : "s"}: ${r.new} new, ${r.updated} already listed.` : "")
       + (r.with_notice != null ? (r.with_notice ? " An eviction notice is filed." : " No eviction notice in this case yet.") : "")
       + (r.waiting_for_case_check ? ` ${r.waiting_for_case_check} are marked “case not checked” until their court page is read (next check ${S.daily.next_run || "tomorrow 6:00 AM"}).` : "")
       + (r.unreadable_dates ? ` ${r.unreadable_dates} date${r.unreadable_dates === 1 ? "" : "s"} couldn't be read and were left empty.` : "")

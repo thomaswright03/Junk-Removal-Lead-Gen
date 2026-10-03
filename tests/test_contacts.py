@@ -513,3 +513,41 @@ def test_turning_google_off_overrides_the_environment_key(tmp_path, monkeypatch)
     monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "env-key")
     assert [p.name for p in providers_from({})] == ["osm", "google"]
     assert [p.name for p in providers_from({"google_enabled": False})] == ["osm"]
+
+
+def test_a_provider_that_is_down_is_reported_once_per_run():
+    import requests
+
+    from leadgen.lookup import OsmProvider
+
+    class DeadSession:
+        headers = {}
+
+        def post(self, url, **kw):
+            raise requests.ConnectionError("Overpass servers not responding")
+
+    conn = db.connect(":memory:")
+    for i in range(30):
+        db.upsert(
+            conn,
+            Lead(
+                "jp",
+                f"CV26-{i}",
+                "eviction",
+                "2026-09-30",
+                f"{i} W A ST",
+                lat=32.2,
+                lon=-110.9,
+                plaintiff=f"LANDLORD {i} LLC",
+                in_pima=True,
+            ),
+        )
+    conn.commit()
+    log = []
+    counts = find_contacts(conn, [OsmProvider(session=DeadSession(), delay=0)], scanner=None, log=log.append)
+    assert counts["errors"] == 30 and counts["found"] == 0
+    assert len(log) == 1, log
+    assert "OpenStreetMap wasn't responding: 30 lookups skipped or failed" in log[0]
+    assert "Error" not in log[0]
+    # Nothing was marked as looked up: the next run tries them all again.
+    assert conn.execute("SELECT COUNT(*) FROM leads WHERE contact_checked_at IS NOT NULL").fetchone()[0] == 0

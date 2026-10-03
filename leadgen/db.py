@@ -13,7 +13,7 @@ import json
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 from . import pg
 from .models import Lead
@@ -117,7 +117,8 @@ _ADDED_COLUMNS = {
     "case_status": "TEXT",
     "next_court_date": "TEXT",
     "case_checked_at": "TEXT",
-    # How far the case has got: filed, notice, judgment, writ or dismissed.
+    # How far the case has got: filed, notice, judgment, writ, or ended
+    # (dismissed, satisfied, closed); see sources/pima_jp_case.case_stage.
     "case_stage": "TEXT",
     "judgment_date": "TEXT",
     "writ_date": "TEXT",
@@ -158,31 +159,68 @@ _REFRESHABLE = (
 )
 
 
-_READY_URLS: set = set()  # Postgres databases whose schema was checked by this process
+# Databases whose schema and upgrades this process has already run: a
+# Postgres URL, or a SQLite file by path and inode (a file deleted and made
+# again is a new database). Opening one again only connects.
+_READY: set = set()
+
+
+class _SqliteConnection(sqlite3.Connection):
+    """A SQLite connection that is closed when its ``with`` block ends (the
+    standard one only commits), so no request leaves one open."""
+
+    def __exit__(self, *exc: Any) -> Literal[False]:
+        try:
+            super().__exit__(*exc)
+        finally:
+            self.close()
+        return False
+
+
+def _sqlite_key(path: Path) -> Optional[tuple]:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path.resolve()), st.st_dev, st.st_ino)
 
 
 def connect(path: Any) -> Conn:
     """Open the lead database: a SQLite file, or Postgres (Neon) when
-    ``path`` is a ``postgres://`` URL (see pg.py)."""
+    ``path`` is a ``postgres://`` URL (see pg.py). The schema is created and
+    older databases upgraded the first time this process opens each one."""
     if pg.is_url(path):
         conn = pg.Connection(str(path))
-        if str(path) not in _READY_URLS:
+        if str(path) not in _READY:
             conn.executescript(pg.SCHEMA)
             for col, kind in _ADDED_COLUMNS.items():
                 conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             for col, kind in _ADDED_TOUCH_COLUMNS.items():
                 conn.execute(f"ALTER TABLE touches ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             _money_to_cents(conn)
-            _READY_URLS.add(str(path))
+            _upgrade_case_stages(conn)
+            _READY.add(str(path))
         return conn
     path = Path(path)
-    if str(path) != ":memory:":
+    memory = str(path) == ":memory:"
+    if not memory:
         path.parent.mkdir(parents=True, exist_ok=True)
-    lite = sqlite3.connect(str(path))
+    lite = sqlite3.connect(str(path), factory=_SqliteConnection)
     lite.row_factory = sqlite3.Row
-    lite.executescript(SCHEMA)
-    _migrate(lite)
+    key = None if memory else _sqlite_key(path)
+    if key is None or key not in _READY:
+        lite.executescript(SCHEMA)
+        _migrate(lite)
+        key = None if memory else _sqlite_key(path)
+        if key:
+            _READY.add(key)
     return lite
+
+
+def forget_ready() -> None:
+    """Run the schema and upgrades again on the next open of each database
+    (tests that stand in for a new process)."""
+    _READY.clear()
 
 
 def _migrate(conn: Conn) -> None:
@@ -195,6 +233,7 @@ def _migrate(conn: Conn) -> None:
         if col not in have_touch:
             conn.execute(f"ALTER TABLE touches ADD COLUMN {col} {kind}")
     _money_to_cents(conn)
+    _upgrade_case_stages(conn)
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
         for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
@@ -206,7 +245,7 @@ def _migrate(conn: Conn) -> None:
 
 def _money_to_cents(conn: Conn) -> None:
     """Dollar amounts saved before money was kept in whole cents, moved into
-    the cents columns (only rows not moved yet, so this runs on every open)."""
+    the cents columns (only rows not moved yet, so running it again is safe)."""
     for table, dollars, cents in (
         ("leads", "quote_amount", "quote_cents"),
         ("leads", "job_revenue", "revenue_cents"),
@@ -217,6 +256,20 @@ def _money_to_cents(conn: Conn) -> None:
         if conn.execute(f"SELECT 1 FROM {table} WHERE {todo} LIMIT 1").fetchone():
             conn.execute(f"UPDATE {table} SET {cents} = CAST(ROUND({dollars} * 100) AS INTEGER) WHERE {todo}")
             conn.commit()
+
+
+def _upgrade_case_stages(conn: Conn) -> None:
+    """Once per change of the case stage rules: every stored court case's
+    stage worked out again from its saved papers (see
+    pima_jp_case.rederive_stages), so a wrong old stage doesn't linger."""
+    from .sources.pima_jp_case import STAGE_RULES_VERSION, rederive_stages
+
+    row = conn.execute("SELECT value FROM settings WHERE key = 'case_stage_rules'").fetchone()
+    if row and json.loads(row["value"]) == STAGE_RULES_VERSION:
+        return
+    rederive_stages(conn)
+    put_settings(conn, {"case_stage_rules": STAGE_RULES_VERSION})
+    conn.commit()
 
 
 def cents(value: Any) -> Optional[int]:
@@ -256,14 +309,22 @@ def upsert(conn: Conn, lead: Lead) -> str:
     if existing:
         if "jcdisplaycase" in (existing["url"] or "").lower() and "jcdisplaycase" not in (d["url"] or "").lower():
             d["url"] = None  # a calendar re-import keeps the case page link
-        if existing["case_checked_at"] and not d.get("case_checked_at"):
-            # Keep the case page's filing date and summary over calendar rows.
+        case_page = bool(d.get("case_checked_at"))
+        sets, args = ["last_seen = ?"], [now]
+        if existing["case_checked_at"] and not case_page:
+            # Keep the case page's filing date, summary and papers over calendar rows.
             d["event_date"] = d["description"] = None
-        sets, args = ["last_seen = ?", "raw_json = ?"], [now, raw]
+        else:
+            sets.append("raw_json = ?")
+            args.append(raw)
         for col in _REFRESHABLE:
             if d[col] not in (None, ""):
                 sets.append(f"{col} = ?")
                 args.append(d[col])
+            elif case_page and col in ("judgment_date", "writ_date"):
+                # A fresh read of the case decides these: a judgment set aside
+                # or a case dismissed since the last read clears them.
+                sets.append(f"{col} = NULL")
         if d.get("case_checked_at"):
             sets.append("case_checked_at = ?")
             args.append(d["case_checked_at"])
@@ -311,13 +372,15 @@ def _link_duplicate(conn: Conn, row_id: int, address_norm: str) -> None:
 def mark_stale(conn: Conn, days: int, today: Optional[date] = None) -> int:
     """Move ``new`` leads to ``stale`` when their latest event is older than
     ``days``. For an eviction that is the latest of its filing, judgment and
-    writ dates, so a writ that comes weeks after the filing keeps it fresh."""
+    writ dates, so a writ that comes weeks after the filing keeps it fresh.
+    A case with a court date today or later is still under way: never stale."""
     today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
         "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ? "
-        "AND (judgment_date IS NULL OR judgment_date < ?) AND (writ_date IS NULL OR writ_date < ?)",
-        (cutoff, cutoff, cutoff),
+        "AND (judgment_date IS NULL OR judgment_date < ?) AND (writ_date IS NULL OR writ_date < ?) "
+        "AND (next_court_date IS NULL OR SUBSTR(next_court_date, 1, 10) < ?)",
+        (cutoff, cutoff, cutoff, today.isoformat()),
     )
     return cur.rowcount
 

@@ -23,6 +23,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 -appl
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 header h1 { font-size: 17px; margin: 0; }
 header .sub { color: var(--muted); font-size: 13px; }
+/* What Lead Desk is for, kept short so it is whole at every width. */
 #purpose { font-weight: 400; }
 nav { display: flex; gap: 4px; margin-left: 12px; }
 nav button { background: none; border: 0; padding: 8px 12px; border-radius: 8px; color: var(--muted); font: inherit; cursor: pointer; }
@@ -137,11 +138,10 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
 .btn.danger-fill { background: var(--bad); border-color: var(--bad); color: var(--panel); }
 
 /* Wide screens: the header is one row, the main action at the right. The
-   title line gives way (cut with "…") before the buttons wrap. */
+   title line (kept short) wraps rather than being cut. */
 @media (min-width: 1200px) {
   header { flex-wrap: nowrap; }
   header > div:first-child { flex: 1 1 auto; min-width: 0; }
-  header h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   header .spacer { display: none; }
   header nav, header > .btn, header > label.btn { flex: none; }
 }
@@ -150,7 +150,7 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
    button and link is at least 44 px tall to tap. */
 @media (max-width: 720px) {
   header { position: static; padding: 8px 12px; gap: 8px; }
-  #purpose, header .spacer { display: none; }
+  header .spacer { display: none; }
   nav { margin-left: 0; width: 100%; overflow-x: auto; }
   main { padding: 12px; }
   .banner { padding: 8px 12px; }

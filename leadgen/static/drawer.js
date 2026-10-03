@@ -72,6 +72,8 @@ $("#drawer").addEventListener("keydown", e => {
 });
 // What the source said about the lead, as readable lines, leaving out what
 // the drawer already shows (case status, notice, stage, the hearing).
+// Why the door hanger option is off for a lead (see outreach.door_hanger_problem).
+const DOOR_HANGER_WHY = { no_address: " (needs an address)", unconfirmed: " (the address is a guess: confirm it first)", needs_unit: " (needs a unit number or a confirmed address)" };
 function detailLines(l) {
   const parts = String(l.description || "").split(" | ").map(p => p.trim()).filter(Boolean);
   if (l.lead_type === "code_violation") {
@@ -81,7 +83,7 @@ function detailLines(l) {
   const hearingShown = !!l.next_court_date || l.date_label === "Hearing";
   return parts.filter(p => !(
     (/^case /i.test(p) && l.case_status) || /eviction notice/i.test(p) ||
-    /^(writ of restitution|judgment for the landlord|case dismissed)/i.test(p) ||
+    /^(writ of restitution|judgment for the landlord|judgment satisfied|case dismissed|case closed with)/i.test(p) ||
     (hearingShown && /hearing|eviction action/i.test(p))));
 }
 // Court cases list no property address: the ways to find it, in one place.
@@ -161,7 +163,7 @@ function renderDrawer() {
       <h2>Property address</h2>
       ${l.address ? `<p>${esc(title(fullAddress(l)))}${addressNote(l)}</p>` : ""}
       ${l.address && (l.address_source === "landlord" || l.door_hanger_problem === "needs_unit") ? `<div class="row mb12"><button class="btn small" id="dConfirm">Confirm address</button>
-        <span class="hint" style="margin:0">${l.address_source === "landlord" ? "Checked that the eviction is at this property?" : "No unit number, but a door hanger at this address is fine (for example at the leasing office)?"}</span></div>` : ""}
+        <span class="hint" style="margin:0">${l.address_source === "landlord" ? "Checked that the eviction is at this property?" : "No unit number, but a door hanger at this address is fine (for example at the leasing office or the park office)?"}</span></div>` : ""}
       ${l.lead_type === "eviction" && (!l.address || l.address_source === "landlord") ? addressGuide(l) : ""}
       <p class="hint">${l.address ? "Correct it here if it's wrong." : "Court case pages don't list the property."} Saving finds it on the map, looks up the parcel and owner, fills in the miles, and makes the lead eligible for door hangers.</p>
       <div class="row">
@@ -187,10 +189,10 @@ function renderDrawer() {
     <div class="card">
       <h2>Outreach</h2>
       <div class="row" style="margin:8px 0">
-        <select id="dChannel" aria-label="Outreach method">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? (v !== "door_hanger" ? " (no one to contact)" : l.door_hanger_problem === "needs_unit" ? " (needs a unit number or a confirmed address)" : " (needs an address)") : ""}</option>`).join("")}</select>
+        <select id="dChannel" aria-label="Outreach method">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? (v !== "door_hanger" ? " (no one to contact)" : DOOR_HANGER_WHY[l.door_hanger_problem] || " (needs an address)") : v && !(l.ready || []).includes(v) ? (v === "phone" ? " (no phone number yet)" : " (no phone or email yet)") : ""}</option>`).join("")}</select>
         <button class="btn small" id="dSaveCh">Set method</button>
       </div>
-      ${ch ? `${pitchLine(ch, l)}<div class="script">${esc(fill(ch, l))}</div>
+      ${ch ? `${pitchLine(ch, l)}${phoneMissing(ch, l)}<div class="script">${esc(fill(ch, l))}</div>
       <div class="row" style="margin-top:8px">
         ${touchButtons(ch).map(([k, t]) => `<button class="btn small" data-touch="${k}">${t}</button>`).join("")}
       </div>` : `<p class="hint">Pick a method to see the message and log outreach.</p>`}
@@ -232,6 +234,7 @@ function renderDrawer() {
   if (conf) conf.onclick = e => act(() => api("/api/lead", { id: l.id, fields: { confirm_address: true } }),
     "Address confirmed. Door hangers can go to this lead.", e.currentTarget);
   $("#dClose").onclick = closeDrawer;
+  bindGotoSettings($("#drawer"));
   $("#dSaveContact").onclick = async e => {
     if (!drawerOk(["dPhone", "dEmail"])) return;
     const r = await act(() => api("/api/lead", { id: l.id, fields: { owner_phone: $("#dPhone").value, owner_email: $("#dEmail").value } }), "Contact saved", e.currentTarget, undefined, drawerError);
@@ -267,17 +270,21 @@ function renderDrawer() {
     const quote = moneyField($("#dQuote").value), rev = moneyField($("#dRev").value);
     // Revenue means the job was done: Won. A lead marked Lost or Skip only
     // becomes Won when Steve says so; otherwise its status stays.
-    let status = rev ? "won" : quote && !["won", "lost"].includes(l.status) ? "quoted" : null;
+    // (A Skip lead only moves for a new quote, not one already saved on it.)
+    let status = rev ? "won" : quote && !["won", "lost"].includes(l.status) && !(l.status === "skip" && quote === l.quote_amount) ? "quoted" : null;
     let kept = null;
-    if (status === "won" && ["lost", "skip"].includes(l.status)) {
-      const was = STATUS_LABEL[l.status];
-      const win = await confirmBox({ title: `Mark this ${was.toLowerCase()} lead as won?`,
-        body: `You entered job revenue, which usually means you did the job. Mark it Won, or keep it as ${was} and just save the amount and notes.`,
-        ok: "Mark won", cancel: `Keep it ${was.toLowerCase()}` });
-      if (!win) { status = null; kept = was; }
+    // Any amount that would move a Lost or Skip lead asks first.
+    if (status && ["lost", "skip"].includes(l.status)) {
+      const was = STATUS_LABEL[l.status], to = STATUS_LABEL[status];
+      const why = status === "won" ? "You entered job revenue, which usually means you did the job."
+        : "You entered a quote, which usually means the owner is interested again.";
+      const yes = await confirmBox({ title: `Mark this ${was.toLowerCase()} lead as ${to.toLowerCase()}?`,
+        body: `${why} Mark it ${to}, or keep it as ${was} and just save the amount and notes.`,
+        ok: `Mark ${to.toLowerCase()}`, cancel: `Keep it ${was.toLowerCase()}` });
+      if (!yes) { status = null; kept = was; }
     }
     const r = await act(() => api("/api/lead", { id: l.id, fields: { quote_amount: quote, job_revenue: rev, notes: $("#dNotes").value,
-      ...(status ? { status } : {}) } }), kept ? `Saved. The lead stays ${kept}.` : status === "won" ? "Saved and marked won" : "Saved", btn, undefined, drawerError);
+      ...(status ? { status } : {}) } }), kept ? `Saved. The lead stays ${kept}.` : status === "won" ? "Saved and marked won" : status === "quoted" && l.status !== "quoted" ? "Saved and marked quoted" : "Saved", btn, undefined, drawerError);
     if (r) { clearDrafts(l.id, RESULT_FIELDS); renderDrawer(); }
   };
   const op = $("#dOwnerProps");

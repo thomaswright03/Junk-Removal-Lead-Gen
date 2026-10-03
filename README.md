@@ -64,12 +64,19 @@ what it costs at your limits, and a box to paste it that saves it and starts
 (**I've sent the request** records the date; the next one is due two weeks
 after the latest request or import). **Hide this guide** puts it away; **How
 to reach more** brings it back. The Leads tab says how many open eviction
-leads can be reached now (a phone or email, or a known property address),
+leads can be reached now (a phone or email, or an address a door hanger can
+go to), and each step says how many leads it would reach (Google only finds
+companies, so it counts leads with a company landlord not looked up yet; the
+records request counts leads with no usable address) and marks the one to
+start with,
 each eviction with neither is marked "can't reach yet" (the kind filter has
 **Can't be reached yet** and **Can be reached**), and the lead says how it
 can be reached. The Outreach call list and landlord list put leads with a
 phone number (then an email) first, and say how many have no number yet,
 why, and what to do (set up phone lookups, or find phones now).
+
+**Language.** Lead Desk, its scripts and its door-hanger text are in English
+only, as agreed; Spanish is left until Steve asks for it.
 
 **Stopping everything (kill switch).** Tick **Pause Lead Desk** in Settings,
 or set the environment variable `LEADDESK_PAUSED=1` (on Vercel, and as a
@@ -95,7 +102,9 @@ or set its limits to 0.
   court case, or further along (a judgment for the landlord, or a writ of
   restitution, the lockout that leaves belongings behind), plus cases you
   imported whose case page hasn't been read yet (marked "case not checked").
-  Dismissed cases, and closed cases that never reached a judgment, drop out.
+  Cases that ended drop out: dismissed (or decided for the tenant), judgment
+  satisfied (the tenant paid), and closed or disposed with no judgment for
+  the landlord and no writ. See "How Lead Desk reads a court case" below.
   The "Show" menu switches to all evictions, or all leads including City
   code cases (it says how many code cases there are; code cases cover the
   City of Tucson only, not unincorporated Pima County, Marana, Oro Valley,
@@ -103,7 +112,10 @@ or set its limits to 0.
   the last check finished, a warning sign if a lookup failed); **Details**
   shows the full summary, how many court cases are still waiting to be
   checked and when the next check runs. The Leads tab also says how many
-  open eviction leads have a confirmed or typed address, and an eviction
+  open eviction leads have an address a door hanger can go to (typed,
+  confirmed, imported or from the court, with a unit number where the parcel
+  has more than one home; never a guess from the landlord's parcels until
+  you confirm it), and an eviction
   with no address shows a "Find the address" checklist. The share of open
   evictions with an address is shown next to the share a week ago (from a
   snapshot the daily check keeps). **Work through the ones that need one**
@@ -128,9 +140,11 @@ or set its limits to 0.
   sheet until you press **Confirm address** or type the address yourself.
   About half of eviction leads need an address typed in (or picked from the
   landlord's other properties); Lead Desk then finds it on the map, looks up
-  the parcel and owner, and fills in the miles. An apartment or condo
-  address needs a unit number (or **Confirm address**) before a door hanger
-  goes there. Every date says what it is: Filed, Judgment or Writ for a
+  the parcel and owner, and fills in the miles. An address on a parcel with
+  more than one home (apartments, condos, townhouses, duplexes, a mobile or
+  manufactured home park, "multiple residence", a house with an additional
+  residence) needs a unit number (or **Confirm address**) before a door
+  hanger goes there. Every date says what it is: Filed, Judgment or Writ for a
   case that has been read, Hearing for one that hasn't, Opened for a code
   case. The list comes from the server a page (100 leads) at a time, so it
   stays quick however many leads build up, and on a phone each lead is a
@@ -144,8 +158,11 @@ or set its limits to 0.
   (whoever is there), a phone call to the owner about this one job, and a
   standing-rate pitch to the landlord or property manager. So the methods
   can be compared fairly, a round only uses leads that every ticked method
-  can work (door hangers need a property address, and a unit number or a
-  confirmed address at an apartment or condo complex), all of one landlord's
+  can work (door hangers need a property address that isn't an unconfirmed
+  guess, with a unit number or a confirmed address where the parcel has
+  more than one home; the phone call needs a phone number and the landlord
+  pitch a phone or email; **Include leads with no phone or email** deals
+  those too, when you will look the numbers up yourself), all of one landlord's
   leads go to the same method (now and in later rounds), and leads are dealt
   in small random blocks within each kind (address or not, eviction or code
   case) so each method gets the same mix and a similar spread of priority.
@@ -243,8 +260,9 @@ if the owner's mailing address is elsewhere (not on an eviction, where the
 owner is the landlord and nearly always has an office elsewhere, so it would
 add the same to every eviction), +10 for a company/trust owner, +10 if the
 owner has several leads, +15 if the latest court or city event (filing,
-judgment, writ; opening for a code case) is under a week old (+8 under two
-weeks). An upcoming hearing, or any date in the future, earns nothing.
+judgment, writ; opening for a code case) was 7 days ago or less (today
+counts as 0 days), +8 if 8 to 14 days ago. An upcoming hearing, or any date
+in the future, earns nothing.
 The list order puts the case stage first: every eviction with a writ
 (lockout) comes before every one with only a judgment, which comes before
 every other lead; priority orders the leads within each stage. The CSV/HTML
@@ -252,7 +270,8 @@ export, `leadgen list` and Assign leads use the same order.
 
 A lead becomes Old (stale) 30 days after its latest event, so an eviction
 filed weeks ago that has just had a writ stays fresh, and an Old case that
-gets a new judgment or writ is New again. A phone lookup that fails for a
+gets a new judgment or writ is New again. A case with a court date today or
+later is never marked Old. A phone lookup that fails for a
 passing reason (connection dropped, timeout, busy server) is tried twice
 more within the run, a few seconds apart; once a service has failed every
 try for two companies it is treated as down for the rest of that run. The
@@ -268,8 +287,12 @@ leadgen daily
 
 The same daily check Lead Desk runs: new evictions from the court calendar,
 eviction notices from the case pages, owners and landlords from the
-assessor, landlord phones, new Tucson code cases. It prints a one-line
-summary. `leadgen schedule install` runs it every morning (`--hour 7` for a
+assessor, landlord phones, new Tucson code cases. It prints one line, in
+Arizona time ("Oct 3, 2026 6:12 AM 4 new evictions, ..."), naming any site
+that couldn't be reached; `leadgen --debug daily` adds the full summary with
+the error details. It exits with code 1 when a whole source failed (the
+court calendar or the City's site), so a scheduler or GitHub Actions shows
+the run as failed; the same-day retry is still set. `leadgen schedule install` runs it every morning (`--hour 7` for a
 different time, `leadgen schedule remove` to stop).
 
 When a whole source fails (the court calendar or the City's site can't be
@@ -318,6 +341,10 @@ leadgen fetch --source pima_jp_calendar --since 2026-10-03 --until 2026-11-02
 leadgen fetch --source pima_jp_calendar --file data/inbox/calendar.html
 ```
 
+The calendar only lists upcoming hearings. Asked for past dates, the command
+says so and points to the records request or case links instead of printing
+"0 new".
+
 Add or re-check eviction cases by their case page links:
 
 ```sh
@@ -348,8 +375,9 @@ leadgen status 42 contacted --notes "left voicemail with property manager"
 leadgen status 42 won
 ```
 
-Statuses: `new, contacted, quoted, won, lost, skip, stale`. Re-running a fetch
-never overwrites a status or notes.
+Statuses: `new, contacted, responded, quoted, won, lost, skip, stale`
+(Lead Desk sets `responded` when a lead answers; `stale` is shown as Old).
+Re-running a fetch never overwrites a status or notes.
 
 ### Other commands
 
@@ -375,6 +403,39 @@ The log goes to `data/daily.log`.
 
 Don't run it as a scheduled GitHub Action that uploads results: this
 repository is public and the leads contain names and addresses.
+
+## How Lead Desk reads a court case
+
+Each document and calendar event on a Justice Court case page is read as
+one kind of paper:
+
+| Paper | Means |
+|---|---|
+| Judgment for the plaintiff (the landlord), default judgment, "Judgment for Plaintiff" as a hearing's result, or the parties table's "Judgment For: Plaintiff" | stage **judgment** |
+| Writ of restitution (issued or served) | stage **writ** (the lockout) |
+| Judgment set aside or vacated by the court | the judgment no longer counts |
+| Writ quashed or recalled | the writ no longer counts |
+| Dismissal (stipulated, voluntary or by order), judgment for the defendant | case ended: **dismissed** |
+| Satisfaction of judgment (the tenant paid; a partial one doesn't count) | case ended: **satisfied** |
+
+A motion, application, request or petition counts only once the court
+grants it ("Order Granting Motion to Set Aside Judgment"); anything denied
+or withdrawn counts for nothing. A writ of garnishment or execution, or a
+judgment debtor exam, is about collecting money, not a lockout. A paper or
+event dated after today (an upcoming hearing) never sets a stage.
+
+The papers are read in date order and the latest one that decides
+something wins: a dismissal or satisfaction after a judgment ends the case,
+and a writ after a dismissal (a payment plan the tenant missed) brings it
+back. Then the court's status: Dismissed ends a case with no writ; Closed or
+Disposed ends a case with no judgment for the landlord and no writ (a case
+the court disposed of by deciding for the landlord stays a lead, as the
+tenant has to move out). An ended case leaves the default view; while it
+is under 60 days old it is still read once a week in case a writ follows.
+
+When these rules change, Lead Desk works out every stored case's stage again
+from the papers it saved, the first time it starts (SQLite or Postgres),
+and reads those cases again first on the next check.
 
 ## How de-duplication works
 

@@ -353,3 +353,56 @@ def test_scheduled_daily_does_nothing_once_today_has_run(tmp_path, capsys):
     conn.commit()
     cli.main(["--db", str(path), "daily", "--if-due"])
     assert "nothing to do" in capsys.readouterr().out
+
+
+def test_daily_command_fails_plainly_when_a_whole_source_is_down(tmp_path, monkeypatch, capsys):
+    import pytest
+    import requests
+
+    from leadgen import cli
+
+    url = "https://www.jp.pima.gov/CaseSearch/Calendar.aspx"
+
+    class Unreachable:
+        def fetch(self, *a, **kw):
+            err = requests.exceptions.ProxyError(f"HTTPSConnectionPool(host='www.jp.pima.gov'): {url}")
+            err.request = requests.Request("GET", url)
+            raise err
+
+    real = daily.run_daily
+
+    def offline(conn, **kw):
+        return real(
+            conn,
+            code_cases=Unreachable(),
+            calendar=Unreachable(),
+            case_client=FakeCases(),
+            parcel_client=FakeParcels([]),
+            geocoder=NoGeocode(),
+            providers=[],
+            log=kw["log"],
+        )
+
+    monkeypatch.setattr(daily, "run_daily", offline)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--db", str(tmp_path / "l.db"), "daily"])
+    assert stop.value.code == 1
+    out = capsys.readouterr().out
+    assert "the Pima County Justice Court website couldn't be reached" in out
+    assert "trying again at" in out
+    for technical in ("ProxyError", "Error:", "http", "HTTPSConnectionPool", "{"):
+        assert technical not in out, technical
+    # The full details are there for --debug.
+    with pytest.raises(SystemExit):
+        cli.main(["--debug", "--db", str(tmp_path / "l2.db"), "daily"])
+    assert "ProxyError" in capsys.readouterr().out
+
+
+def test_daily_line_is_in_arizona_time(capsys):
+    from datetime import timezone
+
+    # 21:57 UTC is 2:57 PM in Tucson.
+    daily.main_log({"retry_at": "2026-10-03T15:27"}, now=datetime(2026, 10, 3, 21, 57, tzinfo=timezone.utc))
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("Oct 3, 2026 2:57 PM ") and line.endswith("trying again at 3:27 PM")
+    assert "\n" not in line  # one line, no JSON

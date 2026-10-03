@@ -14,10 +14,11 @@ import sys
 import threading
 import traceback
 import webbrowser
+from contextlib import contextmanager
 from datetime import timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Literal, Optional
 
 from . import daily, db, leadlist, outreach
 from .contacts import clean_email, clean_phone, import_contacts
@@ -97,6 +98,7 @@ class App(JobRunner):
         self.lock = threading.Lock()
         self.jobs = {}
         self.job_lock = threading.Lock()
+        self._request = threading.local()
         with self.conn() as conn:
             outreach.retire_channels(conn)
             if not db.get_settings(conn).get("followed_tagged"):
@@ -106,7 +108,27 @@ class App(JobRunner):
             fix_inferred_addresses(conn)
 
     def conn(self) -> Conn:
+        """A database connection for a ``with`` block, closed when it ends.
+        Inside a request (``request_connection``) every block shares the
+        request's one connection, which closes when the request ends."""
+        shared = getattr(self._request, "conn", None)
+        if shared is not None:
+            return _Borrowed(shared)
         return db.connect(self.db_path)
+
+    @contextmanager
+    def request_connection(self) -> Iterator[None]:
+        """One connection for everything one request does (routes.handle)."""
+        if getattr(self._request, "conn", None) is not None:
+            yield
+            return
+        conn = db.connect(self.db_path)
+        self._request.conn = conn
+        try:
+            yield
+        finally:
+            self._request.conn = None
+            conn.close()
 
     # ---- reads -------------------------------------------------------------
 
@@ -416,7 +438,15 @@ class App(JobRunner):
             raise ValueError("A round can be evictions only, City code cases only, or both.")
         with self.conn() as conn:
             leads = leadlist.lead_dicts(conn, self.settings(conn))
-            return outreach.assign(conn, leads, count, channels, lead_type=kind, preview=body.get("preview") is True)
+            return outreach.assign(
+                conn,
+                leads,
+                count,
+                channels,
+                lead_type=kind,
+                preview=body.get("preview") is True,
+                include_unreachable=body.get("include_unreachable") is True,
+            )
 
     def split_preview(self, conn: Conn, settings: dict) -> dict:
         """What Assign leads can hand out with each choice of methods."""
@@ -514,16 +544,18 @@ class App(JobRunner):
             if source == "csv_import" or Path(filename or "").suffix.lower() == ".csv":
                 # A records-request file: rows for court cases Lead Desk already
                 # has fill in their property address instead of adding a lead.
-                filled = fill_case_addresses(conn, leads)
-                counts["addresses_filled"] = len(filled)
-                if filled:
+                matched = fill_case_addresses(conn, leads)
+                filled = sum(1 for how in matched.values() if how == "filled")
+                counts["addresses_filled"] = filled
+                # Matched, but the address Steve typed or confirmed (or the
+                # court's) was kept: not counted as filled.
+                counts["addresses_kept"] = len(matched) - filled
+                if matched:
                     # A records request came in: the next one asks from today on.
-                    db.put_settings(
-                        conn, {"last_records_import": {"date": az_today().isoformat(), "filled": len(filled)}}
-                    )
+                    db.put_settings(conn, {"last_records_import": {"date": az_today().isoformat(), "filled": filled}})
                     leadlist.record_address_share(conn, self.settings(conn))
-                leads = [l for l in leads if l.source_id not in filled]
-                counts["imported"] -= len(filled)
+                leads = [l for l in leads if l.source_id not in matched]
+                counts["imported"] -= len(matched)
             for lead in leads:
                 counts[db.upsert(conn, lead)] += 1
                 conn.execute(
@@ -562,12 +594,34 @@ class App(JobRunner):
         ]
 
 
-def fill_case_addresses(conn: Conn, leads: list[Lead]) -> set[str]:
+class _Borrowed:
+    """The request's shared connection, for one ``with`` block: the block's
+    end commits (or rolls back after an error) but leaves it open."""
+
+    def __init__(self, conn: Conn) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def __enter__(self) -> Conn:
+        return self._conn
+
+    def __exit__(self, exc_type: Any, *exc: Any) -> Literal[False]:
+        if exc_type is None:
+            self._conn.commit()
+        elif hasattr(self._conn, "rollback"):
+            self._conn.rollback()
+        return False
+
+
+def fill_case_addresses(conn: Conn, leads: list[Lead]) -> dict[str, str]:
     """Property addresses from an imported file (a Justice Court records
     request) for eviction cases already in Lead Desk, matched on the case
-    number. An address typed or confirmed on the lead is kept; a guess from
-    the landlord's parcels is replaced. Returns the case numbers matched."""
-    matched = set()
+    number. An address typed or confirmed on the lead (or one the court
+    gave) is kept; a guess from the landlord's parcels is replaced. Returns
+    ``{case number: "filled" | "kept"}`` for every case matched."""
+    matched: dict[str, str] = {}
     for lead in leads:
         if not (lead.source_id and lead.address):
             continue
@@ -578,11 +632,12 @@ def fill_case_addresses(conn: Conn, leads: list[Lead]) -> set[str]:
         ).fetchone()
         if not row:
             continue
-        matched.add(lead.source_id)
-        if row["address"] and row["address_source"] not in (None, LANDLORD_SOURCE):
-            continue  # typed or confirmed by Steve: his wins
-        if row["address"] and row["address_source"] is None:
-            continue  # already had one from the court
+        if row["address"] and row["address_source"] != LANDLORD_SOURCE:
+            # Typed or confirmed by Steve (his wins), imported before, or
+            # already had one from the court.
+            matched.setdefault(lead.source_id, "kept")
+            continue
+        matched[lead.source_id] = "filled"
         fields = _address_fields(lead.address.strip(), None)
         fields["address_source"] = "import"
         if lead.zip:
