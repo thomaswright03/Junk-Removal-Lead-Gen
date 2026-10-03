@@ -11,11 +11,12 @@ that address, so exports show each property once.
 
 import json
 import sqlite3
-from datetime import date, datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 
 from . import pg
 from .normalize import extract_zip, normalize_address
+from .util import az_today, now_iso
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
@@ -110,11 +111,7 @@ _REFRESHABLE = (
 )
 
 
-def _now():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-_READY_URLS = set()  # Postgres databases whose schema was checked by this process
+_READY_URLS: set = set()  # Postgres databases whose schema was checked by this process
 
 
 def connect(path):
@@ -157,7 +154,7 @@ def _migrate(conn):
 
 def upsert(conn, lead):
     """Insert or refresh one Lead. Returns ``"new"``, ``"updated"``."""
-    now = _now()
+    now = now_iso()
     d = lead.to_dict()
     d["address_norm"] = normalize_address(d["address"])
     if not d["zip"]:
@@ -231,7 +228,7 @@ def _link_duplicate(conn, row_id, address_norm):
 
 def mark_stale(conn, days, today=None):
     """Move ``new`` leads whose event is older than ``days`` to ``stale``."""
-    today = today or date.today()
+    today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
         "UPDATE leads SET status = 'stale' WHERE status = 'new' "

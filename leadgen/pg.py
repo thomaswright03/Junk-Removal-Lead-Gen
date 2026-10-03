@@ -173,12 +173,6 @@ class Connection:
         lastrowid = rows[0][0] if returning and rows else None
         return Cursor(cols, [] if returning else rows, cur.rowcount, lastrowid)
 
-    def executemany(self, sql, seq):
-        total = 0
-        for params in seq:
-            total += max(self.execute(sql, params).rowcount, 0)
-        return Cursor(rowcount=total)
-
     def executescript(self, script):
         for stmt in (s.strip() for s in script.split(";")):
             if stmt:
@@ -186,9 +180,6 @@ class Connection:
         return Cursor()
 
     def commit(self):
-        pass
-
-    def rollback(self):
         pass
 
     def close(self):

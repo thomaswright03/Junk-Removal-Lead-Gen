@@ -15,9 +15,10 @@ quoted, won and revenue) is credited to its channel.
 
 import math
 import random
-from datetime import date, datetime, timezone
+from datetime import date
 
 from .tucson_codes import code_of
+from .util import az_today, now_iso
 
 CHANNELS = {
     "door_hanger": "Door hanger at property",
@@ -82,7 +83,7 @@ def merged_settings(stored):
 
 def score(lead, owner_lead_counts=None, today=None):
     """0-100ish. ``lead`` is a dict/row with the leads table's columns."""
-    today = today or date.today()
+    today = today or az_today()
     points = 0
     if lead["lead_type"] == "eviction":
         points += 35
@@ -165,7 +166,7 @@ def assign(conn, leads, count, channels, seed=None):
     pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
     pool.sort(key=lambda l: l["score"], reverse=True)
     counts = {c: 0 for c in channels}
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    now = now_iso()
     picked = 0
     for lead in pool:
         if picked >= count:

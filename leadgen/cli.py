@@ -10,13 +10,14 @@ Typical daily run::
 
 import argparse
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 from . import config, db, export
 from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
+from .util import az_today
 
 
 def _connect(args):
@@ -25,8 +26,8 @@ def _connect(args):
 
 def cmd_fetch(args, conn=None):
     conn = conn or _connect(args)
-    until = args.until or date.today().isoformat()
-    since = args.since or (date.today() - timedelta(days=args.days)).isoformat()
+    until = args.until or az_today().isoformat()
+    since = args.since or (az_today() - timedelta(days=args.days)).isoformat()
     names = args.source or list(AUTOMATIC)
     total = {"new": 0, "updated": 0}
     for name in names:
@@ -94,7 +95,7 @@ def cmd_contacts(args):
         text = Path(args.file).read_text(encoding="utf-8-sig", errors="replace")
         print(contacts.import_contacts(conn, text))
     else:
-        out = Path(args.file or f"exports/skiptrace-{date.today().isoformat()}.csv")
+        out = Path(args.file or f"exports/skiptrace-{az_today().isoformat()}.csv")
         out.parent.mkdir(parents=True, exist_ok=True)
         leads = [l for l in App(args.db).leads(conn)
                  if l["status"] not in ("stale", "skip", "lost", "won")]
@@ -155,7 +156,7 @@ def cmd_age(args, conn=None):
 def _rows_for_export(args, conn):
     since = None
     if not args.include_stale:
-        since = (date.today() - timedelta(days=args.stale_days)).isoformat()
+        since = (az_today() - timedelta(days=args.stale_days)).isoformat()
     statuses = args.status or ([s for s in db.STATUSES if s not in ("stale", "skip", "lost")]
                                if not args.include_stale else None)
     return db.query(
@@ -171,7 +172,7 @@ def _rows_for_export(args, conn):
 def cmd_export(args, conn=None):
     conn = conn or _connect(args)
     rows = _rows_for_export(args, conn)
-    out = Path(args.out or f"exports/leads-{date.today().isoformat()}.{args.format}")
+    out = Path(args.out or f"exports/leads-{az_today().isoformat()}.{args.format}")
     out.parent.mkdir(parents=True, exist_ok=True)
     if args.format == "csv":
         export.write_csv(rows, out)

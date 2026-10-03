@@ -32,3 +32,19 @@ entrypoint = "leadgen.wsgi:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+
+[tool.ruff.lint]
+# pycodestyle errors/warnings, pyflakes (unused imports and variables, undefined
+# names), import order, and a few bug-prone patterns.
+select = ["E", "W", "F", "I", "B"]
+ignore = ["E731", "E741", "B008"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["leadgen"]
+ignore_missing_imports = true
+warn_unused_ignores = true

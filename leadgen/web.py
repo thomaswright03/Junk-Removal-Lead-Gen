@@ -12,20 +12,21 @@ import threading
 import time
 import traceback
 import webbrowser
-from datetime import date, datetime, timedelta, timezone
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import daily, db, outreach
 from .contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
-from .enrich import ParcelClient, enrich, owner_fields
 from .daily import run_daily
+from .enrich import ParcelClient, enrich, owner_fields
 from .geocode import CensusGeocoder
 from .lookup import GoogleBudget, find_contacts, providers_from
 from .sources import SOURCES
 from .sources.pima_jp_case import add_cases, is_case_page, parse_case_html, update_cases
 from .tucson_codes import CODE_LABELS, code_of
+from .util import az_today, now_iso
 
 STATIC = Path(__file__).parent / "static"
 
@@ -45,10 +46,6 @@ LEAD_VIEWS = {
 }
 EDITABLE = {"status", "channel", "notes", "quote_amount", "job_revenue", "responded_at",
             "owner_phone", "owner_email"}
-
-
-def _now():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 class App:
@@ -144,7 +141,7 @@ class App:
                 "results": outreach.results(conn),
                 "statuses": db.STATUSES,
                 "stale_days": self.stale_days,
-                "today": date.today().isoformat(),
+                "today": az_today().isoformat(),
             }
 
     # ---- writes ------------------------------------------------------------
@@ -170,7 +167,7 @@ class App:
         if "owner_phone" in fields or "owner_email" in fields:
             fields["contact_source"] = "manual"
         if fields.get("status") in ("responded", "quoted", "won") and "responded_at" not in fields:
-            fields["responded_at"] = _now()
+            fields["responded_at"] = now_iso()
         with self.conn() as conn:
             row = conn.execute("SELECT * FROM leads WHERE id = ?", (body["id"],)).fetchone()
             if not row:
@@ -178,7 +175,7 @@ class App:
             if fields.get("responded_at") and row["responded_at"]:
                 fields.pop("responded_at")  # keep the first response time
             if "channel" in fields and fields["channel"] and not row["assigned_at"]:
-                fields["assigned_at"] = _now()
+                fields["assigned_at"] = now_iso()
             if fields:
                 sets = ", ".join(f"{k} = ?" for k in fields)
                 conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), body["id"]])
@@ -203,11 +200,11 @@ class App:
                 conn.execute(
                     "INSERT INTO touches (lead_id, channel, kind, cost, notes, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (lead_id, channel, kind, cost, body.get("notes"), _now()),
+                    (lead_id, channel, kind, cost, body.get("notes"), now_iso()),
                 )
                 updates = {}
                 if not row["channel"]:
-                    updates.update(channel=channel, assigned_at=_now())
+                    updates.update(channel=channel, assigned_at=now_iso())
                 if row["status"] == "new":
                     updates["status"] = "contacted"
                 if updates:
@@ -364,10 +361,10 @@ class App:
             fh.write(data)
             path = fh.name
         try:
-            since = (date.today() - timedelta(days=365)).isoformat()
+            since = (az_today() - timedelta(days=365)).isoformat()
             counts = {"new": 0, "updated": 0}
             with self.lock, self.conn() as conn:
-                for lead in SOURCES[source]().fetch(since, date.today().isoformat(),
+                for lead in SOURCES[source]().fetch(since, az_today().isoformat(),
                                                    paths=[path], assume_eviction=False,
                                                    lead_type=lead_type):
                     counts[db.upsert(conn, lead)] += 1

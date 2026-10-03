@@ -32,7 +32,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..config import USER_AGENT
-
 from ..models import Lead
 from .base import Source
 
@@ -103,7 +102,7 @@ def parse_calendar_html(html, assume_eviction=False):
             if not assume_eviction and not EVICTION_RE.search(row_text):
                 continue
 
-            def col(key):
+            def col(key, header=header, cells=cells):
                 i = header.get(key)
                 return cells[i] if i is not None and i < len(cells) else None
 

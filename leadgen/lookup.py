@@ -25,8 +25,9 @@ Providers, tried in order:
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from html.parser import HTMLParser
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -34,7 +35,7 @@ import requests
 
 from . import config, db
 from .contacts import clean_email, clean_phone
-from .enrich import is_entity
+from .util import ARIZONA, is_multifamily, utc_now
 
 # Public Overpass servers, tried in order when one refuses or is overloaded.
 OVERPASS_URLS = (
@@ -49,9 +50,6 @@ GOOGLE_MAX_AGE_DAYS = 30
 GOOGLE_MONTHLY_LIMIT = 1000
 # Most Google searches in one day (Thomas's cap, October 2026).
 GOOGLE_DAILY_LIMIT = 30
-# Arizona keeps Mountain Standard Time all year, so days and months turn over
-# at local midnight.
-ARIZONA = timezone(timedelta(hours=-7))
 TUCSON = (32.2226, -110.9747)
 
 _NAME_NOISE = {
@@ -62,11 +60,11 @@ _NAME_NOISE = {
 
 @dataclass
 class Contact:
-    phone: str = None
-    email: str = None
-    website: str = None
-    source: str = None
-    matched_name: str = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    source: Optional[str] = None
+    matched_name: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
     def empty(self):
@@ -85,11 +83,6 @@ def names_match(a, b):
         return False
     small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
     return len(small & big) / len(small) >= 0.6
-
-
-def is_multifamily(use):
-    u = (use or "").upper()
-    return any(k in u for k in ("APART", "MULTI", "MFR", "CONDO", "TOWNHOUSE", "MOBILE HOME PARK"))
 
 
 _BUSINESS_WORDS = {
@@ -234,7 +227,7 @@ class GoogleBudget:
         self.daily = daily
 
     def _usage(self, now=None):
-        local = (now or _now()).astimezone(ARIZONA)
+        local = (now or utc_now()).astimezone(ARIZONA)
         month, day = local.strftime("%Y-%m"), local.strftime("%Y-%m-%d")
         usage = db.get_settings(self.conn).get(self.KEY) or {}
         count = usage.get("count", 0) if usage.get("month") == month else 0
@@ -426,10 +419,6 @@ def _reach(c):
     return (bool(c.phone), bool(c.email), bool(c.website))
 
 
-def _now():
-    return datetime.now(timezone.utc).replace(microsecond=0)
-
-
 def providers_from(settings=None, google_key=None, conn=None):
     """OpenStreetMap, plus Google when a key is set. With ``conn``, Google
     searches are counted against the daily and monthly limits in settings."""
@@ -461,7 +450,7 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
     replaced. Returns counts.
     """
     scanner = scanner if scanner is not None else WebsiteScanner()
-    stale_google = (_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
+    stale_google = (utc_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
     due = "" if refresh else (
         "AND (contact_checked_at IS NULL "
         "OR (contact_source LIKE 'google%' AND contact_checked_at < ?))")
@@ -521,7 +510,7 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
                     contact.email = contact.email or w.email
                     contact.source = f"{contact.source}+website"
             done[key] = (contact, failed)
-        now = _now().isoformat()
+        now = utc_now().isoformat()
         if failed and not (contact and contact.phone):
             continue  # a provider was down or over its limit: try again next run
         if contact and not contact.empty():

@@ -4,8 +4,7 @@ import requests
 
 from leadgen import db
 from leadgen.sources.pima_jp_calendar import parse_calendar_html
-from leadgen.sources.pima_jp_case import (
-    add_cases, case_id, parse_case_html, split_case_inputs, update_cases)
+from leadgen.sources.pima_jp_case import add_cases, case_id, parse_case_html, split_case_inputs, update_cases
 from leadgen.web import App
 
 FIX = Path(__file__).parent / "fixtures"

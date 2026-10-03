@@ -1,7 +1,14 @@
 from leadgen import db
 from leadgen.contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
-from leadgen.lookup import (Contact, find_contacts, lookup_targets, names_match, pick_osm,
-                            scan_html, split_owner)
+from leadgen.lookup import (
+    Contact,
+    find_contacts,
+    lookup_targets,
+    names_match,
+    pick_osm,
+    scan_html,
+    split_owner,
+)
 from leadgen.models import Lead
 from leadgen.web import App
 

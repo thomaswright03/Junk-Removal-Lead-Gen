@@ -4,7 +4,12 @@ from pathlib import Path
 from leadgen import daily, db, schedule
 from leadgen.enrich import enrich_landlords, landlord_name, landlord_property
 from leadgen.lookup import Contact
-from leadgen.sources.pima_jp_calendar import CalendarClient, PimaJpCalendar, has_page_link, parse_calendar_html
+from leadgen.sources.pima_jp_calendar import (
+    CalendarClient,
+    PimaJpCalendar,
+    has_page_link,
+    parse_calendar_html,
+)
 from leadgen.sources.pima_jp_case import case_id, parse_case_html
 
 FIX = Path(__file__).parent / "fixtures"

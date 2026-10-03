@@ -10,19 +10,18 @@ that turn into clean-outs. Coverage is City of Tucson only; unincorporated Pima 
 the other towns are not in this layer.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import requests
 
 from .. import config
 from ..models import Lead
 from ..tucson_codes import code_of
+from ..util import ARIZONA
 from .base import Source
 
 LAYER_URL = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PermitsCode/MapServer/103"
 PAGE_SIZE = 1000
-# Arizona does not observe daylight saving time.
-ARIZONA = timezone(timedelta(hours=-7))
 
 # Inspectors start DESCRIPTION with a violation code ("WEEDS / overgrown
 # weeds in front yard"). These are the codes that mean stuff has to be hauled

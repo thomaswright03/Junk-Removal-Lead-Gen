@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..models import Lead
+from ..util import pick
 from .base import Source
 
 ALIASES = {
@@ -28,15 +29,6 @@ ALIASES = {
 }
 
 
-def _pick(row, keys):
-    lowered = {k.strip().lower(): v for k, v in row.items() if k}
-    for k in keys:
-        v = lowered.get(k)
-        if v not in (None, ""):
-            return v.strip()
-    return None
-
-
 def _iso_date(value):
     if not value:
         return None
@@ -51,7 +43,7 @@ def _iso_date(value):
 def read_csv(path, source_name="csv_import", default_type="manual"):
     with open(path, newline="", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
-            fields = {k: _pick(row, a) for k, a in ALIASES.items()}
+            fields = {k: pick(row, a) for k, a in ALIASES.items()}
             if not fields["address"] and not fields["source_id"]:
                 continue
             source_id = fields["source_id"] or hashlib.sha1(

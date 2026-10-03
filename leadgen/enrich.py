@@ -11,12 +11,12 @@ address are matched on the parcel's site address.
 """
 
 import re
-from datetime import datetime, timezone
 
 import requests
 
 from . import config
 from .normalize import normalize_address
+from .util import is_residential, now_iso
 
 PARCEL_LAYER = (
     "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17"
@@ -115,9 +115,6 @@ class ParcelClient:
         return self.query(f"ADDRESSEE LIKE {_sql_str(name + '%')}", limit=limit)
 
 
-_MULTI_RE = re.compile(r"APART|MULTI|MFR|CONDO|TOWNHOUSE|MOBILE HOME PARK|RESID")
-
-
 def landlord_name(plaintiff):
     """First plaintiff as the assessor writes owner names, if it's a company."""
     first = (plaintiff or "").split(";")[0]
@@ -140,7 +137,7 @@ def landlord_property(client, plaintiff):
     rows = client.by_owner(name, limit=200)
     if not rows:
         return None, None
-    homes = [r for r in rows if _MULTI_RE.search((r.get("USE_DESC") or r.get("PPT_DESC") or "").upper())
+    homes = [r for r in rows if is_residential(r.get("USE_DESC") or r.get("PPT_DESC"))
              and (r.get("SITE_ADDRESS") or "").strip()]
     sites = {normalize_address(r["SITE_ADDRESS"]).split(" UNIT ")[0] for r in homes}
     return rows[0], (homes[0] if len(sites) == 1 else None)
@@ -154,7 +151,7 @@ def enrich_landlords(conn, client=None, limit=None):
            "AND enriched_at IS NULL ORDER BY id")
     if limit:
         sql += f" LIMIT {int(limit)}"
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    now = now_iso()
     counts = {"found": 0, "with_property": 0, "not_found": 0}
     for r in conn.execute(sql).fetchall():
         try:
@@ -195,7 +192,7 @@ def enrich(conn, client=None, limit=None, refresh=False):
     if limit:
         sql += f" LIMIT {int(limit)}"
     rows = conn.execute(sql).fetchall()
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    now = now_iso()
     by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
     counts = {"found": landlords["found"], "not_found": landlords["not_found"],
               "landlord_property": landlords["with_property"]}

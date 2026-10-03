@@ -11,6 +11,7 @@ import io
 import re
 
 from .normalize import normalize_address
+from .util import pick
 
 _PHONE_KEYS = ("phone", "phone 1", "phone1", "mobile", "cell", "mobile phone", "cell phone",
                "primary phone", "phone number", "wireless 1", "landline 1", "owner phone")
@@ -36,14 +37,6 @@ def clean_email(value):
     return value if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value) else None
 
 
-def _pick(row, keys):
-    lowered = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
-    for k in keys:
-        if lowered.get(k):
-            return lowered[k]
-    return None
-
-
 def import_contacts(conn, text):
     """Fill owner_phone / owner_email from a CSV. Matches each row to leads by
     lead id, parcel, property address, then owner name. Returns counts."""
@@ -63,12 +56,12 @@ def import_contacts(conn, text):
                 by_name.setdefault(n.upper().strip(), []).append(l["id"])
     counts = {"rows": len(rows), "matched": 0, "updated": 0, "no_match": 0}
     for row in rows:
-        phone = clean_phone(_pick(row, _PHONE_KEYS))
-        email = clean_email(_pick(row, _EMAIL_KEYS))
-        ids = (by_id.get(_pick(row, _ID_KEYS) or "")
-               or by_parcel.get((_pick(row, _PARCEL_KEYS) or "").upper())
-               or by_addr.get(normalize_address(_pick(row, _ADDRESS_KEYS)))
-               or by_name.get((_pick(row, _NAME_KEYS) or "").upper().strip()))
+        phone = clean_phone(pick(row, _PHONE_KEYS))
+        email = clean_email(pick(row, _EMAIL_KEYS))
+        ids = (by_id.get(pick(row, _ID_KEYS) or "")
+               or by_parcel.get((pick(row, _PARCEL_KEYS) or "").upper())
+               or by_addr.get(normalize_address(pick(row, _ADDRESS_KEYS)))
+               or by_name.get((pick(row, _NAME_KEYS) or "").upper().strip()))
         if not ids:
             counts["no_match"] += 1
             continue

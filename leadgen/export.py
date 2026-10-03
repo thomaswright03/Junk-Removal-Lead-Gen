@@ -4,8 +4,9 @@ page Steve can open in a browser and filter."""
 import csv
 import html
 import json
-from datetime import date
 from urllib.parse import quote_plus
+
+from .util import az_today
 
 COLUMNS = (
     "id", "lead_type", "event_date", "status", "address", "city", "zip",
@@ -98,7 +99,7 @@ def write_html(rows, path, today=None):
         f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in vals
     )
     page = (
-        _PAGE.replace("__DATE__", (today or date.today()).isoformat())
+        _PAGE.replace("__DATE__", (today or az_today()).isoformat())
         .replace("__TYPES__", opts(types))
         .replace("__STATUSES__", opts(statuses))
         # Keep "</script>" in data from closing the script tag.

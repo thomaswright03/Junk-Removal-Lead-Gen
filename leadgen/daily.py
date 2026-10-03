@@ -18,7 +18,7 @@ installs a daily job on this computer so it runs even when Lead Desk isn't.
 
 import json
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from . import db
 from .enrich import ParcelClient, enrich
@@ -28,6 +28,7 @@ from .outreach import merged_settings
 from .sources import SOURCES
 from .sources.pima_jp_calendar import CalendarClient
 from .sources.pima_jp_case import update_cases
+from .util import az_now, az_today, now_iso
 
 CALENDAR_DAYS_AHEAD = 30
 CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait for tomorrow
@@ -76,8 +77,8 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
               case_limit=None, days_ahead=CALENDAR_DAYS_AHEAD, code_cases=None, log=print):
     """Run every step and return a summary dict. Each step's failure is logged
     and recorded, and the next step still runs."""
-    today = today or date.today()
-    summary = {"started_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat()}
+    today = today or az_today()
+    summary = {"started_at": now_iso()}
     settings = merged_settings(db.get_settings(conn))
 
     since = (today - timedelta(days=30)).isoformat()
@@ -109,7 +110,7 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
     _step(summary, "contacts", contacts, log)
 
     _step(summary, "stale", lambda: db.mark_stale(conn, stale_days, today=today), log)
-    summary["finished_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    summary["finished_at"] = now_iso()
     db.put_settings(conn, {"last_daily_run": today.isoformat(), "last_daily_summary": summary})
     conn.commit()
     return summary
@@ -117,7 +118,7 @@ def run_daily(conn, stale_days=30, today=None, calendar=None, case_client=None,
 
 def due(conn, now=None, hour=6):
     """True when today's run hasn't happened yet and it's past ``hour`` local time."""
-    now = now or datetime.now()
+    now = now or az_now().replace(tzinfo=None)
     last = db.get_settings(conn).get("last_daily_run")
     return now.hour >= hour and last != now.date().isoformat()
 
