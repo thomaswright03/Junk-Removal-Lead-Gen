@@ -57,8 +57,13 @@ a separate box.
 **Stopping everything (kill switch).** Tick **Pause Lead Desk** in Settings,
 or set the environment variable `LEADDESK_PAUSED=1` (on Vercel, and as a
 repository variable for the GitHub Actions daily check). While paused, the
-daily check, court case page reads and every phone/email lookup, Google
-included, make no requests at all; the buttons say Lead Desk is paused.
+daily check, court case page reads, City code case fetches, owner (county
+assessor) and map lookups, and every phone/email lookup, Google included,
+make no requests at all, in Lead Desk and from the command line (`leadgen
+fetch`, `enrich`, `geocode`, `run`, `cases`, `contacts find` stop with the
+paused message; fetching from saved files with `--file` still works); the
+buttons say Lead Desk is paused. Pause takes effect the moment it is ticked,
+without "Save settings".
 Pausing also stops a check or job that is already running, before its next
 request to the court or a lookup service, and its result says it was paused.
 Leads and notes stay as they are. To stop only Google, untick **Use Google
@@ -268,7 +273,7 @@ already listed, it is linked to the first one and hidden from exports
 | `DATABASE_URL` | Postgres (Neon) database; when set, used instead of the SQLite file | unset |
 | `POSTGRES_URL` | Read when `DATABASE_URL` isn't set (some Vercel integrations name it this) | unset |
 | `LEADDESK_PASSWORD` | Password for Lead Desk online (required there) | unset |
-| `LEADDESK_PAUSED` | `1` pauses the daily check, case page reads and all lookups | unset (running) |
+| `LEADDESK_PAUSED` | `1` pauses the daily check, case page reads, code case fetches and all lookups | unset (running) |
 | `GOOGLE_PLACES_API_KEY` | Google Places key for phone lookups; overrides the key in Settings | unset |
 | `LEADDESK_GITHUB_TOKEN` | Online, lets "Check for new evictions" start the GitHub Actions check | unset |
 | `LEADDESK_GITHUB_REF` | Branch that check runs from | `main` |

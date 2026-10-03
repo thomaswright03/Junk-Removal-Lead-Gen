@@ -254,6 +254,73 @@ def test_pause_stops_the_daily_check_and_lookups(tmp_path, monkeypatch):
     assert body.get("paused")
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["fetch", "--source", "tucson_code_cases", "--days", "3"],
+        ["fetch"],
+        ["fetch", "--source", "pima_jp_calendar"],
+        ["enrich"],
+        ["geocode"],
+        ["run"],
+        ["cases", "update"],
+        ["contacts", "find"],
+    ],
+)
+def test_paused_commands_make_no_requests(tmp_path, monkeypatch, capsys, argv):
+    from leadgen import cli, sources
+
+    class Refuse:
+        def __getattr__(self, name):
+            raise AssertionError("contacted a website while paused")
+
+    monkeypatch.setenv("LEADDESK_PAUSED", "1")
+
+    def no_request(*a, **kw):
+        raise AssertionError("contacted a website while paused")
+
+    monkeypatch.setattr("requests.Session.request", no_request)
+    monkeypatch.setitem(sources.SOURCES, "tucson_code_cases", lambda: Refuse())
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--db", str(tmp_path / "l.db"), *argv])
+    assert "Lead Desk is paused" in str(e.value.code)
+
+
+def test_paused_fetch_from_saved_files_still_works(tmp_path, monkeypatch, capsys):
+    from leadgen import cli
+
+    monkeypatch.setenv("LEADDESK_PAUSED", "1")
+    csv = tmp_path / "leads.csv"
+    csv.write_text("address,date\n1 W TEST ST,2026-09-30\n")
+    cli.main(["--db", str(tmp_path / "l.db"), "fetch", "--source", "csv_import", "--file", str(csv)])
+    assert "1 new" in capsys.readouterr().out
+
+
+def test_paused_lead_desk_skips_owner_and_map_lookups(tmp_path, monkeypatch):
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    db.upsert(
+        conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30", None, in_pima=True, eviction_notice=True)
+    )
+    conn.commit()
+    app = App(path, parcel_client=NoNetwork(), geocoder=NoNetwork())
+    app.save_settings({"paused": True})
+    lead_id = app.state()["leads"][0]["id"]
+    r = app.update_lead({"id": lead_id, "fields": {"address": "1 W Test St"}})
+    assert "paused" in r["message"]
+    assert app.run_enrich({})["paused"]
+    with pytest.raises(ValueError, match="paused"):
+        app.owner_properties("EXAMPLE HOMES")
+
+
+def test_saving_nothing_is_refused(desk):
+    app, lead_id, _ = desk
+    status, body, _ = post(app, "/api/lead", {"id": lead_id})
+    assert status == 400 and body["error"] == "Nothing to save."
+    status, body, _ = post(app, "/api/lead", {"id": lead_id, "fields": {"not_a_field": 1}})
+    assert status == 400 and body["error"] == "Nothing to save."
+
+
 # ---- #8 background jobs ----------------------------------------------------------
 
 

@@ -24,11 +24,31 @@ def _connect(args):
     return db.connect(args.db)
 
 
+def _exit_if_paused(conn):
+    """The kill switch: a command that would contact another website stops
+    here, before any request, while Lead Desk is paused."""
+    from . import outreach
+
+    if is_paused(outreach.merged_settings(db.get_settings(conn))):
+        sys.exit(PAUSED_MESSAGE)
+
+
+def _uses_network(name, args):
+    """Whether fetching from this source contacts a website (saved files don't)."""
+    if name == "csv_import":
+        return False
+    if name in ("pima_jp_calendar", "pima_jp_case"):
+        return not args.file
+    return True
+
+
 def cmd_fetch(args, conn=None):
     conn = conn or _connect(args)
     until = args.until or az_today().isoformat()
     since = args.since or (az_today() - timedelta(days=args.days)).isoformat()
     names = args.source or list(AUTOMATIC)
+    if any(_uses_network(n, args) for n in names):
+        _exit_if_paused(conn)
     total = {"new": 0, "updated": 0}
     for name in names:
         source = SOURCES[name]()
@@ -47,6 +67,7 @@ def cmd_fetch(args, conn=None):
 
 def cmd_geocode(args, conn=None):
     conn = conn or _connect(args)
+    _exit_if_paused(conn)
     geocoder = CensusGeocoder()
     rows = db.needs_geocode(conn, limit=args.limit)
     ok = outside = failed = 0
@@ -69,6 +90,7 @@ def cmd_geocode(args, conn=None):
 
 def cmd_enrich(args, conn=None):
     conn = conn or _connect(args)
+    _exit_if_paused(conn)
     counts = enrich(conn, limit=getattr(args, "enrich_limit", None), refresh=getattr(args, "refresh", False))
     print(f"owners: {counts['found']} found, {counts['not_found']} not found")
 
@@ -80,9 +102,8 @@ def cmd_contacts(args):
 
     conn = _connect(args)
     if args.action == "find":
+        _exit_if_paused(conn)
         settings = outreach.merged_settings(db.get_settings(conn))
-        if is_paused(settings):
-            sys.exit(PAUSED_MESSAGE)
         providers = providers_from(settings, google_key=args.google_key, conn=conn)
         names = ", ".join(p.name for p in providers)
         print(f"looking up business contacts with: {names} (+ company websites)")
@@ -106,12 +127,10 @@ def cmd_contacts(args):
 
 
 def cmd_cases(args):
-    from . import outreach
     from .sources.pima_jp_case import add_cases, update_cases
 
     conn = _connect(args)
-    if is_paused(outreach.merged_settings(db.get_settings(conn))):
-        sys.exit(PAUSED_MESSAGE)
+    _exit_if_paused(conn)
     if args.action == "add":
         if not args.links:
             sys.exit("cases add needs one or more case links or IDs")

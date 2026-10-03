@@ -44,7 +44,7 @@ from .routes import ACTIONS, Handler, encode_body, handle
 from .sources.csv_import import read_csv_text
 from .sources.pima_jp_calendar import parse_calendar_html
 from .sources.pima_jp_case import is_case_page, parse_case_html
-from .util import az_today, decode_text, env_flag, is_paused, now_iso
+from .util import PAUSED_MESSAGE, az_today, decode_text, env_flag, is_paused, now_iso
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +193,8 @@ class App(JobRunner):
         if not isinstance(raw, dict):
             raise ValueError("Nothing to save: the request had no fields.")
         fields = {k: v for k, v in raw.items() if k in EDITABLE}
+        if not fields and not raw.get("confirm_address"):
+            raise ValueError("Nothing to save.")
         if "status" in fields and fields["status"] not in db.STATUSES:
             raise ValueError(f"Status must be one of: {', '.join(db.STATUSES)}.")
         if "channel" in fields and fields["channel"] not in (None, "", *outreach.CHANNELS):
@@ -265,6 +267,11 @@ class App(JobRunner):
         """Map location, parcel and owner for an address Steve typed in.
         Network trouble leaves the lead for the next daily check to finish."""
         row = conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        if is_paused(self.settings(conn)):
+            return (
+                "Address saved. Lead Desk is paused, so it wasn't looked up on the map or at the county "
+                "assessor; the first check after the pause does that."
+            )
         notes = []
         try:
             result = (self.geocoder or CensusGeocoder()).geocode(row["address"], row["city"], row["zip"])
@@ -392,7 +399,7 @@ class App(JobRunner):
     def _ensure_base(self):
         with self.conn() as conn:
             s = self.settings(conn)
-            if s.get("base_lat") is not None:
+            if s.get("base_lat") is not None or is_paused(s):
                 return
             try:
                 r = (self.geocoder or CensusGeocoder()).geocode(s["base_address"])
@@ -403,6 +410,8 @@ class App(JobRunner):
                 db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})
 
     def run_enrich(self, body):
+        if self.paused():
+            return {"paused": True, "message": PAUSED_MESSAGE}
         with self.lock, self.conn() as conn:
             return enrich(
                 conn, self.parcel_client or ParcelClient(), limit=self._cap(150), refresh=bool(body.get("refresh"))
@@ -477,6 +486,10 @@ class App(JobRunner):
         return counts
 
     def owner_properties(self, name):
+        if self.paused():
+            raise ValueError(
+                "Lead Desk is paused, so the county assessor wasn't asked. Turn the pause off in Settings first."
+            )
         rows = (self.parcel_client or ParcelClient()).by_owner(name)
         return [
             {
