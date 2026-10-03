@@ -257,6 +257,7 @@ function renderHeader() {
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.interrupted ? `Today's check stopped part way (paused) · next check ${d.next_run || "within the next few minutes"}`
     : d.last_run ? `Last check ${d.finished_at ? fmtDateTime(d.finished_at) : fmtDate(d.last_run)}` : "Not checked yet";
   const warn = problems.length && !d.running ? ` <span class="warn-sign" role="img" aria-label="Something failed in the last check" title="${esc(problems.join("; "))}">⚠</span>` : "";
   const open = !!ui.headerDetails;
@@ -280,7 +281,7 @@ function renderHeader() {
   banner.hidden = !S.paused;
   if (S.paused) banner.innerHTML = `<strong>Paused.</strong> The daily check, court case reads and phone lookups are stopped${S.paused_by_env ? " by LEADDESK_PAUSED in the server settings" : ""}.
     ${S.paused_by_env ? "" : `<button class="btn small" id="unpause">Turn the pause off</button>`}`;
-  const up = $("#unpause"); if (up) up.onclick = e => act(() => api("/api/settings", { paused: false }), "Lead Desk is running again.", e.currentTarget);
+  const up = $("#unpause"); if (up) up.onclick = e => act(() => api("/api/settings", { paused: false }), r => r.message || "Lead Desk is running again.", e.currentTarget);
   const b = $("#refreshBtn"); b.disabled = !!d.running || !!S.paused; b.textContent = d.running ? "Checking…" : "Check for new evictions";
   if (d.running || runningJobs().length) watch();
   document.querySelectorAll("#nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === ui.tab); b.setAttribute("aria-current", b.dataset.tab === ui.tab ? "page" : "false"); });

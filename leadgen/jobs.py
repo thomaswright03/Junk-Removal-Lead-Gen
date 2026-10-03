@@ -81,6 +81,8 @@ def next_daily_run(settings: dict, serverless: bool = False, now: Optional[datet
         return "today 6:00 AM"
     if not ran_today and not serverless:
         return "within the next few minutes"
+    if serverless and daily.interrupted_today(settings, local.date()):
+        return "tomorrow 6:00 AM (press Check for new evictions to finish today's now)"
     return "tomorrow 6:00 AM"
 
 
@@ -213,6 +215,22 @@ class JobRunner:
 
         threading.Thread(target=work, daemon=True, name="daily").start()
         return {"started": True, "running": True}
+
+    def resume_daily(self) -> Optional[dict]:
+        """After the pause is turned off: when today's check was stopped part
+        way by the pause, finish it now (locally in the background, online
+        by starting the GitHub run). A check that hasn't started today is
+        left to the scheduler, which starts it within minutes."""
+        with self.conn() as conn:
+            settings = self.settings(conn)
+            if is_paused(settings) or not daily.interrupted_today(settings):
+                return None
+        if self.serverless:
+            try:
+                return start_github_check()
+            except Exception as e:  # GitHub refused: the page says so; the 6 AM run still happens
+                return {"started": False, "message": str(e)}
+        return self.start_daily()
 
     def scheduler(self, hour: int = 6, every_seconds: int = 600) -> None:
         """While Lead Desk is open, run the daily check once a day after ``hour``."""

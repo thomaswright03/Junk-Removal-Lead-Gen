@@ -66,6 +66,10 @@ buttons say Lead Desk is paused. Pause takes effect the moment it is ticked,
 without "Save settings".
 Pausing also stops a check or job that is already running, before its next
 request to the court or a lookup service, and its result says it was paused.
+A daily check stopped this way doesn't count as the day's check: turning the
+pause off finishes it straight away (online, it starts the GitHub run when
+`LEADDESK_GITHUB_TOKEN` is set; otherwise the header says to press **Check
+for new evictions**), and cases already read that day aren't read again.
 Leads and notes stay as they are. To stop only Google, untick **Use Google
 lookups** (this works even when the key comes from `GOOGLE_PLACES_API_KEY`)
 or set its limits to 0.

@@ -170,16 +170,33 @@ def run_daily(
             summary.update(paused=True, paused_during=name)
             break
     summary["finished_at"] = now_iso()
-    db.put_settings(conn, {"last_daily_run": today.isoformat(), "last_daily_summary": summary})
+    values: dict[str, Any] = {"last_daily_summary": summary}
+    if summary.get("paused_during"):
+        # Stopped part way: not today's run. Once the pause is off it runs
+        # again (Lead Desk starts it at once, else its scheduler within
+        # minutes) and picks up where it stopped: cases already read today
+        # aren't read again.
+        values["last_daily_interrupted"] = today.isoformat()
+    else:
+        values.update(last_daily_run=today.isoformat(), last_daily_interrupted=None)
+    db.put_settings(conn, values)
     conn.commit()
     return summary
 
 
 def due(conn: Conn, now: Optional[datetime] = None, hour: int = 6) -> bool:
-    """True when today's run hasn't happened yet and it's past ``hour`` local time."""
+    """True when today's run hasn't finished yet and it's past ``hour`` local
+    time (a run stopped part way by the pause doesn't count)."""
     now = now or az_now().replace(tzinfo=None)
     last = db.get_settings(conn).get("last_daily_run")
     return now.hour >= hour and last != now.date().isoformat()
+
+
+def interrupted_today(settings: dict, today: Optional[date] = None) -> bool:
+    """True when today's check was stopped part way by the pause and hasn't
+    finished since."""
+    day = (today or az_today()).isoformat()
+    return settings.get("last_daily_interrupted") == day and settings.get("last_daily_run") != day
 
 
 def describe(summary: dict) -> str:

@@ -129,6 +129,7 @@ class App(JobRunner):
                 "running": self.daily_lock.locked(),
                 "message": self.daily_message,
                 "last_run": settings.get("last_daily_run"),
+                "interrupted": daily.interrupted_today(settings),
                 "summary": daily.describe(settings["last_daily_summary"])
                 if settings.get("last_daily_summary")
                 else None,
@@ -408,7 +409,16 @@ class App(JobRunner):
             db.put_settings(conn, values)
             conn.commit()
         self._ensure_base()
-        return {"ok": True}
+        out: dict[str, Any] = {"ok": True}
+        if values.get("paused") is False and current.get("paused"):
+            # Pause turned off: finish today's check now rather than tomorrow.
+            resumed = self.resume_daily()
+            if resumed and resumed.get("started"):
+                out["daily_started"] = True
+                out["message"] = "Lead Desk is running again and is finishing today's check now."
+            elif resumed and resumed.get("message"):
+                out["message"] = "Lead Desk is running again. " + resumed["message"]
+        return out
 
     def _ensure_base(self) -> None:
         with self.conn() as conn:

@@ -54,7 +54,7 @@ function renderSettings() {
   $("#sTheme").onchange = e => setTheme(e.target.value);
   for (const id of ["sGoogleLimit", "sGoogleDaily"]) $("#" + id + "None").onchange = e => { $("#" + id).disabled = e.target.checked; };
   $("#sPaused").onchange = e => act(() => api("/api/settings", { paused: e.target.checked }),
-    e.target.checked ? "Paused: nothing will be checked or looked up until you turn this off." : "Lead Desk is running again.", e.target);
+    e.target.checked ? "Paused: nothing will be checked or looked up until you turn this off." : r => r.message || "Lead Desk is running again.", e.target);
   const gc = $("#sGoogleClear");
   if (gc) gc.onclick = async e => {
     const btn = e.currentTarget;
