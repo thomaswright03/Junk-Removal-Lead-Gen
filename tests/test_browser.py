@@ -782,3 +782,21 @@ def test_a_mistyped_address_shows_a_page_with_a_way_back(server, page):
     assert page.evaluate("getComputedStyle(document.body).backgroundColor") != "rgba(0, 0, 0, 0)"
     page.click("text=Back to the leads")
     page.wait_for_selector("#leadTable tbody tr[data-id]")
+
+
+def test_leads_tab_controls_have_distinct_labels_and_the_hint_fits_the_view(server, page):
+    url, app, path = server
+    page.goto(url)  # the fixture shows All leads
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    labels = page.evaluate(
+        """[...document.querySelectorAll('#tab-leads select')]
+        .map(s => [...s.options].map(o => o.text.split(/[:(]/)[0].trim()))"""
+    )
+    seen = [t for opts in labels for t in opts]
+    assert len(seen) == len(set(seen)), seen
+    assert page.inner_text("#fType option[value='']") == "Any kind of lead"
+    # Show is already All leads: no instruction to pick it.
+    assert "Pick “All leads”" not in page.inner_text("#coverage")
+    assert "City of Tucson only" in page.inner_text("#coverage")
+    page.select_option("#fView", "evictions")
+    page.wait_for_selector("#coverage >> text=Pick “All leads” under Show to see them")

@@ -53,7 +53,7 @@ function renderLeads() {
     <div class="card mb12">
       <div class="row">
         <label class="wide-pick">Show <select id="fView">${opts(Object.keys(VIEW_LABEL).map(v => [v, viewName(v)]), view)}</select></label>
-        <span class="small-line">${CODE_COVERAGE} Pick “All leads” under Show to see them.</span>
+        <span class="small-line" id="coverage">${CODE_COVERAGE}${view === "all" ? "" : " Pick “All leads” under Show to see them."}</span>
         <button class="btn m-only" id="toolsToggle" aria-expanded="${!!ui.toolsOpen}" aria-controls="leadTools">${ui.toolsOpen ? "Hide" : "Add cases, update cases, find phones"}</button>
       </div>
       <div id="leadTools" class="${ui.toolsOpen ? "open" : ""}">
@@ -76,7 +76,7 @@ function renderLeads() {
     <div class="filters ${ui.filtersOpen ? "open" : ""}">
       <div class="searchrow"><input type="search" id="q" aria-label="Search leads" placeholder="Search address, owner, landlord, case, parcel…" value="${esc(ui.q)}">
       <button class="btn m-only" id="filtersToggle" aria-expanded="${!!ui.filtersOpen}">Filters${nFilters ? ` (${nFilters})` : ""}</button></div>
-      <select id="fType" aria-label="Kind of lead">${opts([["", "All leads"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Owner lives elsewhere"], ["entity", "Company or trust owner"], ["has_phone", "Has a phone"], ["no_phone", "No phone yet"], ["no_address", "Address needed"], ["guessed_address", "Address to confirm"], ["address_work", "Address work queue (evictions)"], ["reachable", "Can be reached (phone, email or address)"], ["unreachable", "Can't be reached yet"]], ui.type)}</select>
+      <select id="fType" aria-label="Kind of lead">${opts([["", "Any kind of lead"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Owner lives elsewhere"], ["entity", "Company or trust owner"], ["has_phone", "Has a phone"], ["no_phone", "No phone yet"], ["no_address", "Address needed"], ["guessed_address", "Address to confirm"], ["address_work", "Address work queue (evictions)"], ["reachable", "Can be reached (phone, email or address)"], ["unreachable", "Can't be reached yet"]], ui.type)}</select>
       <select id="fStatus" aria-label="Status">${opts([["open", "Open (not won/lost)"], ["", "Any status"], ...S.statuses.map(s => [s, STATUS_LABEL[s] || title(s)])], ui.status)}</select>
       <select id="fChannel" aria-label="Outreach method">${opts([["", "Any outreach method"], ["none", "Not assigned"], ...Object.entries(S.channels)], ui.channel)}</select>
       <select id="fSort" aria-label="Sort">${opts([["score", "Highest priority first"], ["date", "Newest first (latest court or city event)"], ["miles", "Closest first"]], ui.sort)}</select>
