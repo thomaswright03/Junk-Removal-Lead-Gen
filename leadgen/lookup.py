@@ -125,20 +125,33 @@ def lookup_targets(lead):
 
 # ---------------------------------------------------------------- providers --
 
+class ProviderUnavailable(Exception):
+    pass
+
+
 class OsmProvider:
     name = "osm"
+    # A server that fails this many times in a row is dropped for the rest of
+    # the run; once every server is dropped, OSM lookups are skipped instead of
+    # waiting on each company. Worst case is servers x max_failures x timeout.
+    max_failures = 2
 
-    def __init__(self, session=None, radius_m=80, delay=1.0):
+    def __init__(self, session=None, radius_m=80, delay=1.0, timeout=15):
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
         self.radius = radius_m
         self.delay = delay
+        self.timeout = timeout
+        self.strikes = {}
+        self.urls = list(OVERPASS_URLS)
 
     def find(self, lead, business_name):
         if lead["lat"] is None or lead["lon"] is None:
             return None
+        if not self.urls:
+            raise ProviderUnavailable("Overpass servers not responding; skipped for this run")
         q = f"""
-        [out:json][timeout:25];
+        [out:json][timeout:10];
         (
           nwr(around:{self.radius},{lead['lat']},{lead['lon']})["phone"];
           nwr(around:{self.radius},{lead['lat']},{lead['lon']})["contact:phone"];
@@ -149,15 +162,23 @@ class OsmProvider:
         out tags center 20;
         """
         last_error = None
-        for url in OVERPASS_URLS:
+        for url in list(self.urls):
             try:
-                resp = self.session.post(url, data={"data": q}, timeout=config.HTTP_TIMEOUT,
+                resp = self.session.post(url, data={"data": q}, timeout=self.timeout,
                                          headers={"Accept": "application/json"})
                 resp.raise_for_status()
-                time.sleep(self.delay)
-                return pick_osm(resp.json().get("elements") or [], business_name)
             except requests.RequestException as e:
                 last_error = e
+                self.strikes[url] = self.strikes.get(url, 0) + 1
+                if self.strikes[url] >= self.max_failures:
+                    self.urls.remove(url)
+                continue
+            self.strikes[url] = 0
+            if self.urls[0] != url:  # ask the server that answered first next time
+                self.urls.remove(url)
+                self.urls.insert(0, url)
+            time.sleep(self.delay)
+            return pick_osm(resp.json().get("elements") or [], business_name)
         raise last_error
 
 

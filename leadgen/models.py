@@ -25,6 +25,10 @@ class Lead:
     defendant: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None
+    # Justice Court case details (from the case page, see sources/pima_jp_case.py).
+    eviction_notice: Optional[bool] = None  # an eviction notice is filed in the case
+    case_status: Optional[str] = None
+    next_court_date: Optional[str] = None
     raw: dict = field(default_factory=dict)
 
     def to_dict(self):

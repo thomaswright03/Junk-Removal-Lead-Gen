@@ -86,6 +86,18 @@ in the Consolidated Justice Court at 240 N. Stone Ave, Tucson.
   number, so it is the best source for "all recent evictions".
 - **Case search**: https://www.jp.pima.gov/CaseSearch/ - by name, case number
   or complaint number only. Useful to look up one case, not to list them.
+- **Case pages** (built): each case has a page at
+  `https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=<number>` with the
+  filing date, case status, next court date, parties and the documents filed.
+  An eviction case lists a `CIV – EVICTION NOTICE` document once the landlord
+  files the notice served on the tenant; Lead Desk shows only those cases by
+  default. `leadgen/sources/pima_jp_case.py` reads pages only for links
+  someone pasted or saved (and re-reads open eviction cases at most every 12
+  hours), with a pause between requests. It does not step through ID numbers:
+  the IDs are sequential, but walking them is bulk collection of court
+  records, which Arizona Supreme Court Rule 123 treats separately from
+  looking up individual cases. Ask the court first if that is ever wanted.
+  The page has no property address.
 - **Records request**: https://www.jp.pima.gov/OnlineRecordsRequest/Default.aspx -
   the way to get filings **with property addresses**. Worth asking the court
   whether they can send a recurring report of new eviction filings; drop each

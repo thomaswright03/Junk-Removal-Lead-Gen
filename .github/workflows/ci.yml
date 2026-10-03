@@ -31,17 +31,27 @@ jobs:
       - run: leadgen --db /tmp/leads.db list --limit 0
       - name: Lead Desk refresh button on live data (counts and types only)
         run: >
-          python -c "from leadgen.web import App; a=App('/tmp/live2.db'); print(a.refresh({'days': 30}));
+          python -c "from leadgen.web import App; a=App('/tmp/live2.db'); a.save_settings({'lead_view': 'all'}); print(a.refresh({'days': 30}));
           c=a.conn(); print('lat/lon types', c.execute('SELECT typeof(lat), typeof(lon), COUNT(*) FROM leads GROUP BY 1, 2').fetchall());
           print('settings', {r[0]: type(__import__('json').loads(r[1])).__name__ for r in c.execute('SELECT key, value FROM settings')});
           print(len(a.state()['leads']), 'leads in state')"
       - name: Lead Desk state on live data (counts only)
         run: >
-          python -c "from leadgen.web import App; L=App('/tmp/leads.db').state()['leads'];
+          python -c "from leadgen.web import App; a=App('/tmp/leads.db'); a.save_settings({'lead_view': 'all'}); L=a.state()['leads'];
           print(len(L), 'leads;', sum(1 for l in L if l['owner_name']), 'with owner;',
           sum(1 for l in L if l['owner_absentee']), 'absentee;',
           sum(1 for l in L if l['owner_entity']), 'company/trust;',
           sum(1 for l in L if l['score'] >= 60), 'scored 60+')"
+      - name: Justice Court case page on live data (fields found, no names)
+        continue-on-error: true
+        run: |
+          leadgen --db /tmp/cases.db cases add "https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=1520702"
+          python - <<'PY'
+          from leadgen import db
+          r = db.connect("/tmp/cases.db").execute("SELECT * FROM leads").fetchone()
+          shown = ("lead_type", "eviction_notice", "case_status", "event_date", "next_court_date")
+          print({k: (r[k] if k in shown else bool(r[k])) for k in (*shown, "source_id", "plaintiff", "defendant")})
+          PY
       - name: Business phone lookup on live data (counts only)
         continue-on-error: true
         run: leadgen --db /tmp/live2.db contacts find --limit 15

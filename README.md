@@ -30,7 +30,12 @@ leadgen serve
 Opens http://127.0.0.1:8765 in your browser. It only runs on your computer and
 uses the same database as the commands below.
 
-- **Leads**: every open lead, ranked by score, with the owner of record from
+- **Leads**: by default only eviction cases with an eviction notice filed in
+  the court case (the "Show" menu switches to all evictions, or all leads
+  including Tucson code cases). Paste Justice Court case links
+  (`jcDisplayCase.aspx?ID=...`) into **Add cases**, and Lead Desk reads each
+  case page for the eviction notice, parties and next court date. Each open
+  lead is ranked by score, with the owner of record from
   the Pima County Assessor (name, mailing address, whether they live
   elsewhere, whether it's an LLC or trust). Click a lead for details, the
   owner's other properties, and to log outreach and results.
@@ -68,8 +73,10 @@ columns:
 Check found numbers before calling, and scrub personal cell numbers against
 the Do Not Call registry before any cold call.
 
-**Refresh data** pulls new Tucson cases and looks up owners. **Import
-evictions / CSV** takes a saved Justice Court calendar page or any CSV.
+**Refresh data** pulls new Tucson cases, looks up owners and re-reads open
+eviction case pages for new documents. **Update court cases** re-reads the
+case pages on demand. **Import court page / CSV** takes a saved Justice Court
+case page or calendar page, or any CSV.
 
 Score: up to 40 points for what the case says (vacant building, dumping and
 trash/debris highest, weeds lowest; evictions 35), +20 if the owner's mailing
@@ -95,6 +102,13 @@ for how to save the page):
 
 ```sh
 leadgen fetch --source pima_jp_calendar --assume-eviction --file data/inbox/calendar.html
+```
+
+Add or re-check eviction cases by their case page links:
+
+```sh
+leadgen cases add "https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=1234567"
+leadgen cases update
 ```
 
 Add any spreadsheet of leads (a records-request export, a writ list, referrals):

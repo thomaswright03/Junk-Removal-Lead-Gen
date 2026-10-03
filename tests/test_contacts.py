@@ -28,6 +28,7 @@ def make_db(path=":memory:"):
                  "property_use='APARTMENTS 25+ UNITS', owner_address='PO BOX 1' WHERE parcel='P1'")
     conn.execute("UPDATE leads SET owner_name='SMITH JOHN', owner_entity=0, "
                  "property_use='SFR GRADE 010-3', owner_address='10 E OWNER LN' WHERE parcel='P2'")
+    db.put_settings(conn, {"lead_view": "all"})
     conn.commit()
     return conn
 
@@ -192,3 +193,60 @@ def test_network_failure_is_retried_next_run():
     counts = find_contacts(conn, [Broken()], scanner=None, log=lambda *_: None)
     assert counts["errors"] == 2 and counts["not_found"] == 0
     assert conn.execute("SELECT COUNT(*) FROM leads WHERE contact_checked_at IS NOT NULL").fetchone()[0] == 0
+
+
+def test_osm_stops_after_servers_keep_timing_out():
+    import pytest
+    import requests
+
+    from leadgen.lookup import OsmProvider, ProviderUnavailable
+
+    class DeadSession:
+        headers = {}
+        calls = 0
+
+        def post(self, url, **kw):
+            DeadSession.calls += 1
+            raise requests.ReadTimeout("slow")
+
+    osm = OsmProvider(session=DeadSession(), delay=0)
+    lead = {"lat": 32.2, "lon": -110.9}
+    servers = len(osm.urls)
+    for _ in range(OsmProvider.max_failures):
+        with pytest.raises(requests.ReadTimeout):
+            osm.find(lead, "X LLC")
+    assert DeadSession.calls == servers * OsmProvider.max_failures
+    with pytest.raises(ProviderUnavailable):
+        osm.find(lead, "X LLC")
+    assert DeadSession.calls == servers * OsmProvider.max_failures  # no more waiting
+
+
+def test_osm_prefers_the_server_that_answered():
+    from leadgen.lookup import OsmProvider
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"elements": []}
+
+    class FlakySession:
+        headers = {}
+
+        def __init__(self):
+            self.urls = []
+
+        def post(self, url, **kw):
+            import requests
+            self.urls.append(url)
+            if url == osm_urls[0]:
+                raise requests.ConnectionError("down")
+            return Resp()
+
+    session = FlakySession()
+    osm = OsmProvider(session=session, delay=0)
+    osm_urls = list(osm.urls)
+    osm.find({"lat": 1, "lon": 2}, None)
+    osm.find({"lat": 1, "lon": 2}, None)
+    assert session.urls == [osm_urls[0], osm_urls[1], osm_urls[1]]

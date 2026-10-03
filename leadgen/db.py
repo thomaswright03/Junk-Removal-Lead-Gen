@@ -93,6 +93,11 @@ _ADDED_COLUMNS = {
     "contact_source": "TEXT",
     "contact_name": "TEXT",  # business name the lookup matched
     "contact_checked_at": "TEXT",
+    # Justice Court case page details (see sources/pima_jp_case.py).
+    "eviction_notice": "INTEGER",
+    "case_status": "TEXT",
+    "next_court_date": "TEXT",
+    "case_checked_at": "TEXT",
 }
 
 # Columns a fetch is allowed to refresh on an existing row. A blank value
@@ -100,7 +105,7 @@ _ADDED_COLUMNS = {
 _REFRESHABLE = (
     "lead_type", "event_date", "address", "address_norm", "city", "zip",
     "lat", "lon", "in_pima", "plaintiff", "defendant", "description", "url",
-    "parcel",
+    "parcel", "eviction_notice", "case_status", "next_court_date",
 )
 
 
@@ -147,8 +152,11 @@ def upsert(conn, lead):
             d[col] = float(d[col]) if d[col] not in (None, "") else None
         except (TypeError, ValueError):
             d[col] = None
-    if d["in_pima"] is not None:
-        d["in_pima"] = int(bool(d["in_pima"]))
+    for col in ("in_pima", "eviction_notice"):
+        if d[col] is not None:
+            d[col] = int(bool(d[col]))
+    if d["eviction_notice"] is not None:  # only case pages set this
+        d["case_checked_at"] = now
     raw = json.dumps(d.pop("raw") or {}, default=str, sort_keys=True)
 
     existing = conn.execute(
@@ -157,11 +165,21 @@ def upsert(conn, lead):
     ).fetchone()
 
     if existing:
+        if "jcdisplaycase" in (existing["url"] or "").lower() and \
+                "jcdisplaycase" not in (d["url"] or "").lower():
+            d["url"] = None  # a calendar re-import keeps the case page link
+        if existing["case_checked_at"] and not d.get("case_checked_at"):
+            # Keep the case page's filing date and summary over calendar rows.
+            d["event_date"] = d["description"] = None
         sets, args = ["last_seen = ?", "raw_json = ?"], [now, raw]
         for col in _REFRESHABLE:
             if d[col] not in (None, ""):
                 sets.append(f"{col} = ?")
                 args.append(d[col])
+        if d.get("case_checked_at"):
+            sets.append("case_checked_at = ?")
+            args.append(d["case_checked_at"])
+
         args.append(existing["id"])
         conn.execute(f"UPDATE leads SET {', '.join(sets)} WHERE id = ?", args)
         if d["address_norm"] and existing["duplicate_of"] is None:
@@ -172,12 +190,14 @@ def upsert(conn, lead):
         """
         INSERT INTO leads (source, source_id, lead_type, event_date, address,
             address_norm, city, zip, lat, lon, in_pima, parcel, plaintiff,
-            defendant, description, url, first_seen, last_seen, raw_json)
+            defendant, description, url, eviction_notice, case_status, next_court_date,
+            case_checked_at, first_seen, last_seen, raw_json)
         VALUES (:source, :source_id, :lead_type, :event_date, :address,
             :address_norm, :city, :zip, :lat, :lon, :in_pima, :parcel, :plaintiff,
-            :defendant, :description, :url, :now, :now, :raw)
+            :defendant, :description, :url, :eviction_notice, :case_status,
+            :next_court_date, :case_checked_at, :now, :now, :raw)
         """,
-        {**d, "now": now, "raw": raw},
+        {"case_checked_at": None, **d, "now": now, "raw": raw},
     )
     if d["address_norm"]:
         _link_duplicate(conn, cur.lastrowid, d["address_norm"])
