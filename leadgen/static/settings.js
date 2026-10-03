@@ -11,7 +11,7 @@ function previewLead(c) {
 function theme() { try { return localStorage.getItem("leaddesk.theme") || "system"; } catch (e) { return "system"; } }
 function setTheme(t) {
   try { if (t === "system") localStorage.removeItem("leaddesk.theme"); else localStorage.setItem("leaddesk.theme", t); } catch (e) { /* storage blocked */ }
-  if (t === "system") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  applyTheme();
 }
 function limitField(id, value, step, label) {
   const unlimited = value == null;

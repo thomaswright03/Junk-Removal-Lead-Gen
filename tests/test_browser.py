@@ -826,3 +826,23 @@ def test_revenue_on_a_lost_lead_asks_before_marking_it_won(server, page):
     page.click("#confirmOk")
     page.wait_for_selector("text=Saved and marked won")
     assert tuple(status().fetchone()) == ("won", 45000)
+
+
+def test_dark_theme_is_the_same_from_the_computer_and_from_settings(server, page):
+    url, _, _ = server
+    colors = "['--bg', '--panel', '--accent'].map(v => getComputedStyle(document.documentElement).getPropertyValue(v))"
+    page.emulate_media(color_scheme="dark")
+    page.goto(url)
+    page.wait_for_selector("#leadTable")
+    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+    from_computer = page.evaluate(colors)
+    # Picked in Settings, with the computer set to light: the same palette.
+    page.emulate_media(color_scheme="light")
+    page.wait_for_function("document.documentElement.dataset.theme === 'light'")
+    page.goto(url + "#tab=settings")
+    page.select_option("#sTheme", "dark")
+    page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+    assert page.evaluate(colors) == from_computer
+    # Back to "Same as this computer": light again.
+    page.select_option("#sTheme", "system")
+    page.wait_for_function("document.documentElement.dataset.theme === 'light'")

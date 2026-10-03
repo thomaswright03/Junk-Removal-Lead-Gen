@@ -7,18 +7,10 @@
   --radius: 10px;
   color-scheme: light;
 }
-/* Dark theme: when the computer is set to dark and no theme is picked in
-   Settings, or when Dark is picked. Primary buttons use dark text on the
+/* Dark theme, the one palette: the page sets data-theme="dark" when Dark is
+   picked in Settings, or when the computer is set to dark and no theme is
+   picked (index.html's first script). Primary buttons use dark text on the
    light blue (about 8:1 contrast; white on it was 2.4:1). */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #121214; --panel: #1b1b1e; --fg: #ececee; --muted: #a2a2aa; --line: #2c2c31;
-    --accent: #6ea8ff; --on-accent: #0b1424; --accent-soft: #1d2a40; --good: #4cc26b; --good-soft: #17301f;
-    --warn: #e0b341; --warn-soft: #33290f; --bad: #ff6b6b; --bad-soft: #3a1a1a; --chip: #26262b;
-    --c-door_hanger: #b18cff; --c-phone: #ff9f4a; --c-property_manager: #4cc26b;
-    color-scheme: dark;
-  }
-}
 :root[data-theme="dark"] {
   --bg: #121214; --panel: #1b1b1e; --fg: #ececee; --muted: #a2a2aa; --line: #2c2c31;
   --accent: #6ea8ff; --on-accent: #0b1424; --accent-soft: #1d2a40; --good: #4cc26b; --good-soft: #17301f;
