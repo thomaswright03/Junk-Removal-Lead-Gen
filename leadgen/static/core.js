@@ -20,7 +20,11 @@ async function send(path, opt) {
   let r;
   try { r = await fetch(path, opt); } catch (e) { throw new Error(OFFLINE); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || (r.status >= 500 ? "Something went wrong on the Lead Desk server. Try again in a minute." : "That didn't work. Reload the page and try again."));
+  if (!r.ok) {
+    const e = new Error(j.error || (r.status >= 500 ? "Something went wrong on the Lead Desk server. Try again in a minute." : "That didn't work. Reload the page and try again."));
+    e.field = j.field || null;  // the form field the server refused, when it says
+    throw e;
+  }
   return j;
 }
 function toast(msg, ms = 3200, undo) {
@@ -33,10 +37,11 @@ function toast(msg, ms = 3200, undo) {
 // Ask before an action, in the page's own dialog: the buttons name the
 // action ("Assign 40 leads", "Remove key"). Resolves true for the action,
 // false for Cancel, Escape or a click outside.
-function confirmBox({ title: head, body, ok, danger }) {
+function confirmBox({ title: head, body, ok, danger, cancel }) {
   const dlg = $("#confirmBox");
   $("#confirmTitle").textContent = head;
   $("#confirmBody").textContent = body || "";
+  $("#confirmCancel").textContent = cancel || "Cancel";
   const okBtn = $("#confirmOk");
   okBtn.textContent = ok; okBtn.classList.toggle("danger-fill", !!danger); okBtn.classList.toggle("primary", !danger);
   const back = document.activeElement;
@@ -59,7 +64,8 @@ function stateQuery() {
   } else if (ui.tab === "settings") {
     p.set("samples", "1");  // a lead of each kind, for the message previews
   } else if (ui.tab === "outreach") {
-    p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", "score"); p.set("limit", QUEUE_LIMIT);
+    // Calls and landlords: leads with a phone or email first, the ones to search for after.
+    p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", ui.outreachTab === "door_hanger" ? "score" : "contact"); p.set("limit", QUEUE_LIMIT);
     // Door hangers and calls: the leads still to do. Landlords: everyone in that method.
     if (ui.outreachTab === "property_manager") p.set("status", "active");
     else { p.set("status", "new"); p.set("untouched", "1"); }
@@ -79,8 +85,10 @@ const listLeads = () => (S && S.list && S.list.leads) || [];
 const findLead = id => (S.lead && S.lead.id === id ? S.lead : listLeads().find(l => l.id === id));
 // Run one action: the button is disabled while it runs (so a double click
 // can't log twice), the page reloads, then the result is shown in a toast
-// (so the toast never describes leads the list isn't showing yet).
-async function act(fn, okMsg, btn, undo) {
+// (so the toast never describes leads the list isn't showing yet). A failure
+// shows in a toast, unless ``onError`` shows it somewhere better (under the
+// form field it is about) and returns true.
+async function act(fn, okMsg, btn, undo, onError) {
   if (btn) { if (btn.disabled) return; btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
   try {
     const r = await fn();
@@ -89,8 +97,88 @@ async function act(fn, okMsg, btn, undo) {
     if (msg) toast(msg, Math.max(3200, msg.length * 60), undo);
     return r;
   }
-  catch (e) { toast(e.message, 8000); }
+  catch (e) { if (!(onError && onError(e))) toast(e.message, 8000); }
   finally { if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); } }
+}
+
+// ---------- form field errors -----------------------------------------------
+// A value that can't be saved is reported under its box, which is marked
+// invalid (aria-invalid) and focused. The message stays, across redraws of
+// the page, until the value is corrected. Keyed by the box's id.
+const fieldErrors = {};
+const fieldError = id => `<span class="field-error" id="${id}-err" role="alert"${fieldErrors[id] ? "" : " hidden"}>${esc(fieldErrors[id] || "")}</span>`;
+// Marks the box invalid (after a redraw too); its error line must be in the page (fieldError).
+function markField(id) {
+  const box = document.getElementById(id); if (!box) return;
+  const bad = !!fieldErrors[id];
+  if (bad) box.setAttribute("aria-invalid", "true"); else box.removeAttribute("aria-invalid");
+  const ids = (box.getAttribute("aria-describedby") || "").split(" ").filter(x => x && x !== id + "-err");
+  if (bad) ids.push(id + "-err");
+  if (ids.length) box.setAttribute("aria-describedby", ids.join(" ")); else box.removeAttribute("aria-describedby");
+  const line = document.getElementById(id + "-err");
+  if (line) { line.textContent = fieldErrors[id] || ""; line.hidden = !bad; }
+}
+function setFieldError(id, msg, focus = true) {
+  fieldErrors[id] = msg; markField(id);
+  const box = document.getElementById(id);
+  if (box && focus) box.focus();
+  return false;
+}
+function clearFieldError(id) { if (fieldErrors[id]) { delete fieldErrors[id]; markField(id); } }
+const markFields = root => root.querySelectorAll("[id]").forEach(el => { if (fieldErrors[el.id]) markField(el.id); });
+// The server's rules for what the forms send (forms.py, web.py), checked in
+// the browser first so a mistake shows at once and nothing is sent. Each
+// returns the server's own message, or null when the value is fine.
+const MAX_JOB_DOLLARS = 100000, MAX_CONTACT_DOLLARS = 1000;
+function checkMoney(box, label, most = MAX_JOB_DOLLARS) {
+  if (box.validity && box.validity.badInput) return `${label} must be a dollar amount, like 250.`;
+  const v = String(box.value ?? "").trim().replace(/[$,]/g, "");
+  if (!v) return null;
+  const n = Number(v);
+  if (!isFinite(n)) return `${label} must be a dollar amount, like 250.`;
+  if (n < 0) return `${label} can't be negative.`;
+  if (n > most) return `${label} can be at most $${most.toLocaleString("en-US")}. Check for an extra zero.`;
+  return null;
+}
+function checkPhone(v) {
+  v = String(v ?? "").trim(); if (!v) return null;
+  let d = v.replace(/\D/g, ""); if (d.length === 11 && d[0] === "1") d = d.slice(1);
+  return d.length === 10 ? null : "The phone number needs 10 digits, like (520) 555-0100.";
+}
+const checkEmail = v => { v = String(v ?? "").trim(); return !v || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? null : "That email address doesn't look right. Check it and save again."; };
+const checkText = (v, label, most = 300) => String(v ?? "").length > most ? `${label} must be text (up to ${most} characters).` : null;
+function checkWhole(box, label) {
+  if (box.disabled) return null;  // "no limit"
+  if (box.validity && box.validity.badInput) return `${label} must be a whole number, or no limit.`;
+  const v = String(box.value).trim(); if (!v) return null;  // blank is 0
+  const n = Number(v);
+  return isFinite(n) && n >= 0 && n === Math.floor(n) ? null : `${label} must be a whole number of 0 or more (0 means none).`;
+}
+// Check several boxes ({id: () => message or null}): each failure is shown
+// under its box and the first is focused. True when all are fine.
+function checkFields(checks) {
+  let first = null;
+  for (const [id, check] of Object.entries(checks)) {
+    const msg = document.getElementById(id) ? check() : null;
+    if (msg) { setFieldError(id, msg, false); first = first || id; } else clearFieldError(id);
+  }
+  if (first) document.getElementById(first).focus();
+  return !first;
+}
+// While a box shows an error, typing re-checks it and clears the error once fixed.
+function recheckOnInput(checks) {
+  for (const [id, check] of Object.entries(checks)) {
+    const box = document.getElementById(id); if (!box) continue;
+    box.addEventListener("input", () => { if (fieldErrors[id] && !check()) clearFieldError(id); });
+  }
+}
+// A refusal from the server about one field (``{"field": ...}``): shown under
+// that field's box when ``boxes`` maps it to one on the page. True when shown.
+function showFieldErrors(e, boxes) {
+  const id = e && e.field && boxes[e.field];
+  if (!id || !document.getElementById(id)) return false;
+  setFieldError(id, e.message);
+  return true;
 }
 
 // ---------- helpers ---------------------------------------------------------
@@ -123,7 +211,8 @@ function ownerLine(l) {
   const who = l.owner_name || l.plaintiff;
   if (!who) return `<span class="muted">${l.enriched_at ? "not found" : "lookup pending"}</span>`;
   let tags = "";
-  if (l.owner_absentee) tags += ` <span class="chip warn" title="Owner's mailing address is somewhere else">owner lives elsewhere</span>`;
+  // On an eviction the owner is the landlord, whose office is nearly always elsewhere: not worth a chip.
+  if (l.owner_absentee && l.lead_type !== "eviction") tags += ` <span class="chip warn" title="Owner's mailing address is somewhere else">owner lives elsewhere</span>`;
   if (l.owner_entity) tags += ` <span class="chip" title="Company, trust or estate">company owner</span>`;
   if (l.owner_lead_count > 1) tags += ` <span class="chip acc" title="Owner has several leads">${l.owner_lead_count} leads</span>`;
   return esc(title(who)) + tags;
@@ -219,6 +308,11 @@ const SOURCE_LABEL = { manual: "entered by hand", import: "imported file", osm: 
 function phoneCell(l) {
   return l.owner_phone ? `<a href="tel:${esc(l.owner_phone.replace(/\D/g, ""))}">${esc(l.owner_phone)}</a>` : '<span class="muted">–</span>';
 }
+// Evictions with no phone, email or known address can't be contacted yet.
+function reachChip(l) {
+  if (l.lead_type !== "eviction" || l.reach !== "none") return "";
+  return ` <span class="chip warn" title="No phone, email or confirmed property address yet. Find landlord phones, or a court records request, fills these in.">can't reach yet</span>`;
+}
 function emailCell(l) {
   return l.owner_email ? `<a href="mailto:${esc(l.owner_email)}">${esc(l.owner_email)}</a>` : '<span class="muted">–</span>';
 }
@@ -275,6 +369,7 @@ function renderHeader() {
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.retry ? `Today's check failed (${d.retry.failed.join(", ")}) · trying again ${(d.next_run || "today " + d.retry.time).replace(/ \(.*\)$/, "")}`
     : d.interrupted ? `Today's check stopped part way (paused) · next check ${d.next_run || "within the next few minutes"}`
     : d.last_run ? `Last check ${d.finished_at ? fmtDateTime(d.finished_at) : fmtDate(d.last_run)}` : "Not checked yet";
   const warn = problems.length && !d.running ? ` <span class="warn-sign" role="img" aria-label="Something failed in the last check" title="${esc(problems.join("; "))}">⚠</span>` : "";
@@ -283,6 +378,7 @@ function renderHeader() {
     <button class="linkbtn" id="subMore" aria-expanded="${open}" aria-controls="subDetails">${open ? "Hide details" : "Details"}</button>`;
   const details = [
     `${c.assigned || 0} in outreach`,
+    c.evictions_open ? `${c.evictions_reachable || 0} of ${c.evictions_open} open eviction leads can be reached (phone, email or known address)` : "",
     c.owners_pending ? `${c.owners_pending} owners not looked up yet` : "",
     unchecked ? `${unchecked} court case${unchecked > 1 ? "s" : ""} still to check (${d.running ? "checking now" : "next check " + (d.next_run || "tomorrow 6:00 AM")})` : "",
     d.last_run && d.summary ? `Last check ${fmtDate(d.last_run)}: ${d.summary}` : "",

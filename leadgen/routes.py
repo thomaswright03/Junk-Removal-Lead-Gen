@@ -50,7 +50,10 @@ def handle(app: Any, method: str, path: str, query: str, headers: Any, body: byt
                 return 200, skiptrace_csv(leads), "text/csv; charset=utf-8"
             if path == "/api/owner":
                 return 200, app.owner_properties(q.get("name", [""])[0]), "application/json"
-            return 404, {"error": "That page doesn't exist."}, "application/json"
+            if path.startswith("/api/"):
+                return 404, {"error": "That page doesn't exist."}, "application/json"
+            # A mistyped or old link in the browser: a page, with a way back.
+            return 404, (STATIC / "notfound.html").read_bytes(), "text/html; charset=utf-8"
         if method != "POST":
             return 405, {"error": "That request isn't allowed."}, "application/json"
         # Only accept requests from this app's own page.
@@ -96,7 +99,9 @@ def handle(app: Any, method: str, path: str, query: str, headers: Any, body: byt
             "application/json",
         )
     except ValueError as e:
-        return 400, {"error": str(e)}, "application/json"
+        # A refused form value names its field, so the page can show it there.
+        name = getattr(e, "field", None)
+        return 400, {"error": str(e), **({"field": name} if name else {})}, "application/json"
     except Exception:
         # The details go to the server log; the page gets a plain sentence.
         traceback.print_exc(file=sys.stderr)

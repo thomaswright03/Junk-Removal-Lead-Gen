@@ -54,6 +54,23 @@ per 1,000; Lead Desk stops at 30 a day and 1,000 a month unless you change
 the limits in Settings. A limit of 0 allows no Google searches; "no limit" is
 a separate box.
 
+**Making eviction leads reachable.** Court cases name the landlord and the
+tenant but carry no phone number and no property address, so on a fresh
+install most evictions can't be called or visited yet. Until both are set
+up, the Leads tab shows a guide, **Get phone numbers and addresses for
+eviction leads**, with two steps: adding a Google Places key (how to get one,
+what it costs at your limits, and a box to paste it that saves it and starts
+**Find landlord phones** at once), and sending the court records request
+(**I've sent the request** records the date; the next one is due two weeks
+after the latest request or import). **Hide this guide** puts it away; **How
+to reach more** brings it back. The Leads tab says how many open eviction
+leads can be reached now (a phone or email, or a known property address),
+each eviction with neither is marked "can't reach yet" (the kind filter has
+**Can't be reached yet** and **Can be reached**), and the lead says how it
+can be reached. The Outreach call list and landlord list put leads with a
+phone number (then an email) first, and say how many have no number yet,
+why, and what to do (set up phone lookups, or find phones now).
+
 **Stopping everything (kill switch).** Tick **Pause Lead Desk** in Settings,
 or set the environment variable `LEADDESK_PAUSED=1` (on Vercel, and as a
 repository variable for the GitHub Actions daily check). While paused, the
@@ -132,9 +149,19 @@ or set its limits to 0.
   leads go to the same method (now and in later rounds), and leads are dealt
   in small random blocks within each kind (address or not, eviction or code
   case) so each method gets the same mix and a similar spread of priority.
+  A round is evictions only by default (or City code cases only, or both:
+  **Which leads**), since Results compares methods within one kind of lead
+  and door hangers can't go to most evictions (no address), which would
+  otherwise fill a mixed round with code cases. For a round of both kinds
+  the methods ticked first are the ones that take in the most evictions.
   Before you press it, the tab says how many unassigned leads each choice of
-  methods can split, ticks only methods the leads can all be worked by, and
-  offers to untick the method that blocks a round. Leads whose landlord is
+  methods can split (and, for both kinds, how many are evictions), ticks
+  only methods the leads can all be worked by, and offers to untick the
+  method that blocks a round. The confirm question says exactly how many
+  evictions and code cases the round takes. Afterwards a summary of the
+  round stays on the tab until the next round or **Dismiss**: how many went
+  to each method, and how many leads were left out and why, with links to
+  them. Leads whose landlord is
   already being worked by a method follow it; they don't count toward the
   round's number and are reported separately. Each method has its own work
   queue: a driving route for door hangers, a call list with a script, and a
@@ -153,6 +180,15 @@ or set its limits to 0.
   own column and left out of the mix; "set by hand" counts only methods
   changed on the lead. Money is kept in whole cents; a quote or revenue over
   $100,000 (or a contact cost over $1,000) is refused as a likely typo.
+  Saving job revenue marks a lead Won, except that a lead marked Lost or
+  Skip asks first ("Mark won" or "Keep it lost"), so Results counts don't
+  change without you deciding.
+  A value that can't be saved (a negative or too-large amount, a phone
+  number without 10 digits, an email without an @, a unit with no street
+  address, notes over the limit, a blank business name) is caught in the
+  browser before anything is sent and shown under its box, which is marked
+  invalid and focused; the message stays until the value is corrected. A
+  refusal from the server names its field and is shown the same way.
 - **Settings**: business name and phone, a tracking phone number and cost
   per contact for each channel, and the message templates. Template fields
   (owner name, first name, address...) go in from buttons, and each
@@ -202,8 +238,10 @@ or a date couldn't be read.
 
 Priority: up to 40 points for what the case says (vacant building, dumping
 and trash/debris highest, weeds lowest; evictions 35, +25 more with a writ
-of restitution or +15 with a judgment for the landlord), +20 if the owner's
-mailing address is elsewhere, +10 for a company/trust owner, +10 if the
+of restitution or +15 with a judgment for the landlord), +20 on a code case
+if the owner's mailing address is elsewhere (not on an eviction, where the
+owner is the landlord and nearly always has an office elsewhere, so it would
+add the same to every eviction), +10 for a company/trust owner, +10 if the
 owner has several leads, +15 if the latest court or city event (filing,
 judgment, writ; opening for a code case) is under a week old (+8 under two
 weeks). An upcoming hearing, or any date in the future, earns nothing.
@@ -234,10 +272,30 @@ assessor, landlord phones, new Tucson code cases. It prints a one-line
 summary. `leadgen schedule install` runs it every morning (`--hour 7` for a
 different time, `leadgen schedule remove` to stop).
 
+When a whole source fails (the court calendar or the City's site can't be
+reached, not just one lookup), the run doesn't count as the day's check: it
+is tried again the same day 30 minutes later, then 1 and 2 hours after each
+further failure (at most three retries, never past midnight), and the Lead
+Desk header says "Today's check failed (...) · trying again today at ...".
+Once a retry gets through, the day counts as checked. Lead Desk retries
+while it is open; the job `leadgen schedule install` sets up also starts 1,
+2, 4 and 6 hours after the first run, with `leadgen daily --if-due`, which
+does nothing unless a retry is due (run `leadgen schedule install` again to
+add these to a schedule set up before).
+
 `leadgen check-court` searches the court calendar for the next 30 days and
 fails when it finds no eviction hearings (there are always some), which
 means the court's page has changed. GitHub runs it every day
 (`.github/workflows/live-court.yml`); `--file` checks saved pages instead.
+
+When a website can't be reached (no internet, or the court, City or county
+site down), every command stops with a sentence naming the site, such as
+"Lead Desk stopped: the Pima County Justice Court website couldn't be
+reached. Check this computer's internet connection, or try again later if
+the site is down.", and a non-zero exit code. Commands that carry on past
+one failed case page or lookup do the same when every one failed. Add
+`--debug` (`leadgen --debug check-court`, or `LEADGEN_DEBUG=1`) for the full
+error.
 
 ```sh
 leadgen run

@@ -48,11 +48,12 @@ CHANNELS = {
     "property_manager": "Landlord / property manager",
 }
 
-# Who each method reaches and what it offers, by template (see
-# ``template_key``): on an eviction the phone call and the landlord pitch both
-# reach the landlord, so they make different offers (this one unit now vs. a
-# standing rate for every turnover), and Results compares methods within one
-# kind of lead at a time.
+# Who each method reaches and what it offers, by template (the page uses
+# "phone_eviction" for a phone call on an eviction: templateKey in core.js).
+# On an eviction the phone call and the landlord pitch both reach the
+# landlord, so they make different offers (this one unit now vs. a standing
+# rate for every turnover), and Results compares methods within one kind of
+# lead at a time.
 PITCHES = {
     "door_hanger": {
         "who": "whoever is at the property: the tenant moving out, family, neighbours",
@@ -91,12 +92,6 @@ COMPARISON_BASIS = {
 }
 
 
-def template_key(channel: str, lead_type: Optional[str]) -> str:
-    """The message template (and pitch) for a method on a kind of lead:
-    phone calls on evictions use the landlord script."""
-    return "phone_eviction" if channel == "phone" and lead_type == "eviction" else channel
-
-
 # The kinds of contact logged for each method, with their button labels.
 TOUCH_KINDS = {
     "door_hanger": [["visited", "Hanger left"], ["talked", "Talked in person"]],
@@ -131,6 +126,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "google_monthly_limit": 1000,
     # Most Google searches per day; 0 means none, null means no limit.
     "google_daily_limit": 30,
+    # The Leads tab's setup guide (Google key, court records request) put away.
+    "setup_guide_hidden": False,
+    # When the last court records request was sent: {"date": iso}, or None.
+    "records_requested": None,
     "costs": {"door_hanger": 0.35, "phone": 0.0, "property_manager": 0.0},
     "tracking_numbers": {"door_hanger": "", "phone": "", "property_manager": ""},
     "templates": {
@@ -299,7 +298,11 @@ def score_parts(
         code = "VACANT" if "VACANT/NUISANCE" in desc else code_of(lead["description"])
         what = _SHORT_LABELS.get(code or "")
         parts.append((f"Code case: {what}" if what else "Code case", _TYPE_POINTS.get(code or "", 20)))
-    if lead["owner_absentee"]:
+    # An owner who lives elsewhere is a landlord, not someone living there:
+    # that says something about a code case. On an eviction the owner looked
+    # up is the landlord, whose mailing address is nearly always an office
+    # elsewhere, so it would add the same points to every eviction.
+    if lead["owner_absentee"] and lead["lead_type"] != "eviction":
         parts.append(("owner lives elsewhere", 20))
     if lead["owner_entity"]:
         parts.append(("company owner", 10))
@@ -416,6 +419,9 @@ def _stratum(lead: LeadRow) -> tuple[bool, bool]:
     return (door_hanger_problem(lead) is None, lead["lead_type"] == "eviction")
 
 
+# How many of the leads a round left out it names (the page links them).
+LEFT_OUT_SHOWN = 12
+
 # How a lead got its method (``assigned_by``): dealt by an Assign leads
 # round, sent to the method already working its landlord, or set by hand.
 BY_ROUND, FOLLOWED, BY_HAND = "round", "followed", "hand"
@@ -445,27 +451,78 @@ def _combos() -> list[tuple[str, ...]]:
     return out
 
 
+# The kinds of lead an Assign leads round can be limited to ("" is both).
+ROUND_KINDS = ("eviction", "code_violation")
+
+
+def _suggest(combos: dict, evictions: Optional[dict] = None) -> list[str]:
+    """The methods to tick by default: two or more methods if any can work
+    leads together, then (with ``evictions``, for a round of both kinds) the
+    set that takes in the most evictions, then the most methods, then the
+    most leads."""
+    workable: list[tuple[str, ...]] = [c for c in _combos() if combos["+".join(c)]]
+    ev = evictions or {}
+
+    def rank(c: tuple[str, ...]) -> tuple[bool, int, int, int]:
+        return (len(c) > 1, ev.get("+".join(c), 0), len(c), combos["+".join(c)])
+
+    if not workable:
+        return []
+    best: tuple[str, ...] = max(workable, key=rank)
+    return list(best)
+
+
 def split_preview(conn: Conn, leads: list) -> dict:
     """What Assign leads can hand out before Steve presses it: for each
     combination of methods, how many unassigned leads every one of them can
-    work (``combos``, keyed "door_hanger+phone"), how many go to the method
-    already working their landlord (``followed``), and the combination to
-    tick by default (``suggested``: the most methods that still have leads,
-    then the most leads)."""
+    work (``combos``, keyed "door_hanger+phone"; ``evictions`` counts the
+    evictions among them), how many go to the method already working their
+    landlord (``followed``), and the combination to tick by default
+    (``suggested``: two or more methods, the most evictions, then the most
+    methods and leads). ``by_kind`` has the same for a round of evictions
+    only and of City code cases only, and ``kind`` is the kind of round to
+    offer first: evictions when there are any (Results compares methods
+    within one kind of lead, so a round of one kind measures it cleanly)."""
     taken = _taken(conn)
-    followed = 0
-    eligible_sets = []
+    followed = {"": 0, **{k: 0 for k in ROUND_KINDS}}
+    eligible_sets: list[tuple[set, str]] = []
     for lead in _pool(leads):
         eligible = set(eligible_channels(lead))
+        kind = str(lead["lead_type"])
         ch = taken.get(landlord_key(lead))
         if ch:
-            followed += ch in eligible
+            if ch in eligible:
+                followed[""] += 1
+                if kind in followed:
+                    followed[kind] += 1
             continue
-        eligible_sets.append(eligible)
-    combos = {"+".join(c): sum(1 for e in eligible_sets if e.issuperset(c)) for c in _combos()}
-    workable = [c for c in _combos() if combos["+".join(c)]]
-    best = max(workable, key=lambda c: (len(c), combos["+".join(c)]), default=())
-    return {"combos": combos, "followed": followed, "suggested": list(best)}
+        eligible_sets.append((eligible, kind))
+
+    def count(kinds: Optional[tuple] = None) -> dict:
+        return {
+            "+".join(c): sum(1 for e, k in eligible_sets if e.issuperset(c) and (kinds is None or k in kinds))
+            for c in _combos()
+        }
+
+    combos, evictions = count(), count(("eviction",))
+    by_kind: dict[str, dict[str, Any]] = {}
+    for kind in ROUND_KINDS:
+        kc = evictions if kind == "eviction" else count((kind,))
+        by_kind[kind] = {
+            "combos": kc,
+            "suggested": _suggest(kc),
+            "leads": sum(1 for _e, k in eligible_sets if k == kind),
+            "followed": followed[kind],
+        }
+    kind = next((k for k in ROUND_KINDS if any(by_kind[k]["combos"].values())), "")
+    return {
+        "combos": combos,
+        "evictions": evictions,
+        "followed": followed[""],
+        "suggested": _suggest(combos, evictions),
+        "by_kind": by_kind,
+        "kind": kind,
+    }
 
 
 def check_channels(channels: Any, single_method: bool = False) -> list[str]:
@@ -491,12 +548,25 @@ def check_channels(channels: Any, single_method: bool = False) -> list[str]:
     return chosen
 
 
-def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None) -> dict:
+def assign(
+    conn: Conn,
+    leads: list,
+    count: int,
+    channels: list,
+    seed: Any = None,
+    lead_type: str = "",
+    preview: bool = False,
+) -> dict:
     """Deal up to ``count`` of the best unassigned leads across ``channels``
     so that each channel gets a like-for-like share (see the module notes).
+    ``lead_type`` ("eviction" or "code_violation") limits the round to one
+    kind of lead. ``preview`` works the round out without saving anything:
+    which leads it would take (the page says so before Steve confirms).
 
     Returns counts: ``{"assigned": {channel: n}, "followed": {channel: n},
+    "kinds": {lead type: n} (the leads dealt, not those followed),
     "left_out": {"needs_address": n, "needs_unit": n, "no_contact": n},
+    "left_out_leads": [{"id", "label", "reason"}] (the first few of them),
     "round": id}``.
     ``followed`` are leads whose landlord already has a channel from an
     earlier round: they go to that channel, outside the balanced split, so
@@ -509,16 +579,27 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     round_id = now_iso() + "-" + uuid.uuid4().hex[:6]
     now = now_iso()
 
+    if lead_type and lead_type not in ROUND_KINDS:
+        raise ValueError("A round can be evictions only, City code cases only, or both.")
     taken = _taken(conn)
-    pool = _pool(leads)
+    pool = [l for l in _pool(leads) if not lead_type or l["lead_type"] == lead_type]
     out: dict[str, Any] = {
         "assigned": {c: 0 for c in channels},
         "followed": {},
+        "kinds": {},
         "left_out": {"needs_address": 0, "needs_unit": 0, "no_contact": 0},
-        "round": round_id,
+        "left_out_leads": [],
+        "lead_type": lead_type,
+        "preview": preview,
+        "round": None if preview else round_id,
     }
 
     def give(lead: LeadRow, ch: str, how: str) -> None:
+        if how == BY_ROUND:
+            kind = str(lead["lead_type"])
+            out["kinds"][kind] = out["kinds"].get(kind, 0) + 1
+        if preview:
+            return
         conn.execute(
             "UPDATE leads SET channel = ?, assigned_at = ?, assign_round = ?, assigned_by = ? WHERE id = ?",
             (ch, now, round_id, how, lead["id"]),
@@ -543,6 +624,9 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
             else:
                 reason = "no_contact"
             out["left_out"][reason] += 1
+            if len(out["left_out_leads"]) < LEFT_OUT_SHOWN:
+                label = lead["address"] or (lead["plaintiff"] or "").split(";")[0] or lead["owner_name"]
+                out["left_out_leads"].append({"id": lead["id"], "label": label or lead["source_id"], "reason": reason})
             continue
         clusters.setdefault(key, []).append(lead)
 
@@ -576,7 +660,8 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
                     give(lead, ch, BY_ROUND)
                 have[ch] += len(group)
                 out["assigned"][ch] += len(group)
-    conn.commit()
+    if not preview:
+        conn.commit()
     return out
 
 

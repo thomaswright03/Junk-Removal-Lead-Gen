@@ -16,6 +16,11 @@
 
 Nothing runs while Lead Desk is paused (Settings, or LEADDESK_PAUSED=1).
 
+When a whole step fails (the court calendar or the City's site can't be
+reached, say), the run doesn't count as the day's check: it is tried again
+later the same day, 30 minutes, then 1 and 2 hours after each failure, at
+most three times. A retry that gets through makes the day checked.
+
 Lead Desk runs this once a day while it is open, and ``leadgen schedule``
 installs a daily job on this computer so it runs even when Lead Desk isn't.
 """
@@ -41,6 +46,11 @@ log_ = logging.getLogger(__name__)
 
 CALENDAR_DAYS_AHEAD = 30
 CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait for tomorrow
+# Minutes to wait before each same-day retry after a step failed outright.
+RETRY_AFTER_MINUTES = (30, 60, 120)
+# A scheduled run this many minutes before a retry is due runs it (the
+# schedules start on the hour; a retry due at 8:03 shouldn't wait for 10:00).
+RETRY_SLACK_MINUTES = 10
 
 
 STEP_LABELS = {
@@ -60,7 +70,14 @@ def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
         summary[name] = fn()
     except Exception as e:  # one source being down shouldn't stop the rest
         summary[name] = {"error": f"{type(e).__name__}: {e}"}
-        log(f"{name} failed: {type(e).__name__}: {e}")
+        import requests
+
+        if isinstance(e, requests.RequestException):
+            from .cli import site_name
+
+            log(f"{STEP_LABELS.get(name, name)} failed: {site_name(e)} couldn't be reached ({type(e).__name__})")
+        else:
+            log(f"{STEP_LABELS.get(name, name)} failed: {type(e).__name__}: {e}")
 
 
 def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
@@ -104,10 +121,13 @@ def run_daily(
     days_ahead: int = CALENDAR_DAYS_AHEAD,
     code_cases: Any = None,
     log: Log = print,
+    now: Optional[datetime] = None,
 ) -> dict:
     """Run every step and return a summary dict. Each step's failure is logged
-    and recorded, and the next step still runs."""
-    today = today or az_today()
+    and recorded, and the next step still runs. When a step failed outright
+    the day isn't counted as checked and a retry is set (see ``retry_pending``)."""
+    now = now or az_now().replace(tzinfo=None)
+    today = today or now.date()
     summary: dict[str, Any] = {"started_at": now_iso()}
     settings = merged_settings(db.get_settings(conn))
     if is_paused(settings):
@@ -175,25 +195,92 @@ def run_daily(
     except Exception as e:  # a progress number must never fail the check
         log(f"address progress not saved: {type(e).__name__}")
     values: dict[str, Any] = {"last_daily_summary": summary}
+    failed = failed_steps(summary)
     if summary.get("paused_during"):
         # Stopped part way: not today's run. Once the pause is off it runs
         # again (Lead Desk starts it at once, else its scheduler within
         # minutes) and picks up where it stopped: cases already read today
         # aren't read again.
         values["last_daily_interrupted"] = today.isoformat()
+    elif failed:
+        # A whole step failed (a site down, the network out): try again later
+        # today rather than wait for tomorrow. After the last retry the day
+        # counts as checked, and tomorrow's run starts over.
+        before = settings.get("daily_retry") or {}
+        attempt = (before.get("attempt", 0) if before.get("date") == today.isoformat() else 0) + 1
+        at = None
+        if attempt <= len(RETRY_AFTER_MINUTES):
+            at = datetime.combine(today, now.time()) + timedelta(minutes=RETRY_AFTER_MINUTES[attempt - 1])
+            if at.date() != today:
+                at = None  # not before midnight: tomorrow's run will do
+        retry = {"date": today.isoformat(), "attempt": attempt, "failed": failed}
+        if at:
+            retry["at"] = at.isoformat(timespec="minutes")
+            summary["retry_at"] = retry["at"]
+            log(f"{', '.join(STEP_LABELS.get(f, f) for f in failed)} failed: trying again at {_clock(at)}")
+            values.update(daily_retry=retry, last_daily_interrupted=None)
+        else:
+            retry["gave_up"] = True
+            values.update(daily_retry=retry, last_daily_run=today.isoformat(), last_daily_interrupted=None)
     else:
-        values.update(last_daily_run=today.isoformat(), last_daily_interrupted=None)
+        values.update(last_daily_run=today.isoformat(), last_daily_interrupted=None, daily_retry=None)
     db.put_settings(conn, values)
     conn.commit()
     return summary
 
 
+def failed_steps(summary: dict) -> list[str]:
+    """The steps that failed outright (not single lookups within one)."""
+    return [k for k, v in summary.items() if isinstance(v, dict) and "error" in v]
+
+
+def _clock(when: datetime) -> str:
+    """ "8:03 AM"."""
+    return f"{when.hour % 12 or 12}:{when.minute:02d} {'AM' if when.hour < 12 else 'PM'}"
+
+
+def retry_pending(settings: dict, today: Optional[date] = None) -> Optional[dict]:
+    """Today's retry, when today's check failed and is to be tried again:
+    ``{"at": iso local time, "attempt": n, "failed": [step names]}``."""
+    day = (today or az_today()).isoformat()
+    retry = settings.get("daily_retry") or {}
+    if retry.get("date") == day and retry.get("at") and settings.get("last_daily_run") != day:
+        return retry
+    return None
+
+
+def retry_status(settings: dict, today: Optional[date] = None) -> Optional[dict]:
+    """Today's pending retry for the Lead Desk header: ``{"time": "8:03 AM",
+    "failed": ["Justice Court calendar"], "attempt": n}``, or None."""
+    retry = retry_pending(settings, today)
+    if not retry:
+        return None
+    return {
+        "time": _clock(datetime.fromisoformat(retry["at"])),
+        "failed": [STEP_LABELS.get(f, f) for f in retry.get("failed") or []],
+        "attempt": retry.get("attempt", 1),
+    }
+
+
+def retry_line(retry: dict) -> str:
+    """ "today at 8:03 AM (retrying: Justice Court calendar failed)"."""
+    what = ", ".join(STEP_LABELS.get(f, f) for f in retry.get("failed") or [])
+    at = _clock(datetime.fromisoformat(retry["at"]))
+    return f"today at {at} (retrying: {what} failed)" if what else f"today at {at} (retrying)"
+
+
 def due(conn: Conn, now: Optional[datetime] = None, hour: int = 6) -> bool:
     """True when today's run hasn't finished yet and it's past ``hour`` local
-    time (a run stopped part way by the pause doesn't count)."""
+    time (a run stopped part way by the pause doesn't count), and, after a
+    failed run, its retry time has come (``RETRY_SLACK_MINUTES`` early is fine)."""
     now = now or az_now().replace(tzinfo=None)
-    last = db.get_settings(conn).get("last_daily_run")
-    return now.hour >= hour and last != now.date().isoformat()
+    settings = db.get_settings(conn)
+    if now.hour < hour or settings.get("last_daily_run") == now.date().isoformat():
+        return False
+    retry = retry_pending(settings, now.date())
+    if retry:
+        return now >= datetime.fromisoformat(retry["at"]) - timedelta(minutes=RETRY_SLACK_MINUTES)
+    return True
 
 
 def interrupted_today(settings: dict, today: Optional[date] = None) -> bool:
@@ -230,9 +317,11 @@ def describe(summary: dict) -> str:
         failed = n(step, "errors")
         if failed:
             parts.append(f"{failed} {what} lookup{'' if failed == 1 else 's'} failed (will retry tomorrow)")
-    errors = [k for k, v in summary.items() if isinstance(v, dict) and "error" in v]
+    errors = failed_steps(summary)
     if errors:
-        parts.append("failed: " + ", ".join(errors))
+        parts.append("failed: " + ", ".join(STEP_LABELS.get(e, e) for e in errors))
+    if summary.get("retry_at"):
+        parts.append(f"trying again at {_clock(datetime.fromisoformat(summary['retry_at']))}")
     if summary.get("paused_during"):
         label = STEP_LABELS.get(summary["paused_during"], summary["paused_during"])
         parts.append(f"stopped at {label} because Lead Desk was paused")

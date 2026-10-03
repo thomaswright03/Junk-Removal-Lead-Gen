@@ -269,26 +269,64 @@ def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     url, app, path = server
     page.goto(url)
     page.click("#nav [data-tab=outreach]")
-    # Only methods the leads can all be worked by are ticked at first.
-    page.wait_for_selector("#aSplit >> text=1 lead")
-    assert page.is_checked(".aCh[value=door_hanger]") and not page.is_checked(".aCh[value=property_manager]")
+    # The first round offered is evictions only, with the methods they can all be worked by.
+    page.wait_for_selector("#aSplit >> text=1 eviction")
+    assert page.input_value("#aKind") == "eviction"
+    assert page.is_checked(".aCh[value=phone]") and page.is_checked(".aCh[value=property_manager]")
+    assert not page.is_checked(".aCh[value=door_hanger]")
     # Ticking a method no lead fits says so before anything is pressed, and offers the fix.
-    page.check(".aCh[value=property_manager]")
-    page.wait_for_selector("#aSplit >> text=No unassigned lead")
+    page.check(".aCh[value=door_hanger]")
+    page.wait_for_selector("#aSplit >> text=No unassigned evictions")
     assert page.is_disabled("#aGo")
     page.click("#aDrop")
-    page.wait_for_selector("#aSplit >> text=1 lead")
-    # The page's own dialog, with the action on the button; Escape cancels.
+    page.wait_for_selector("#aSplit >> text=1 eviction")
+    # Code cases are a round of their own.
+    page.select_option("#aKind", "code_violation")
+    page.wait_for_selector("#aSplit >> text=1 code case")
+    assert page.is_checked(".aCh[value=door_hanger]") and page.is_checked(".aCh[value=phone]")
+
+    # Both kinds, with door hangers: the eviction (no address) is left out, and the
+    # summary of the round stays, naming it, until dismissed.
+    page.select_option("#aKind", "")
+    page.wait_for_selector("#aSplit >> text=(1 eviction, 0 code cases)")
+    page.uncheck(".aCh[value=property_manager]")
+    page.check(".aCh[value=door_hanger]")
+    page.wait_for_selector("#aSplit >> text=(0 evictions, 1 code case)")
     page.click("#aGo")
     page.wait_for_selector("#confirmBox[open]")
+    assert "This round: 0 evictions and 1 City code case" in page.inner_text("#confirmBody")
     assert page.inner_text("#confirmOk") == "Assign 1 lead"
+    # Escape cancels: nothing is assigned.
     page.keyboard.press("Escape")
     page.wait_for_selector("#confirmBox:not([open])", state="attached")
     assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
     page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
     page.click("#confirmOk")
-    page.wait_for_selector("text=Assigned:")
-    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 1
+    summary = page.locator("#roundSummary")
+    summary.wait_for()
+    assert "0 evictions and 1 City code case assigned" in summary.inner_text()
+    assert "1 left out: 1 with no property address" in summary.inner_text()
+    rows = db.connect(path).execute("SELECT lead_type FROM leads WHERE channel IS NOT NULL").fetchall()
+    assert [r[0] for r in rows] == ["code_violation"]  # what the question said
+    # It outlasts the toast and a redraw, and links the lead it left out.
+    page.evaluate("load()")
+    summary.wait_for()
+    page.click("#roundSummary [data-lead]")
+    page.wait_for_selector("#drawer.open >> text=Example Homes Llc")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#drawer.open", state="hidden")
+    page.click("#roundDismiss")
+    page.wait_for_selector("#roundSummary", state="detached")
+
+    # An eviction-only round in one step: the default.
+    page.wait_for_selector("#aSplit >> text=1 eviction")
+    page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
+    assert "This round: 1 eviction and 0 City code cases" in page.inner_text("#confirmBody")
+    page.click("#confirmOk")
+    page.wait_for_selector("#roundSummary >> text=1 eviction and 0 City code cases assigned")
+    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 2
 
 
 def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):
@@ -566,3 +604,245 @@ def test_phone_text_and_targets_are_big_enough(server, page):
               && e.getBoundingClientRect().height < 44).map(e => e.id || e.textContent.trim().slice(0, 30))"""
         )
         assert small_targets == [], (tab, small_targets)
+
+
+def add_unreachable_eviction(path):
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000002-EA",
+            "eviction",
+            "2026-09-28",
+            None,
+            plaintiff="SAMPLE PROPERTIES LLC",
+            defendant="ROE, SAM",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.commit()
+
+
+def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    app.providers = []  # "find phones" looks nothing up here
+    page.goto(url)
+    guide = page.locator("#setupGuide")
+    guide.wait_for()
+    assert "2 steps to do" in guide.inner_text()
+    assert "1 of 2 open eviction leads can't be reached yet" in page.inner_text("#reachLine")
+    assert "1,000 of these lookups a month free" in guide.inner_text() and "$0 a month" in guide.inner_text()
+    # The lead with nothing says so in the list.
+    assert "can't reach yet" in lead_row(page, "Sample Properties").inner_text()
+    assert "can't reach yet" not in lead_row(page, "Example Homes").inner_text()
+
+    # A blank key is refused at the box, before anything is sent.
+    page.click("#setupKeySave")
+    page.wait_for_selector("#setupKey-err:not([hidden])")
+    assert page.get_attribute("#setupKey", "aria-invalid") == "true"
+    assert page.evaluate("document.activeElement.id") == "setupKey"
+    page.fill("#setupKey", "test-key-123")
+    page.wait_for_selector("#setupKey-err", state="hidden")
+    page.click("#setupKeySave")
+    page.wait_for_selector("#setupGuide >> text=key saved")
+    assert db.get_settings(db.connect(path))["google_places_api_key"] == "test-key-123"
+    page.wait_for_selector("#setupGuide >> text=1 step to do")
+
+    # The records request: sent today, so the guide is done and says when the next is due.
+    page.click("#setupGuide [data-recsent]")
+    page.wait_for_selector("#setupGuide >> text=waiting for the file")
+    assert db.get_settings(db.connect(path))["records_requested"]["date"]
+    page.click("#setupHide")
+    page.wait_for_selector("#setupGuide", state="detached")
+    assert db.get_settings(db.connect(path))["setup_guide_hidden"] is True
+    # The reach numbers stay above the list, with the way back to the guide.
+    assert "1 of 2 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    page.click("#fUnreach")
+    page.wait_for_function("document.querySelectorAll('#leadTable tbody tr[data-id]').length === 1")
+    assert "Sample Properties" in page.inner_text("#leadTable")
+
+
+def test_call_list_puts_numbers_first_and_says_why_others_have_none(server, page):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    conn = db.connect(path)
+    conn.execute("UPDATE leads SET channel = 'phone' WHERE lead_type = 'eviction'")
+    # The lead without a number has the higher priority; the one with a number still comes first.
+    conn.execute("UPDATE leads SET case_stage = 'writ' WHERE source_id = 'CV26-000002-EA'")
+    conn.commit()
+    page.goto(url + "#tab=outreach&method=phone")
+    note = page.locator("#noPhoneNote")
+    note.wait_for()
+    assert "No phone number yet for 1 of 2 calls" in note.inner_text()
+    assert "without a Google Places key" in note.inner_text()
+    rows = page.locator("#oBody tbody tr")
+    assert "(520) 555-0101" in rows.nth(0).inner_text()
+    assert "Search" in rows.nth(1).inner_text()
+    # "Set up phone lookups" opens the guide on the Leads tab.
+    page.click("#noPhoneNote [data-setup]")
+    page.wait_for_selector("#setupGuide[open]")
+
+
+def test_form_mistakes_show_under_the_field_and_nothing_is_sent(server, page):
+    url, app, path = server
+    sent = []
+    page.on("request", lambda r: sent.append(r.post_data) if r.method == "POST" else None)
+    page.goto(url)
+    lead_row(page, "10 E Sample St").click()
+    page.wait_for_selector("#drawer.open")
+
+    page.fill("#dQuote", "-50")
+    page.click("#dSave")
+    page.wait_for_selector("#dQuote-err:not([hidden])")
+    assert page.inner_text("#dQuote-err") == "Quote can't be negative."
+    assert page.get_attribute("#dQuote", "aria-invalid") == "true"
+    assert "dQuote-err" in page.get_attribute("#dQuote", "aria-describedby")
+    assert page.evaluate("document.activeElement.id") == "dQuote"
+    page.fill("#dRev", "250000")
+    page.click("#dSave")
+    page.wait_for_selector("#dRev-err >> text=Job revenue can be at most $100,000")
+    assert sent == []
+    # It stays through a redraw, and goes once the value is corrected.
+    page.evaluate("load()")
+    page.wait_for_selector("#dQuote-err:not([hidden])")
+    page.fill("#dQuote", "50")
+    page.wait_for_selector("#dQuote-err", state="hidden")
+    assert page.get_attribute("#dQuote", "aria-invalid") is None
+    page.fill("#dRev", "")
+
+    page.fill("#dPhone", "12")
+    page.click("#dSaveContact")
+    page.wait_for_selector("#dPhone-err >> text=The phone number needs 10 digits")
+    assert page.evaluate("document.activeElement.id") == "dPhone"
+    page.fill("#dPhone", "")
+    page.fill("#dEmail", "not-an-email")
+    page.click("#dSaveContact")
+    page.wait_for_selector("#dEmail-err >> text=That email address doesn't look right")
+    page.fill("#dAddress", "")
+    page.fill("#dUnit", "4")
+    page.click("#dSaveAddress")
+    page.wait_for_selector("#dAddress-err >> text=Type the street address as well as the unit")
+    assert sent == []
+
+    # The server's own refusal lands under the field too.
+    lead_id = lead_row(page, "10 E Sample St").get_attribute("data-id")
+    send = f"api('/api/lead', {{ id: {lead_id}, fields: {{ owner_phone: '55' }} }})"
+    page.evaluate(f"act(() => {send}, 'x', null, undefined, drawerError)")
+    page.wait_for_selector("#dPhone-err >> text=The phone number needs 10 digits")
+
+
+def test_settings_mistakes_show_under_the_field(server, page):
+    url, app, path = server
+    sent = []
+    page.on("request", lambda r: sent.append(r.url) if r.method == "POST" else None)
+    page.goto(url + "#tab=settings")
+    page.wait_for_selector("#sSave")
+    page.fill("#sName", "")
+    page.fill("#cost-door_hanger", "-1")
+    page.click("#sSave")
+    page.wait_for_selector("#sName-err >> text=Type your business name")
+    page.wait_for_selector("#cost-door_hanger-err >> text=can't be negative")
+    assert page.evaluate("document.activeElement.id") == "sName"
+    assert sent == []
+    page.fill("#sName", "Desert Haul")
+    page.wait_for_selector("#sName-err", state="hidden")
+    page.fill("#cost-door_hanger", "0.5")
+    page.click("#sSave")
+    page.wait_for_selector("text=Settings saved")
+    assert db.get_settings(db.connect(path))["business_name"] == "Desert Haul"
+
+
+def test_header_says_when_a_failed_check_is_retried(server, page):
+    from leadgen.util import az_today
+
+    url, app, path = server
+    conn = db.connect(path)
+    today = az_today().isoformat()
+    db.put_settings(
+        conn,
+        {
+            "daily_retry": {"date": today, "attempt": 1, "at": f"{today}T23:58", "failed": ["evictions"]},
+            "last_daily_summary": {"evictions": {"error": "ConnectionError"}, "finished_at": f"{today}T13:05:00"},
+        },
+    )
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#sub >> text=Today's check failed (Justice Court calendar)")
+    assert "trying again today at 11:58 PM" in page.inner_text("#sub")
+
+
+def test_a_mistyped_address_shows_a_page_with_a_way_back(server, page):
+    url, app, path = server
+    resp = page.goto(url + "nope")
+    assert resp.status == 404
+    assert page.inner_text("h2") == "Page not found"
+    assert page.evaluate("getComputedStyle(document.body).backgroundColor") != "rgba(0, 0, 0, 0)"
+    page.click("text=Back to the leads")
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+
+
+def test_leads_tab_controls_have_distinct_labels_and_the_hint_fits_the_view(server, page):
+    url, app, path = server
+    page.goto(url)  # the fixture shows All leads
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    labels = page.evaluate(
+        """[...document.querySelectorAll('#tab-leads select')]
+        .map(s => [...s.options].map(o => o.text.split(/[:(]/)[0].trim()))"""
+    )
+    seen = [t for opts in labels for t in opts]
+    assert len(seen) == len(set(seen)), seen
+    assert page.inner_text("#fType option[value='']") == "Any kind of lead"
+    # Show is already All leads: no instruction to pick it.
+    assert "Pick “All leads”" not in page.inner_text("#coverage")
+    assert "City of Tucson only" in page.inner_text("#coverage")
+    page.select_option("#fView", "evictions")
+    page.wait_for_selector("#coverage >> text=Pick “All leads” under Show to see them")
+
+
+def test_revenue_on_a_lost_lead_asks_before_marking_it_won(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    conn.execute("UPDATE leads SET status = 'lost' WHERE source_id = 'CE-1'")
+    conn.commit()
+    status = lambda: db.connect(path).execute("SELECT status, revenue_cents FROM leads WHERE source_id = 'CE-1'")
+    page.goto(url + "#status=")
+    lead_row(page, "10 E Sample St").click()
+    page.wait_for_selector("#drawer.open")
+    page.fill("#dRev", "400")
+    page.click("#dSave")
+    page.wait_for_selector("#confirmBox[open]")
+    assert page.inner_text("#confirmTitle") == "Mark this lost lead as won?"
+    assert page.inner_text("#confirmCancel") == "Keep it lost"
+    page.click("#confirmCancel")
+    page.wait_for_selector("text=Saved. The lead stays Lost.")
+    assert tuple(status().fetchone()) == ("lost", 40000)
+    # Asked again and confirmed: Won.
+    page.fill("#dRev", "450")
+    page.click("#dSave")
+    page.wait_for_selector("#confirmBox[open]")
+    page.click("#confirmOk")
+    page.wait_for_selector("text=Saved and marked won")
+    assert tuple(status().fetchone()) == ("won", 45000)
+
+
+def test_dark_theme_is_the_same_from_the_computer_and_from_settings(server, page):
+    url, _, _ = server
+    colors = "['--bg', '--panel', '--accent'].map(v => getComputedStyle(document.documentElement).getPropertyValue(v))"
+    page.emulate_media(color_scheme="dark")
+    page.goto(url)
+    page.wait_for_selector("#leadTable")
+    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+    from_computer = page.evaluate(colors)
+    # Picked in Settings, with the computer set to light: the same palette.
+    page.emulate_media(color_scheme="light")
+    page.wait_for_function("document.documentElement.dataset.theme === 'light'")
+    page.goto(url + "#tab=settings")
+    page.select_option("#sTheme", "dark")
+    page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+    assert page.evaluate(colors) == from_computer
+    # Back to "Same as this computer": light again.
+    page.select_option("#sTheme", "system")
+    page.wait_for_function("document.documentElement.dataset.theme === 'light'")

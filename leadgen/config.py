@@ -14,9 +14,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") 
 # unless asked for.
 STALE_AFTER_DAYS = 30
 
-# Steve's yard. Phase 2 (pricing) measures drive distance from here.
-BASE_ADDRESS = "8790 N Wellside Dr, Tucson, AZ"
-
 # Pima County, AZ. FIPS 04019.
 PIMA_COUNTY_FIPS = "04019"
 # Rough bounding box (lon/lat) used as a cheap sanity check when a geocoder

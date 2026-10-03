@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -149,6 +149,28 @@ def test_scores_rank_absentee_vacant_over_owner_occupied_weeds():
     assert leads["CE-3"]["score"] > leads["CE-2"]["score"]
     assert leads["CE-1"]["score"] > leads["CE-2"]["score"]
     assert leads["CV26-000001-EV"]["eligible"] == ["phone", "property_manager"]
+
+
+def test_owner_lives_elsewhere_counts_on_code_cases_not_evictions():
+    today = date(2026, 10, 3)
+    base = {
+        "lead_type": "eviction",
+        "event_date": "2026-09-01",
+        "description": None,
+        "owner_entity": 1,
+        "owner_name": "EXAMPLE RENTALS LLC",
+        "case_stage": None,
+    }
+    # Two evictions that differ only in the landlord's mailing address score the same.
+    office_elsewhere = outreach.score({**base, "owner_absentee": 1}, today=today)
+    assert office_elsewhere == outreach.score({**base, "owner_absentee": 0}, today=today)
+    assert "owner lives elsewhere" not in dict(outreach.score_parts({**base, "owner_absentee": 1}, today=today))
+    # On a code case it still means a landlord rather than someone living there.
+    code = {**base, "lead_type": "code_violation", "description": "Property Maintenance | Active | REFS / trash"}
+    assert (
+        outreach.score({**code, "owner_absentee": 1}, today=today)
+        == outreach.score({**code, "owner_absentee": 0}, today=today) + 20
+    )
 
 
 def seed_evictions(conn, with_address=30, without=30):
@@ -404,9 +426,53 @@ def test_default_settings_assign_more_than_zero_on_a_real_mix(tmp_path):
     preview = app.state({"list": "queue", "channel": "door_hanger"})["split"]
     assert preview["combos"]["door_hanger+phone+property_manager"] == 4  # company-owned code cases
     assert preview["combos"]["door_hanger+phone"] == 8
-    assert preview["suggested"] == ["door_hanger", "phone", "property_manager"]
-    out = app.assign({"count": 40, "channels": preview["suggested"]})
-    assert sum(out["assigned"].values()) == 4
+    # A round of both kinds is suggested with the methods that take in the most
+    # evictions, not the ones that would fill it with code cases.
+    assert preview["suggested"] == ["phone", "property_manager"]
+    assert preview["evictions"]["phone+property_manager"] == 7
+    assert preview["evictions"]["door_hanger+phone+property_manager"] == 0
+    # The first round offered is evictions only.
+    assert preview["kind"] == "eviction"
+    assert preview["by_kind"]["eviction"]["suggested"] == ["phone", "property_manager"]
+    assert preview["by_kind"]["eviction"]["leads"] == 7
+    code = preview["by_kind"]["code_violation"]
+    assert code["suggested"] == ["door_hanger", "phone", "property_manager"]
+    out = app.assign({"count": 40, "channels": code["suggested"], "lead_type": "code_violation"})
+    assert sum(out["assigned"].values()) == 4 and out["kinds"] == {"code_violation": 4}
+
+
+def test_an_eviction_only_round_and_its_preview(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    app = App(path)
+    app.save_settings({"lead_view": "all"})
+    channels = ["phone", "property_manager"]
+    # The preview says which leads the round takes, and saves nothing.
+    both = app.assign({"count": 40, "channels": channels, "preview": True})
+    assert both["round"] is None and both["kinds"]["eviction"] == 7 and both["kinds"]["code_violation"] > 0
+    assert conn.execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
+    pre = app.assign({"count": 40, "channels": channels, "lead_type": "eviction", "preview": True})
+    assert pre["kinds"] == {"eviction": 7}
+    # The round itself takes exactly those.
+    out = app.assign({"count": 40, "channels": channels, "lead_type": "eviction"})
+    assert out["kinds"] == pre["kinds"] and out["round"]
+    rows = conn.execute("SELECT lead_type, COUNT(*) AS n FROM leads WHERE channel IS NOT NULL GROUP BY lead_type")
+    assert {r["lead_type"]: r["n"] for r in rows.fetchall()} == {"eviction": 7}
+    with pytest.raises(ValueError):
+        app.assign({"count": 4, "channels": channels, "lead_type": "civil"})
+
+
+def test_a_round_names_the_leads_it_left_out(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    app = App(path)
+    out = app.assign({"count": 40, "channels": ["door_hanger", "phone"]})
+    assert out["left_out"]["needs_address"] + out["left_out"]["needs_unit"] == 7
+    assert len(out["left_out_leads"]) == 7
+    left = out["left_out_leads"][0]
+    assert set(left) == {"id", "label", "reason"} and left["reason"] in ("needs_address", "needs_unit")
 
 
 def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):
@@ -621,7 +687,8 @@ def test_lead_carries_the_greeting_name(tmp_path):
 
 
 def test_each_method_reaches_someone_else_or_offers_something_else_on_an_eviction():
-    pitches = {ch: outreach.PITCHES[outreach.template_key(ch, "eviction")] for ch in outreach.CHANNELS}
+    # A phone call on an eviction uses the landlord script (templateKey in core.js).
+    pitches = {ch: outreach.PITCHES["phone_eviction" if ch == "phone" else ch] for ch in outreach.CHANNELS}
     assert len({p["who"] for p in pitches.values()}) >= 2
     # The two methods that reach the landlord make different offers.
     assert len({(p["who"], p["offer"]) for p in pitches.values()}) == len(outreach.CHANNELS)

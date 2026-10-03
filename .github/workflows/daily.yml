@@ -2,6 +2,10 @@
 # morning at 6:00 in Tucson (13:00 UTC; Arizona has no daylight saving time),
 # and when someone presses "Check for new evictions" online.
 #
+# It also starts at 7, 8, 10 and 12 in Tucson. Those runs (--if-due) do
+# nothing unless the morning's check failed outright (the court or City site
+# down) and its same-day retry is due; then they run it again.
+#
 # It writes to the Neon (Postgres) database Lead Desk reads. This repository is public,
 # so the log shows step names and counts only (--counts-only), and nothing
 # is uploaded.
@@ -10,6 +14,7 @@ name: Daily eviction check
 on:
   schedule:
     - cron: "0 13 * * *"
+    - cron: "0 14,15,17,19 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -42,4 +47,5 @@ jobs:
       - if: env.SKIP != '1'
         run: pip install .
       - if: env.SKIP != '1'
-        run: leadgen daily --counts-only
+        # Scheduled runs only run when due; the button always runs.
+        run: leadgen daily --counts-only ${{ github.event_name == 'schedule' && '--if-due' || '' }}

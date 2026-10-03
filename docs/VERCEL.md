@@ -56,7 +56,11 @@ the database and password are set, the site shows a setup page and no data.
    value. Add `GOOGLE_PLACES_API_KEY` too if you use one.
 
 The check is `.github/workflows/daily.yml`. It runs every day at 13:00 UTC
-(6:00 in Tucson) from the `main` branch. To run it right away, open the
+(6:00 in Tucson) from the `main` branch. It also starts at 7, 8, 10 and 12
+Tucson time; those runs do nothing unless the morning's check failed outright
+(the court or City site couldn't be reached), in which case they retry it
+(30 minutes, then 1 and 2 hours after each failure, at most three times) and
+the Lead Desk header says when. To run it right away, open the
 Actions tab, pick "Daily eviction check" and press "Run workflow". The first
 run fills the database with the next 30 days of eviction hearings.
 

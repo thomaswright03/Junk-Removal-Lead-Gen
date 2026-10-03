@@ -9,16 +9,19 @@ Typical daily run::
 """
 
 import argparse
+import re
 import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
+import requests
+
 from . import config, db, export
 from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
-from .util import PAUSED_MESSAGE, Conn, az_today, decode_text, is_paused
+from .util import PAUSED_MESSAGE, Conn, az_today, decode_text, env_flag, is_paused
 
 
 def _connect(args: argparse.Namespace) -> Conn:
@@ -71,12 +74,15 @@ def cmd_geocode(args: argparse.Namespace, conn: Conn = None) -> None:
     _exit_if_paused(conn)
     geocoder = CensusGeocoder()
     rows = db.needs_geocode(conn, limit=args.limit)
-    ok = outside = failed = 0
+    ok = outside = failed = errors = 0
+    last_error: Optional[BaseException] = None
     for row in rows:
         try:
             result = geocoder.geocode(row["address"], row["city"], row["zip"])
         except Exception as e:  # network trouble: try again next run
-            print(f"  geocode error for lead {row['id']}: {e}", file=sys.stderr)
+            errors += 1
+            last_error = e
+            print(f"  map lookup failed for lead {row['id']} ({type(e).__name__})", file=sys.stderr)
             continue
         db.save_geocode(conn, row["id"], result)
         if result is None:
@@ -87,6 +93,7 @@ def cmd_geocode(args: argparse.Namespace, conn: Conn = None) -> None:
             outside += 1
         conn.commit()
     print(f"geocoded {ok} in Pima County, {outside} outside, {failed} not found")
+    _exit_if_all_failed(errors, ok + outside + failed, last_error, "the US Census map service", "map lookups")
 
 
 def cmd_enrich(args: argparse.Namespace, conn: Conn = None) -> None:
@@ -94,6 +101,13 @@ def cmd_enrich(args: argparse.Namespace, conn: Conn = None) -> None:
     _exit_if_paused(conn)
     counts = enrich(conn, limit=getattr(args, "enrich_limit", None), refresh=getattr(args, "refresh", False))
     print(f"owners: {counts['found']} found, {counts['not_found']} not found")
+    _exit_if_all_failed(
+        counts.get("errors", 0),
+        counts["found"] + counts["not_found"],
+        None,
+        "the county parcel (owner) records on the City of Tucson map server",
+        "owner lookups",
+    )
 
 
 def cmd_contacts(args: argparse.Namespace) -> None:
@@ -113,6 +127,11 @@ def cmd_contacts(args: argparse.Namespace) -> None:
             f"companies checked {counts['checked']}; leads with a contact found "
             f"{counts['found']}, not found {counts['not_found']}; individuals skipped "
             f"{counts['skipped_people']}; errors {counts['errors']}"
+        )
+        if counts.get("error_cause") == "google_key":
+            sys.exit("Google refused the Google Places key. Check it in Lead Desk's Settings (or --google-key).")
+        _exit_if_all_failed(
+            counts["errors"], counts["found"] + counts["not_found"], None, names_of(providers), "phone lookups"
         )
     elif args.action == "import":
         if not args.file:
@@ -136,15 +155,31 @@ def cmd_cases(args: argparse.Namespace) -> None:
         if not args.links:
             sys.exit("cases add needs one or more case links or IDs")
         counts = add_cases(conn, " ".join(args.links))
+        read = counts["new"] + counts["updated"]
+        print(
+            f"cases: {counts['new']} new, {counts['updated']} updated, {counts['with_notice']} with an eviction "
+            f"notice, {counts['failed']} couldn't be read"
+            + (f"; skipped (not case links): {', '.join(counts['skipped'])}" if counts["skipped"] else "")
+        )
     else:
         counts = update_cases(conn, limit=args.limit)
-    print(counts)
+        read = counts.get("checked", 0)
+        print(
+            f"cases: {read} re-read, {counts.get('with_notice', 0)} with an eviction notice, "
+            f"{counts.get('failed', 0)} couldn't be read"
+        )
+    _exit_if_all_failed(counts.get("failed", 0), read, None, "the Pima County Justice Court website", "case pages")
 
 
 def cmd_daily(args: argparse.Namespace) -> None:
-    from .daily import main_log, run_daily
+    from .daily import due, main_log, run_daily
 
     conn = _connect(args)
+    if args.if_due and not due(conn, hour=0):
+        # The scheduled runs after the first: only a same-day retry (or a day
+        # whose check hasn't run yet) does anything.
+        print("nothing to do: today's check has run (or its retry isn't due yet)")
+        return
     if args.counts_only:  # public logs (GitHub Actions): step names and counts, nothing else
         log = lambda m: print("  " + m) if m.startswith("checking ") else None  # noqa: E731
     else:
@@ -292,6 +327,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"SQLite file or postgres:// URL (default: DATABASE_URL if set, else {config.DB_PATH})",
     )
     p.add_argument(
+        "--debug",
+        action="store_true",
+        help="show the full error (traceback) when a website or the database can't be reached",
+    )
+    p.add_argument(
         "--stale-days",
         type=int,
         default=config.STALE_AFTER_DAYS,
@@ -363,6 +403,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print step names and counts only, no names or error details (public logs)",
     )
+    sp.add_argument(
+        "--if-due",
+        action="store_true",
+        help="run only if today's check hasn't run yet, or failed and its retry is due (for schedules)",
+    )
     sp.set_defaults(func=cmd_daily)
 
     sp = sub.add_parser("schedule", help="run `leadgen daily` automatically every morning")
@@ -414,9 +459,80 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def names_of(providers: list) -> str:
+    names = {"osm": "OpenStreetMap", "google": "Google Places"}
+    return " and ".join(names.get(p.name, p.name) for p in providers) or "the lookup services"
+
+
+def _exit_if_all_failed(failed: int, done: int, error: Optional[BaseException], site: str, what: str) -> None:
+    """A command that carries on past single failures (one case page, one
+    lookup) still fails, with a plain sentence, when every one failed: the
+    site is down or this computer is offline."""
+    if failed and not done:
+        if error is not None and isinstance(error, requests.exceptions.RequestException):
+            site = site_name(error)
+        sys.exit(
+            f"Lead Desk stopped: no {what} got through ({failed} failed), so {site} probably couldn't be "
+            "reached. Check this computer's internet connection, or try again later if the site is down."
+        )
+
+
+# The websites the commands talk to, by a piece of their address, in words.
+SITES = (
+    ("jp.pima.gov", "the Pima County Justice Court website"),
+    ("PermitsCode", "the City of Tucson code case service"),
+    ("PropertyHousing", "the county parcel (owner) records on the City of Tucson map server"),
+    ("tucsonaz.gov", "the City of Tucson map server"),
+    ("census.gov", "the US Census map service"),
+    ("googleapis.com", "Google Places"),
+    ("overpass", "OpenStreetMap"),
+    ("api.github.com", "GitHub"),
+)
+
+
+def site_name(error: BaseException) -> str:
+    """The website a network error was about, in words ("the Pima County
+    Justice Court website"), from the request's address or the message."""
+    request = getattr(error, "request", None)
+    url = str(getattr(request, "url", "") or "") or str(error)
+    for part, name in SITES:
+        if part.lower() in url.lower():
+            return name
+    host = re.search(r"https?://([^/:\s'\"]+)", url) or re.search(r"host='([^']+)'", url)
+    return host.group(1) if host else "a website it needs"
+
+
+def network_message(error: BaseException) -> str:
+    """One or two plain sentences for a network failure."""
+    if isinstance(error, requests.exceptions.Timeout):
+        what = "didn't answer in time"
+    elif isinstance(error, requests.exceptions.HTTPError) and getattr(error, "response", None) is not None:
+        what = f"answered with an error ({error.response.status_code})"
+    else:
+        what = "couldn't be reached"
+    return (
+        f"Lead Desk stopped: {site_name(error)} {what}. Check this computer's internet connection, "
+        "or try again later if the site is down. (Add --debug for the full error.)"
+    )
+
+
 def main(argv: Optional[list] = None) -> None:
     args = build_parser().parse_args(argv)
-    args.func(args)
+    debug = args.debug or env_flag("LEADGEN_DEBUG")
+    try:
+        args.func(args)
+    except requests.exceptions.RequestException as e:
+        if debug:
+            raise
+        sys.exit(network_message(e))
+    except Exception as e:
+        # The database (Neon) unreachable: say so in a sentence too.
+        if debug or type(e).__module__.split(".")[0] != "psycopg" or type(e).__name__ != "OperationalError":
+            raise
+        sys.exit(
+            "Lead Desk stopped: it couldn't connect to the database (DATABASE_URL). Check the connection "
+            "and the address, or try again later. (Add --debug for the full error.)"
+        )
 
 
 if __name__ == "__main__":
