@@ -206,16 +206,20 @@ function renderRoute(el, q) {
     <div class="row">
       ${dirUrl ? `<a class="btn" href="${dirUrl}" target="_blank" rel="noopener">Directions for first ${gmaps.length}</a>` : ""}
       <button class="btn" id="rPrint" ${r.length ? "" : "disabled"}>Print route sheet</button>
-    </div></div>
+    </div>${phoneMissing("door_hanger")}</div>
     ${r.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>#</th><th>Address</th><th>What</th><th class="num">Miles</th><th></th></tr></thead><tbody>
       ${r.map((l, i) => `<tr class="click" data-id="${l.id}"><td data-th="Stop">${i + 1}</td><td data-th="Address"><span>${esc(title(fullAddress(l)))}${addressNote(l)}</span></td><td data-th="What">${esc(whatLabel(l))}</td><td class="num" data-th="Miles">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
       <td data-th="Log"><button class="btn small" data-quick="${l.id}" data-kind="visited">Hanger left</button></td></tr>`).join("")}</tbody></table></div>` : emptyQueue()}`;
-  if (r.length) $("#rPrint").onclick = () => {
+  if (r.length) $("#rPrint").onclick = async () => {
+    if (phoneMissing("door_hanger") && !(await confirmBox({ title: "Print hangers with no phone number?",
+      body: "Your phone number isn't set in Settings, so the hanger text says “[phone]” instead of how to reach you.",
+      ok: "Print anyway" }))) return;
     $("#print").innerHTML = `<div class="route"><h2>Door hanger route · ${esc(fmtDate(S.today))}</h2><p>${esc(fill("door_hanger", {}))}</p><table><tr><th>#</th><th>Address</th><th>What</th><th>Done</th></tr>
       ${r.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(title(fullAddress(l)))}${addressNote(l, true) ? ` (${esc(addressNote(l, true))})` : ""}</td><td>${esc(whatLabel(l))}</td><td>☐</td></tr>`).join("")}</table></div>`;
     window.print();
   };
   bindQuick(el);
+  bindGotoSettings(el);
 }
 function bindQuick(el) {
   el.querySelectorAll("[data-quick]").forEach(b => b.onclick = () =>
@@ -244,7 +248,7 @@ function renderCalls(el, q, ch) {
   el.innerHTML = `<div class="card">
     <h2>Calls: ${q.length} to make</h2>
     <p class="hint">Numbers found by the lookup or imported show here; otherwise use the search link. Check each number against the Do Not Call registry before cold-calling a cell phone, and log every attempt. Never auto-dial or mass-text.</p>
-    ${noPhoneNote(q, "calls")}
+    ${noPhoneNote(q, "calls")}${phoneMissing(ch)}
     ${q.some(l => l.lead_type === "eviction") || !q.length ? `<h3>Script for eviction landlords</h3><div class="script" data-script="eviction">${esc(fill(ch, { lead_type: "eviction", owner_entity: 1 }))}</div>` : ""}
     ${q.some(l => l.lead_type !== "eviction") ? `<h3>Script for code-case owners</h3><div class="script" data-script="code">${esc(fill(ch, { lead_type: "code_violation", address: "[address]" }))}</div>` : ""}
     <p class="hint">Each lead's own page shows the script filled in with its owner and address.</p></div>
@@ -255,6 +259,7 @@ function renderCalls(el, q, ch) {
     </tbody></table></div>` : emptyQueue()}`;
   bindQuick(el);
   bindNoPhoneNote(el);
+  bindGotoSettings(el);
 }
 function renderManagers(el, leads) {
   const groups = {};
@@ -266,7 +271,7 @@ function renderManagers(el, leads) {
     <h2>Landlords and property managers: ${list.length}</h2>
     <p class="hint">One pitch per company, not per property: offer a standing move-out clean-out rate. Companies with a phone or email come first, then those on several leads. Use “Other properties this owner has” on a lead to see their portfolio.</p>
     ${noPhoneNote(leads.filter(l => l.status !== "won"), "leads here")}
-    <div class="script">${esc(fill("property_manager", {}))}</div></div>
+    ${phoneMissing("property_manager")}<div class="script">${esc(fill("property_manager", {}))}</div></div>
     ${list.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
         return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:13px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
@@ -277,6 +282,7 @@ function renderManagers(el, leads) {
         ${touchButtons("property_manager").map(([k, t]) => `<button class="btn small" data-group="${ids}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;
   bindNoPhoneNote(el);
+  bindGotoSettings(el);
   el.querySelectorAll("[data-group]").forEach(b => b.onclick = () => {
     const ids = b.dataset.group.split(",").map(Number);
     // One contact covers the company; cost is logged once, on the first lead.

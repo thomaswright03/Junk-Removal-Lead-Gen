@@ -56,7 +56,7 @@ function renderSettings() {
         <label>Main phone<br><input id="sPhone" value="${esc(st.business_phone)}" placeholder="(520) 555-0100" style="width:100%">${fieldError("sPhone")}</label>
         <label>Base address (for miles and routes)<br><input id="sBase" value="${esc(st.base_address)}" style="width:100%">${fieldError("sBase")}</label>
       </div>
-      <p class="hint">${st.base_lat != null ? `Base located at ${(+st.base_lat).toFixed(4)}, ${(+st.base_lon).toFixed(4)}.` : "Base not located yet; it's looked up when you save or refresh."}</p>
+      <p class="hint" id="baseFound">${st.base_lat != null ? "Base address found on the map: miles and the door-hanger route start from it." : "Base address not found on the map yet. It's looked up when you save; if this stays, check the address (street, city and “AZ”). Miles and the route start from it once found."}</p>
     </div>
     <div class="card"><h2>Phone and email lookup</h2>
       <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>

@@ -825,6 +825,10 @@ def test_leads_tab_controls_have_distinct_labels_and_the_hint_fits_the_view(serv
     # Show is already All leads: no instruction to pick it.
     assert "Pick “All leads”" not in page.inner_text("#coverage")
     assert "City of Tucson only" in page.inner_text("#coverage")
+    # What is and isn't collected, one click away.
+    page.click("#coverageMore summary")
+    page.wait_for_selector("#coverageMore >> text=unincorporated Pima County")
+    assert "foreclosures" in page.inner_text("#coverageMore")
     page.select_option("#fView", "evictions")
     page.wait_for_selector("#coverage >> text=Pick “All leads” under Show to see them")
 
@@ -853,6 +857,69 @@ def test_revenue_on_a_lost_lead_asks_before_marking_it_won(server, page):
     page.click("#confirmOk")
     page.wait_for_selector("text=Saved and marked won")
     assert tuple(status().fetchone()) == ("won", 45000)
+
+
+def test_a_quote_on_a_skipped_lead_asks_before_marking_it_quoted(server, page):
+    url, app, path = server
+    with db.connect(path) as conn:
+        conn.execute("UPDATE leads SET status = 'skip' WHERE source_id = 'CE-1'")
+    status = lambda: tuple(
+        db.connect(path).execute("SELECT status, quote_cents FROM leads WHERE source_id = 'CE-1'").fetchone()
+    )
+    page.goto(url + "#status=")
+    lead_row(page, "10 E Sample St").click()
+    page.wait_for_selector("#drawer.open")
+    page.fill("#dQuote", "300")
+    page.click("#dSave")
+    page.wait_for_selector("#confirmBox[open]")
+    assert page.inner_text("#confirmTitle") == "Mark this skip lead as quoted?"
+    assert page.inner_text("#confirmCancel") == "Keep it skip"
+    page.click("#confirmCancel")
+    page.wait_for_selector("text=Saved. The lead stays Skip.")
+    assert status() == ("skip", 30000)
+    page.fill("#dQuote", "350")
+    page.click("#dSave")
+    page.wait_for_selector("#confirmBox[open]")
+    page.click("#confirmOk")
+    page.wait_for_selector("text=Saved and marked quoted")
+    assert status() == ("quoted", 35000)
+
+
+def test_a_blank_business_phone_is_flagged_before_hangers_go_out(server, page):
+    url, app, path = server
+    with db.connect(path) as conn:
+        conn.execute("UPDATE leads SET channel = 'door_hanger' WHERE source_id = 'CE-1'")
+    page.goto(url + "#tab=outreach&method=door_hanger")
+    warning = page.locator("#oBody .phone-missing")
+    warning.wait_for()
+    assert "phone number isn't set" in warning.inner_text()
+    # Printing asks first.
+    page.click("#rPrint")
+    page.wait_for_selector("#confirmBox[open]")
+    assert "[phone]" in page.inner_text("#confirmBody")
+    page.click("#confirmCancel")
+    page.wait_for_selector("#confirmBox:not([open])", state="attached")
+    # The link goes to the phone box in Settings; once it's set the warning is gone.
+    page.click("#oBody [data-goto-settings]")
+    page.wait_for_function("document.activeElement && document.activeElement.id === 'sPhone'")
+    app.save_settings({"business_phone": "(520) 555-0100"})
+    page.goto(url + "#tab=outreach&method=door_hanger")
+    page.wait_for_selector("#oBody h2 >> text=Door hangers")
+    assert page.locator(".phone-missing").count() == 0
+
+
+def test_purpose_line_is_whole_on_a_phone_and_a_wide_screen(server, page):
+    url, _, _ = server
+    for width in (375, 1440):
+        page.set_viewport_size({"width": width, "height": 800})
+        page.goto(url)
+        page.wait_for_selector("#purpose >> text=eviction and clean-out job leads")
+        assert page.is_visible("#purpose")
+        cut = page.evaluate(
+            "(() => { const p = document.getElementById('purpose');"
+            " return p.scrollWidth > p.clientWidth + 1 || getComputedStyle(p).textOverflow === 'ellipsis'; })()"
+        )
+        assert not cut, width
 
 
 def test_dark_theme_is_the_same_from_the_computer_and_from_settings(server, page):

@@ -63,6 +63,10 @@ function renderLeads() {
         <button class="btn" id="cUpdate" title="Re-read every open eviction case page for new documents (notice, judgment, writ) and court dates. Runs in the background.">Update court cases</button>
       </div>
       <p class="hint" style="margin-bottom:0">New evictions come in by themselves every morning; paste case links to add one now.</p>
+      <details class="hint" id="coverageMore"><summary>What Lead Desk covers</summary><ul>
+          <li><b>Evictions:</b> every eviction hearing on the Pima County Consolidated Justice Court's calendar (the Green Valley and Ajo justice courts keep their own and aren't read).</li>
+          <li><b>Clean-out leads (code cases):</b> City of Tucson code-enforcement cases only. Nothing yet for Marana, Oro Valley, Sahuarita, South Tucson or unincorporated Pima County, which is much of the northwest near your base.</li>
+          <li><b>Not collected:</b> foreclosures (trustee sale notices), probate and estate clean-outs, and county code enforcement. Adding one is your call (some cost money); ask for it.</li></ul></details>
       <details class="hint"><summary>How Lead Desk finds evictions</summary>
         <p>Every morning it searches the Justice Court calendar for eviction hearings, reads each new case page (with a short pause between cases) and keeps cases whose documents include an eviction notice. It re-reads open cases every few days and the day after each hearing, so a judgment or writ, the moment a unit needs clearing, moves the case to the top.</p></details>
     <div class="row mt8">

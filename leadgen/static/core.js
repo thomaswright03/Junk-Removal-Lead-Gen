@@ -258,6 +258,22 @@ function fillText(text, channel, l) {
     .replaceAll("{phone}", phone)
     .replaceAll("{business}", st.business_name || "");
 }
+// A warning when this method's message would go out with no phone number:
+// the template has {phone} but neither a tracking number nor the main phone
+// is set in Settings. "" when all is well.
+function phoneMissing(channel, l = {}) {
+  const st = S.settings, text = st.templates[templateKey(channel, l)] || st.templates[channel] || "";
+  if (!text.includes("{phone}") || (st.tracking_numbers || {})[channel] || (st.business_phone || "").trim()) return "";
+  return `<p class="notice warn phone-missing" role="alert">Your phone number isn't set, so this message shows “[phone]” where customers should see how to reach you.
+    <button class="linkbtn" data-goto-settings>Add your phone in Settings</button></p>`;
+}
+function bindGotoSettings(el) {
+  el.querySelectorAll("[data-goto-settings]").forEach(b => b.onclick = async () => {
+    if (ui.open != null) { await closeDrawer(); if (ui.open != null) return; }  // kept open: unsaved typing
+    ui.tab = "settings"; syncUrl(true); await reloadList();
+    const f = $("#sPhone"); if (f) f.focus();
+  });
+}
 // Who a method reaches on this lead and what it offers, in one line.
 function pitchLine(channel, l) {
   const p = (S.pitches || {})[templateKey(channel, l)];
@@ -368,8 +384,6 @@ function renderHeader() {
   const unchecked = (S.view_counts || {}).unchecked || 0;
   const msg = d.message || "starting the daily check";
   const problems = d.problems || [];
-  $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson code cases`;
-  $("#purpose").title = $("#purpose").textContent.slice(2);  // in full, when a wide header cuts it short
   // One short line: open leads, when the last check ran, a warning sign if
   // anything failed. The rest is under Details.
   const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
