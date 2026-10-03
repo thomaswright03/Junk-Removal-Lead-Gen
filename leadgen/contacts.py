@@ -37,15 +37,28 @@ def clean_email(value):
     return value if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value) else None
 
 
+CLOSED_STATUSES = ("stale", "skip", "lost", "won")
+
+
 def import_contacts(conn, text):
-    """Fill owner_phone / owner_email from a CSV. Matches each row to leads by
-    lead id, parcel, property address, then owner name. Returns counts."""
+    """Fill owner_phone / owner_email from a CSV (a skip-tracing service's
+    file, or Steve's own list).
+
+    Each row is matched to leads by lead id, parcel, property address, then
+    owner name, and fills every open lead with the same owner and mailing
+    address (a skip-trace file has one row per owner). An import only fills
+    empty fields: it never changes a phone or email entered by hand, and it
+    keeps a number a lead already has. Returns counts, including
+    ``skipped_manual`` (rows that matched a hand-entered contact, left alone)
+    and ``kept_existing`` (leads that already had a different number).
+    """
     rows = list(csv.DictReader(io.StringIO(text)))
     leads = conn.execute(
-        "SELECT id, parcel, address_norm, owner_name, plaintiff FROM leads"
+        "SELECT id, parcel, address_norm, owner_name, owner_address, plaintiff, owner_phone, "
+        "owner_email, contact_source, status FROM leads"
     ).fetchall()
-    by_id = {str(l["id"]): [l["id"]] for l in leads}
-    by_parcel, by_addr, by_name = {}, {}, {}
+    by_id = {str(l["id"]): dict(l) for l in leads}
+    by_parcel, by_addr, by_name, by_owner = {}, {}, {}, {}
     for l in leads:
         if l["parcel"]:
             by_parcel.setdefault(l["parcel"].upper(), []).append(l["id"])
@@ -54,11 +67,15 @@ def import_contacts(conn, text):
         for n in (l["owner_name"], l["plaintiff"]):
             if n:
                 by_name.setdefault(n.upper().strip(), []).append(l["id"])
-    counts = {"rows": len(rows), "matched": 0, "updated": 0, "no_match": 0}
+        if l["owner_name"]:
+            by_owner.setdefault(_owner_key(l), []).append(l["id"])
+    counts = {"rows": len(rows), "matched": 0, "updated": 0, "no_match": 0,
+              "skipped_manual": 0, "kept_existing": 0}
     for row in rows:
         phone = clean_phone(pick(row, _PHONE_KEYS))
         email = clean_email(pick(row, _EMAIL_KEYS))
-        ids = (by_id.get(pick(row, _ID_KEYS) or "")
+        lead_id = pick(row, _ID_KEYS) or ""
+        ids = (([by_id[lead_id]["id"]] if lead_id in by_id else None)
                or by_parcel.get((pick(row, _PARCEL_KEYS) or "").upper())
                or by_addr.get(normalize_address(pick(row, _ADDRESS_KEYS)))
                or by_name.get((pick(row, _NAME_KEYS) or "").upper().strip()))
@@ -68,15 +85,41 @@ def import_contacts(conn, text):
         counts["matched"] += 1
         if not (phone or email):
             continue
-        for lead_id in ids:
-            conn.execute(
-                "UPDATE leads SET owner_phone = COALESCE(?, owner_phone), "
-                "owner_email = COALESCE(?, owner_email), contact_source = 'import' WHERE id = ?",
-                (phone, email, lead_id),
-            )
-            counts["updated"] += 1
+        targets = list(dict.fromkeys(ids))
+        for i in ids:
+            l = by_id[str(i)]
+            if l["owner_name"]:
+                targets += [j for j in by_owner.get(_owner_key(l), [])
+                            if j not in targets and by_id[str(j)]["status"] not in CLOSED_STATUSES]
+        manual_hit = False
+        for i in targets:
+            l = by_id[str(i)]
+            if l["contact_source"] == "manual":
+                manual_hit = True
+                continue
+            fill = {}
+            if phone and not l["owner_phone"]:
+                fill["owner_phone"] = phone
+                fill["contact_source"] = "import"
+            if email and not l["owner_email"]:
+                fill["owner_email"] = email
+                if not (l["owner_phone"] or l["contact_source"]):
+                    fill["contact_source"] = "import"
+            if (phone and l["owner_phone"] and l["owner_phone"] != phone) or \
+                    (email and l["owner_email"] and l["owner_email"].lower() != email.lower()):
+                counts["kept_existing"] += 1
+            if fill:
+                sets = ", ".join(f"{k} = ?" for k in fill)
+                conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fill.values(), i])
+                l.update(fill)
+                counts["updated"] += 1
+        counts["skipped_manual"] += int(manual_hit)
     conn.commit()
     return counts
+
+
+def _owner_key(lead):
+    return ((lead["owner_name"] or "").upper().strip(), (lead["owner_address"] or "").upper().strip())
 
 
 def skiptrace_csv(leads):

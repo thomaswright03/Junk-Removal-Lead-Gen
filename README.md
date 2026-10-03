@@ -98,9 +98,13 @@ columns:
    Send it to one (BatchSkipTracing, PropStream and similar charge per
    record), then **Import phones / emails** (or `leadgen contacts import
    --file ...`) the file they send back. Rows are matched by lead id, parcel,
-   property address or owner name.
+   property address or owner name, and each row fills every open lead with
+   the same owner and mailing address. An import only fills empty phone and
+   email fields; it never changes a number entered by hand, and the result
+   says how many rows were skipped for that reason. UTF-8 and Excel
+   (Windows-1252) CSV files both work.
 3. Type a number into a lead by hand. Hand-entered contacts are never
-   overwritten by a lookup.
+   overwritten by a lookup or an import.
 
 Check found numbers before calling, and scrub personal cell numbers against
 the Do Not Call registry before any cold call.

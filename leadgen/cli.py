@@ -17,7 +17,7 @@ from . import config, db, export
 from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
-from .util import az_today
+from .util import az_today, decode_text
 
 
 def _connect(args):
@@ -92,7 +92,7 @@ def cmd_contacts(args):
     elif args.action == "import":
         if not args.file:
             sys.exit("contacts import needs --file")
-        text = Path(args.file).read_text(encoding="utf-8-sig", errors="replace")
+        text = decode_text(Path(args.file).read_bytes())
         print(contacts.import_contacts(conn, text))
     else:
         out = Path(args.file or f"exports/skiptrace-{az_today().isoformat()}.csv")

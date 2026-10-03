@@ -261,7 +261,10 @@ async function importContacts(file) {
   await act(async () => {
     const r = await fetch(`/api/import?source=contacts&filename=${encodeURIComponent(file.name)}`, { method: "POST", body: await file.arrayBuffer() });
     const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
-  }, r => `Contacts: ${r.matched} of ${r.rows} rows matched a lead, ${r.updated} leads updated`);
+  }, r => `Phones and emails: ${r.matched} of ${r.rows} rows matched a lead, ${r.updated} leads filled in.`
+    + (r.skipped_manual ? ` ${r.skipped_manual} row${r.skipped_manual > 1 ? "s" : ""} skipped because the lead has a number entered by hand.` : "")
+    + (r.kept_existing ? ` ${r.kept_existing} lead${r.kept_existing > 1 ? "s" : ""} kept the different number they already had.` : "")
+    + (r.rows && !r.matched ? " No rows matched: the file needs a lead_id, parcel, property address or owner name column." : ""));
 }
 
 // ---------- header ----------------------------------------------------------

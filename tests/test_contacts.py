@@ -167,7 +167,8 @@ def test_import_and_skiptrace_export(tmp_path):
             "SMITH JOHN,10 East Owner Lane,520-555-0142,john@smithmail.net\n"
             "NOBODY,1 NOWHERE ST,520-555-0000,\n")
     counts = import_contacts(conn, text)
-    assert counts == {"rows": 2, "matched": 1, "updated": 1, "no_match": 1}
+    assert counts == {"rows": 2, "matched": 1, "updated": 1, "no_match": 1,
+                      "skipped_manual": 0, "kept_existing": 0}
     row = conn.execute("SELECT owner_phone, owner_email, contact_source FROM leads "
                        "WHERE parcel = 'P2'").fetchone()
     assert tuple(row) == ("(520) 555-0142", "john@smithmail.net", "import")
@@ -378,3 +379,57 @@ def test_lead_over_google_limit_is_retried_tomorrow():
     find_contacts(conn, [site_only, OverLimit()], scanner=None, log=lambda *a: None)
     row = conn.execute("SELECT * FROM leads WHERE source_id = 'CV26-5'").fetchone()
     assert row["contact_checked_at"] is None  # no phone yet: looked up again next run
+
+
+def test_import_never_overwrites_a_hand_entered_number(tmp_path):
+    path = tmp_path / "l.db"
+    conn = make_db(path)
+    # A second case for the same landlord, with the number typed in by hand on the first.
+    app = App(path)
+    leads = [l for l in app.state()["leads"] if l["plaintiff"] == "DESERT SKY PROPERTY MGMT LLC"]
+    first, second = leads[0]["id"], leads[1]["id"]
+    app.update_lead({"id": first, "fields": {"owner_phone": "(520) 555-0100"}})
+    text = "Owner Name,Phone\nDESERT SKY PROPERTY MGMT LLC,(602) 555-9999\n"
+    counts = import_contacts(conn, text)
+    assert counts["skipped_manual"] == 1
+    rows = {r["id"]: r for r in conn.execute("SELECT * FROM leads")}
+    assert (rows[first]["owner_phone"], rows[first]["contact_source"]) == ("(520) 555-0100", "manual")
+    # The other lead had no number, so the import fills it.
+    assert rows[second]["owner_phone"] == "(602) 555-9999"
+    # A later import with yet another number keeps the one already there.
+    counts = import_contacts(conn, "Owner Name,Phone\nDESERT SKY PROPERTY MGMT LLC,(602) 555-1111\n")
+    assert counts["kept_existing"] == 1 and counts["updated"] == 0
+    assert conn.execute("SELECT owner_phone FROM leads WHERE id = ?", (second,)).fetchone()[0] == \
+        "(602) 555-9999"
+
+
+def test_skiptrace_round_trip_fills_every_lead_of_the_owner():
+    conn = make_db()
+    for i in (3, 4):
+        db.upsert(conn, Lead("t", str(i), "code_violation", "2026-09-30", f"{i}0 N OTHER ST",
+                             parcel=f"P{i}", in_pima=True))
+    conn.execute("UPDATE leads SET owner_name = 'SAGUARO VISTA APARTMENTS LLC', owner_entity = 1, "
+                 "owner_address = 'PO BOX 1' WHERE parcel IN ('P3', 'P4')")
+    conn.commit()
+    leads = [dict(r) for r in conn.execute("SELECT * FROM leads")]
+    exported = skiptrace_csv(leads).splitlines()
+    rows = [r for r in exported if "SAGUARO VISTA" in r]
+    assert len(rows) == 1  # one row per owner and mailing address
+    filled = exported[0] + ",phone\n" + rows[0] + ",520-555-0177\n"
+    counts = import_contacts(conn, filled)
+    assert counts["updated"] == 3
+    phones = [r[0] for r in conn.execute(
+        "SELECT owner_phone FROM leads WHERE owner_name = 'SAGUARO VISTA APARTMENTS LLC'")]
+    assert phones == ["(520) 555-0177"] * 3
+
+
+def test_contacts_csv_saved_by_excel(tmp_path):
+    path = tmp_path / "l.db"
+    make_db(path).close()
+    app = App(path)
+    data = "Owner Name,Email\nSMITH JOHN,josé@example.com\n".encode("cp1252")
+    counts = app.import_file("contacts", "x.csv", data)
+    assert counts["updated"] == 1
+    conn = db.connect(path)
+    assert conn.execute("SELECT owner_email FROM leads WHERE parcel = 'P2'").fetchone()[0] == \
+        "josé@example.com"

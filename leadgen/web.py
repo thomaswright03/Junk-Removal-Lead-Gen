@@ -26,7 +26,7 @@ from .lookup import GoogleBudget, find_contacts, providers_from
 from .sources import SOURCES
 from .sources.pima_jp_case import add_cases, is_case_page, parse_case_html, update_cases
 from .tucson_codes import CODE_LABELS, code_of
-from .util import az_today, now_iso
+from .util import az_today, decode_text, now_iso
 
 STATIC = Path(__file__).parent / "static"
 
@@ -348,7 +348,7 @@ class App:
     def import_file(self, source, filename, data, lead_type="eviction"):
         if source == "contacts":
             with self.lock, self.conn() as conn:
-                return import_contacts(conn, data.decode("utf-8-sig", errors="replace"))
+                return import_contacts(conn, decode_text(data))
         if source not in ("pima_jp_calendar", "csv_import"):
             raise ValueError("source must be pima_jp_calendar or csv_import")
         text = data.decode("utf-8", errors="replace")
