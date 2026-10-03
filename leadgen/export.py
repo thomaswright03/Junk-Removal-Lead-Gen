@@ -65,8 +65,9 @@ def _as_dict(r: LeadRow) -> dict:
 
 
 def ranked(conn: Conn, rows: list, settings: Optional[dict] = None, today: Optional[date] = None) -> list[dict]:
-    """``rows`` as dicts with the Lead Desk ranking columns added, highest
-    priority first (newest first among equal priorities), as Lead Desk sorts
+    """``rows`` as dicts with the Lead Desk ranking columns added, writ cases
+    first, then judgments, then the rest, each highest priority first (newest
+    first among equal priorities), as Lead Desk sorts
     them. Repeat owners are counted over the leads Lead Desk shows, so a lead
     gets the same priority here as there."""
     settings = outreach.merged_settings(settings)

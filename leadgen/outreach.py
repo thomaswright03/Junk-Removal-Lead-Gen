@@ -238,6 +238,26 @@ def score_parts(
     return parts
 
 
+# How far an eviction has got, for the list order: a writ (lockout) means the
+# unit needs clearing now, a judgment means a writ usually follows within days.
+# Every writ case comes before every judgment case, which comes before every
+# other lead; priority points order the leads within a stage.
+STAGE_RANK = {"writ": 2, "judgment": 1}
+
+
+def stage_rank(lead: LeadRow) -> int:
+    """2 for an eviction with a writ, 1 for one with a judgment, else 0."""
+    if _get(lead, "lead_type") != "eviction":
+        return 0
+    return STAGE_RANK.get(str(_get(lead, "case_stage") or ""), 0)
+
+
+def rank_key(lead: LeadRow) -> tuple[int, int]:
+    """Sort key, best first: stage (writ, judgment, the rest), then the
+    priority number already on the lead (``score``)."""
+    return (-stage_rank(lead), -int(_get(lead, "score") or 0))
+
+
 def score(lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None) -> int:
     """0-100ish. ``lead`` is a dict/row with the leads table's columns."""
     return sum(points for _label, points in score_parts(lead, owner_lead_counts, today))
@@ -333,7 +353,7 @@ def _taken(conn: Conn) -> dict[str, str]:
 
 def _pool(leads: list) -> list:
     pool = [l for l in leads if not l["channel"] and l["status"] == "new"]
-    pool.sort(key=lambda l: (-l["score"], l["id"]))
+    pool.sort(key=lambda l: (*rank_key(l), l["id"]))
     return pool
 
 
@@ -429,7 +449,7 @@ def assign(conn: Conn, leads: list, count: int, channels: list, seed: Any = None
     # together, so a big one that doesn't fit waits for the next round.
     picked = 0
     chosen = []
-    for _key, group in sorted(clusters.items(), key=lambda kv: (-kv[1][0]["score"], kv[0])):
+    for _key, group in sorted(clusters.items(), key=lambda kv: (*rank_key(kv[1][0]), kv[0])):
         if picked + len(group) > count:
             continue
         chosen.append(group)

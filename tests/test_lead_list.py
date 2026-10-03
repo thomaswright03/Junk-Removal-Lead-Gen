@@ -12,7 +12,7 @@ import pytest
 # Shared made-up leads and stand-ins for the court and the assessor.
 from test_lead_rules import CASE_HTML, CASE_URL, Assessor, SlowCourt, eviction, parcel, row, seed_cases
 
-from leadgen import db
+from leadgen import db, export
 from leadgen.enrich import enrich_landlords
 from leadgen.forms import NOTES_LIMIT
 from leadgen.models import Lead
@@ -133,6 +133,57 @@ def test_newest_first_uses_the_latest_real_event(desk):
     assert [l["source_id"] for l in rows] == ["CV26-000001-EA", "CV26-000002-EA", "CV26-000003-EA"]
     labels = [(l["latest_label"], l["date_label"]) for l in rows]
     assert labels == [("Writ", "Filed"), ("Filed", "Filed"), (None, "Hearing")]
+
+
+def test_writs_then_judgments_come_before_every_notice_only_case(desk):
+    app, conn = desk
+    today = az_today()
+    old = (today - timedelta(days=25)).isoformat()
+    fresh = today.isoformat()
+    cases = [
+        ("CV26-000011-EA", old, "writ", "OLD WRIT HOMES LLC"),
+        ("CV26-000012-EA", old, "judgment", "OLD JUDGMENT HOMES LLC"),
+        # Notice only, with every bonus: absentee company owner with two
+        # leads, filed today.
+        ("CV26-000013-EA", fresh, "notice", "BUSY RENTALS LLC"),
+        ("CV26-000014-EA", fresh, "notice", "BUSY RENTALS LLC"),
+    ]
+    for case, filed, stage, landlord in cases:
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_calendar",
+                case,
+                "eviction",
+                filed,
+                plaintiff=landlord,
+                in_pima=True,
+                eviction_notice=True,
+                case_stage=stage,
+                judgment_date=old if stage in ("judgment", "writ") else None,
+                writ_date=old if stage == "writ" else None,
+            ),
+        )
+    conn.execute(
+        "UPDATE leads SET owner_name = plaintiff, owner_absentee = 1, owner_entity = 1 WHERE plaintiff = ?",
+        ("BUSY RENTALS LLC",),
+    )
+    conn.execute("UPDATE leads SET owner_name = plaintiff WHERE owner_name IS NULL")
+    conn.commit()
+    rows = app.state({"list": "leads"})["list"]["leads"]
+    order = [l["source_id"] for l in rows]
+    assert order[:2] == ["CV26-000011-EA", "CV26-000012-EA"]
+    by_id = {l["source_id"]: l for l in rows}
+    # The notice-only case has more points, and still comes after both.
+    assert by_id["CV26-000013-EA"]["score"] > by_id["CV26-000011-EA"]["score"]
+    # The export and `leadgen list` use the same order.
+    ranked = export.ranked(conn, conn.execute("SELECT * FROM leads").fetchall())
+    assert [r["source_id"] for r in ranked][:2] == ["CV26-000011-EA", "CV26-000012-EA"]
+    # Assign leads deals the writ and judgment cases first.
+    out = app.assign({"count": 2, "channels": ["phone", "property_manager"]})
+    assert sum(out["assigned"].values()) == 2
+    dealt = {r[0] for r in conn.execute("SELECT source_id FROM leads WHERE channel IS NOT NULL").fetchall()}
+    assert dealt == {"CV26-000011-EA", "CV26-000012-EA"}
 
 
 def test_assign_with_a_count_that_is_not_a_number(desk):

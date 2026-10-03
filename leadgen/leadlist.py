@@ -246,7 +246,8 @@ def _keep(l: dict, p: dict, touched: set) -> bool:
 
 
 def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
-    """Highest priority first; or newest first by the latest real event
+    """Highest priority first (writ cases, then judgments, then the rest, each
+    by priority; see ``outreach.rank_key``); or newest first by the latest real event
     (filing, judgment or writ; cases not read yet, which only have a hearing
     date, come last); or closest first."""
     by_date = lambda l: (l["latest_date"] or "", l["id"])
@@ -256,7 +257,7 @@ def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
         leads.sort(key=lambda l: (l["miles"] is None, l["miles"] or 0, -l["id"]))
     else:
         leads.sort(key=by_date, reverse=True)
-        leads.sort(key=lambda l: -l["score"])  # stable: newest first among equal scores
+        leads.sort(key=outreach.rank_key)  # stable: newest first among equal scores
     return leads
 
 

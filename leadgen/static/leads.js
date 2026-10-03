@@ -79,7 +79,7 @@ function renderLeads() {
         <button class="btn" id="pNext" ${last < list.total ? "" : "disabled"}>Next ${list.limit}</button>
       </span>
     </div>
-    <p class="hint">Priority adds up how far the eviction has got (a writ or judgment first) or how much hauling a code case suggests, whether the owner lives elsewhere or is a company, repeat owners, and how recent the latest court or city event is (an upcoming hearing doesn't count). Miles are straight-line from ${esc(S.settings.base_address)}.</p>`;
+    <p class="hint">Order: evictions with a writ (lockout) first, then those with a judgment, then everything else by priority. Priority adds up how far the eviction has got or how much hauling a code case suggests, whether the owner lives elsewhere or is a company, repeat owners, and how recent the latest court or city event is (an upcoming hearing doesn't count). Miles are straight-line from ${esc(S.settings.base_address)}.</p>`;
   const filter = (id, key) => $(id).onchange = async e => { ui[key] = e.target.value; ui.offset = 0; syncUrl(); await reloadList(); $(id).focus(); };
   $("#q").oninput = e => { ui.q = e.target.value; ui.offset = 0; syncUrl(); clearTimeout(renderLeads.t); renderLeads.t = setTimeout(searchNow, 250); };
   filter("#fType", "type"); filter("#fStatus", "status"); filter("#fChannel", "channel"); filter("#fSort", "sort");

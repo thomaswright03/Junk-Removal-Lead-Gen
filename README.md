@@ -180,6 +180,10 @@ mailing address is elsewhere, +10 for a company/trust owner, +10 if the
 owner has several leads, +15 if the latest court or city event (filing,
 judgment, writ; opening for a code case) is under a week old (+8 under two
 weeks). An upcoming hearing, or any date in the future, earns nothing.
+The list order puts the case stage first: every eviction with a writ
+(lockout) comes before every one with only a judgment, which comes before
+every other lead; priority orders the leads within each stage. The CSV/HTML
+export, `leadgen list` and Assign leads use the same order.
 
 A lead becomes Old (stale) 30 days after its latest event, so an eviction
 filed weeks ago that has just had a writ stays fresh, and an Old case that
@@ -206,8 +210,8 @@ leadgen run
 That pulls new City of Tucson code cases, looks up each owner from the county
 assessor, geocodes addresses and checks they
 are in Pima County, marks leads whose latest event is older than 30 days as stale, and writes
-`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, highest
-priority first as in Lead Desk, with the priority, case stage, notice flag and
+`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, in Lead Desk's order (writs, then
+judgments, then the rest, each highest priority first), with the priority, case stage, notice flag and
 latest event (Filed, Judgment, Writ, Opened) in the first columns. Open the
 HTML file in a browser to search and filter; open the CSV in Excel or import it
 into a CRM.
