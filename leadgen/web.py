@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import webbrowser
 from datetime import date, datetime, timedelta, timezone
@@ -16,12 +17,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import db, outreach
+from . import daily, db, outreach
 from .contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
 from .enrich import ParcelClient, enrich, owner_fields
+from .daily import run_daily
 from .geocode import CensusGeocoder
 from .lookup import find_contacts, providers_from
-from .sources import AUTOMATIC, SOURCES
+from .sources import SOURCES
 from .sources.pima_jp_case import add_cases, is_case_page, parse_case_html, update_cases
 from .tucson_codes import CODE_LABELS, code_of
 
@@ -51,9 +53,14 @@ def _now():
 
 class App:
     def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None,
-                 case_client=None):
+                 case_client=None, calendar=None, code_cases=None, providers=None):
         self.db_path = db_path
         self.case_client = case_client
+        self.calendar = calendar
+        self.code_cases = code_cases
+        self.providers = providers
+        self.daily_lock = threading.Lock()
+        self.daily_message = None
         self.stale_days = stale_days
         self.parcel_client = parcel_client
         self.geocoder = geocoder
@@ -113,7 +120,11 @@ class App:
                 "SUM(lead_type = 'eviction' AND eviction_notice IS NULL) AS unchecked "
                 "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
             ).fetchone()
+            last = db.get_settings(conn).get("last_daily_summary")
             return {
+                "daily": {"running": self.daily_lock.locked(), "message": self.daily_message,
+                          "last_run": settings.get("last_daily_run"),
+                          "summary": daily.describe(last) if last else None},
                 "leads": self.leads(conn, settings),
                 "view_counts": {"all": counts["all_"] or 0, "evictions": counts["evictions"] or 0,
                                 "eviction_notice": counts["eviction_notice"] or 0,
@@ -232,22 +243,51 @@ class App:
                 db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})
 
     def refresh(self, body):
-        days = int(body.get("days") or 30)
-        since = (date.today() - timedelta(days=days)).isoformat()
-        until = date.today().isoformat()
-        summary = {}
-        with self.lock, self.conn() as conn:
-            for name in AUTOMATIC:
-                counts = {"new": 0, "updated": 0}
-                for lead in SOURCES[name]().fetch(since, until):
-                    counts[db.upsert(conn, lead)] += 1
-                conn.commit()
-                summary[name] = counts
-            summary["owners"] = enrich(conn, self.parcel_client or ParcelClient())
-            summary["cases"] = update_cases(conn, self.case_client, log=lambda m: None)
-            summary["stale"] = db.mark_stale(conn, self.stale_days)
+        """Run the daily check now and wait for it (the CLI and CI use this;
+        the page uses ``start_daily``)."""
+        with self.daily_lock, self.conn() as conn:
+            summary = run_daily(conn, stale_days=self.stale_days, case_client=self.case_client,
+                                parcel_client=self.parcel_client, calendar=self.calendar,
+                                code_cases=self.code_cases, geocoder=self.geocoder,
+                                providers=self.providers,
+                                case_limit=body.get("case_limit"),
+                                contact_limit=int(body.get("contact_limit") or 60),
+                                log=self._progress)
         self._ensure_base()
         return summary
+
+    def _progress(self, message):
+        self.daily_message = message
+
+    def start_daily(self, body=None):
+        """Start the daily check in the background; the page polls /api/state."""
+        if self.daily_lock.locked():
+            return {"started": False, "running": True}
+
+        def work():
+            try:
+                self.refresh(body or {})
+            except Exception as e:
+                traceback.print_exc(file=sys.stderr)
+                self.daily_message = f"daily check failed: {type(e).__name__}: {e}"
+            else:
+                self.daily_message = None
+
+        threading.Thread(target=work, daemon=True, name="daily").start()
+        return {"started": True, "running": True}
+
+    def scheduler(self, hour=6, every_seconds=600):
+        """While Lead Desk is open, run the daily check once a day after ``hour``."""
+        def loop():
+            while True:
+                try:
+                    with self.conn() as conn:
+                        if daily.due(conn, hour=hour):
+                            self.start_daily()
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
+                time.sleep(every_seconds)
+        threading.Thread(target=loop, daemon=True, name="scheduler").start()
 
     def find_contacts(self, body):
         with self.lock, self.conn() as conn:
@@ -401,7 +441,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/touch": self.app.add_touches,
                 "/api/assign": self.app.assign,
                 "/api/settings": self.app.save_settings,
-                "/api/refresh": self.app.refresh,
+                "/api/refresh": self.app.start_daily,
                 "/api/enrich": self.app.run_enrich,
                 "/api/find-contacts": self.app.find_contacts,
                 "/api/cases/add": self.app.add_cases,
@@ -420,6 +460,7 @@ class Handler(BaseHTTPRequestHandler):
 def serve(db_path, host="127.0.0.1", port=8765, stale_days=30, open_browser=True):
     app = App(db_path, stale_days)
     app._ensure_base()
+    app.scheduler()
     handler = type("BoundHandler", (Handler,), {"app": app})
     server = ThreadingHTTPServer((host, port), handler)
     url = f"http://{host}:{port}/"

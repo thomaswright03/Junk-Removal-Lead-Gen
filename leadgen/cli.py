@@ -115,6 +115,25 @@ def cmd_cases(args):
     print(counts)
 
 
+def cmd_daily(args):
+    from .daily import main_log, run_daily
+
+    conn = _connect(args)
+    summary = run_daily(conn, stale_days=args.stale_days, log=lambda m: print("  " + m))
+    main_log(summary)
+
+
+def cmd_schedule(args):
+    from . import schedule
+
+    if args.action == "install":
+        print(schedule.install(args.db, hour=args.hour, minute=args.minute))
+    elif args.action == "remove":
+        print(schedule.remove())
+    else:
+        print(schedule.status())
+
+
 def cmd_serve(args):
     from .web import serve
 
@@ -190,7 +209,7 @@ def cmd_list(args):
 
 def cmd_sources(args):
     for name, cls in SOURCES.items():
-        auto = " (automatic)" if name in AUTOMATIC else " (needs --file)"
+        auto = " (automatic)" if name in AUTOMATIC else ""
         print(f"{name}{auto}: {cls.description}")
 
 
@@ -252,6 +271,17 @@ def build_parser():
                     help="add: case page links (jcDisplayCase.aspx?ID=...) or IDs")
     sp.add_argument("--limit", type=int, help="update: max cases to re-read")
     sp.set_defaults(func=cmd_cases)
+
+    sp = sub.add_parser(
+        "daily",
+        help="the daily run: new evictions, eviction notices, owners, landlord phones, code cases")
+    sp.set_defaults(func=cmd_daily)
+
+    sp = sub.add_parser("schedule", help="run `leadgen daily` automatically every morning")
+    sp.add_argument("action", choices=("install", "remove", "status"))
+    sp.add_argument("--hour", type=int, default=6, help="hour of day, 0-23 (default 6)")
+    sp.add_argument("--minute", type=int, default=0)
+    sp.set_defaults(func=cmd_schedule)
 
     sp = sub.add_parser("serve", help="open the lead desk web app")
     sp.add_argument("--port", type=int, default=8765)

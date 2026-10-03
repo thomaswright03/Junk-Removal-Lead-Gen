@@ -29,12 +29,30 @@ jobs:
       - run: leadgen --db /tmp/leads.db fetch --source tucson_code_cases --days 30
       - run: leadgen --db /tmp/leads.db enrich --limit 50
       - run: leadgen --db /tmp/leads.db list --limit 0
-      - name: Lead Desk refresh button on live data (counts and types only)
-        run: >
-          python -c "from leadgen.web import App; a=App('/tmp/live2.db'); a.save_settings({'lead_view': 'all'}); print(a.refresh({'days': 30}));
-          c=a.conn(); print('lat/lon types', c.execute('SELECT typeof(lat), typeof(lon), COUNT(*) FROM leads GROUP BY 1, 2').fetchall());
-          print('settings', {r[0]: type(__import__('json').loads(r[1])).__name__ for r in c.execute('SELECT key, value FROM settings')});
-          print(len(a.state()['leads']), 'leads in state')"
+      - name: Daily eviction check on live data (counts only, no names)
+        run: |
+          python - <<'PY'
+          from leadgen import daily
+          from leadgen.web import App
+          a = App("/tmp/live2.db")
+          a.save_settings({"lead_view": "all"})
+          s = a.refresh({"case_limit": 15, "contact_limit": 10})
+          print(daily.describe(s))
+          print({k: v for k, v in s.items() if k not in ("started_at", "finished_at")})
+          c = a.conn()
+          q = lambda sql: c.execute(sql).fetchone()[0]
+          ev = "FROM leads WHERE lead_type = 'eviction'"
+          print("evictions", q(f"SELECT COUNT(*) {ev}"),
+                "| case read", q(f"SELECT COUNT(*) {ev} AND case_checked_at IS NOT NULL"),
+                "| notice", q(f"SELECT COUNT(*) {ev} AND eviction_notice = 1"),
+                "| with case link", q(f"SELECT COUNT(*) {ev} AND url LIKE '%jcDisplayCase%'"),
+                "| landlord owner found", q(f"SELECT COUNT(*) {ev} AND owner_name IS NOT NULL"),
+                "| property found", q(f"SELECT COUNT(*) {ev} AND address IS NOT NULL"),
+                "| phone", q(f"SELECT COUNT(*) {ev} AND owner_phone IS NOT NULL"))
+          print("lat/lon types", [tuple(r) for r in c.execute("SELECT typeof(lat), typeof(lon), COUNT(*) FROM leads GROUP BY 1, 2")])
+          print(len(a.state()["leads"]), "leads in state")
+          assert s["evictions"].get("new", 0) > 0, "calendar search found no evictions"
+          PY
       - name: Lead Desk state on live data (counts only)
         run: >
           python -c "from leadgen.web import App; a=App('/tmp/leads.db'); a.save_settings({'lead_view': 'all'}); L=a.state()['leads'];

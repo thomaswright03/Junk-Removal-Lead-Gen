@@ -381,7 +381,8 @@ def providers_from(settings=None, google_key=None):
     return out
 
 
-def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print):
+def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print,
+                  lead_types=None):
     """Look up phone/email/website for business owners and landlords.
 
     One lookup per company: every lead with the same owner/landlord name gets
@@ -397,10 +398,12 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
           AND COALESCE(contact_source, '') != 'manual'
           AND (? OR contact_checked_at IS NULL
                OR (contact_source LIKE 'google%' AND contact_checked_at < ?))
-        ORDER BY event_date DESC
+        ORDER BY lead_type = 'eviction' DESC, event_date DESC
         """,
         (int(bool(refresh)), stale_google),
     ).fetchall()
+    if lead_types:
+        rows = [r for r in rows if r["lead_type"] in lead_types]
     counts = {"checked": 0, "found": 0, "not_found": 0, "skipped_people": 0, "errors": 0}
     done = {}  # business name -> Contact or None
     for lead in rows:
