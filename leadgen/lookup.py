@@ -267,6 +267,10 @@ class GoogleBudget:
 
 class GooglePlacesProvider:
     name = "google"
+    # Google searches are capped (30 a day), so spend them only on eviction
+    # cases with an eviction notice filed; find_contacts reaches those newest
+    # first. The free providers still try every lead.
+    only_eviction_notices = True
 
     def __init__(self, api_key, session=None, budget=None):
         self.key = api_key
@@ -444,6 +448,10 @@ def providers_from(settings=None, google_key=None, conn=None):
     return out
 
 
+def _has_notice(lead):
+    return lead["lead_type"] == "eviction" and bool(lead["eviction_notice"])
+
+
 def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print,
                   lead_types=None):
     """Look up phone/email/website for business owners and landlords.
@@ -463,7 +471,9 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
         WHERE duplicate_of IS NULL AND status NOT IN ('stale', 'skip', 'lost', 'won')
           AND COALESCE(contact_source, '') != 'manual'
           {due}
-        ORDER BY CASE WHEN lead_type = 'eviction' THEN 0 ELSE 1 END, event_date DESC
+        ORDER BY CASE WHEN lead_type = 'eviction' AND eviction_notice = 1 THEN 0
+                      WHEN lead_type = 'eviction' THEN 1 ELSE 2 END,
+                 event_date DESC, id DESC
         """,
         () if refresh else (stale_google,),
     ).fetchall()
@@ -486,6 +496,8 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
             contact, failed = None, False
             for name in names or [None]:
                 for prov in providers:
+                    if getattr(prov, "only_eviction_notices", False) and not _has_notice(lead):
+                        continue
                     try:
                         c = prov.find(lead, name)
                     except Exception as e:  # one provider failing shouldn't stop the run
@@ -510,6 +522,8 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
                     contact.source = f"{contact.source}+website"
             done[key] = (contact, failed)
         now = _now().isoformat()
+        if failed and not (contact and contact.phone):
+            continue  # a provider was down or over its limit: try again next run
         if contact and not contact.empty():
             counts["found"] += 1
             conn.execute(
@@ -519,8 +533,6 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
                 (contact.phone, contact.email, contact.website, contact.source,
                  contact.matched_name, now, lead["id"]),
             )
-        elif failed:
-            continue  # couldn't reach a provider: try this lead again next run
         else:
             counts["not_found"] += 1
             conn.execute("UPDATE leads SET contact_checked_at = ? WHERE id = ?", (now, lead["id"]))

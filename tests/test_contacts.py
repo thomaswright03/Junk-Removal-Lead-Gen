@@ -327,3 +327,47 @@ def test_google_limit_from_settings(tmp_path):
     with db.connect(str(tmp_path / "w.db")) as c:
         assert providers_from({"google_places_api_key": "k", "google_daily_limit": 10},
                               conn=c)[-1].budget.daily == 10
+
+
+def test_google_only_for_newest_eviction_notices():
+    conn = make_db()
+    for case_id, filed, plaintiff in (("CV26-3", "2026-09-20", "OLD NOTICE HOMES LLC"),
+                                      ("CV26-4", "2026-09-28", "NEW NOTICE HOMES LLC")):
+        db.upsert(conn, Lead("jp", case_id, "eviction", filed, None, plaintiff=plaintiff,
+                             in_pima=True, eviction_notice=True))
+    conn.commit()
+
+    class FakeGoogle(FakeProvider):
+        name = "google"
+        only_eviction_notices = True
+
+    free = FakeProvider({})
+    google = FakeGoogle({"NEW NOTICE HOMES LLC": Contact(phone="(520) 555-0101", source="google")})
+    find_contacts(conn, [free, google], scanner=None)
+    # Google sees only the eviction-notice cases, newest filing first.
+    assert google.calls == ["NEW NOTICE HOMES LLC", "OLD NOTICE HOMES LLC"]
+    # The free provider still tries everything, eviction notices first.
+    assert free.calls[:2] == ["NEW NOTICE HOMES LLC", "OLD NOTICE HOMES LLC"]
+    assert "DESERT SKY PROPERTY MGMT LLC" in free.calls
+
+
+def test_lead_over_google_limit_is_retried_tomorrow():
+    from leadgen.lookup import ProviderUnavailable
+
+    conn = make_db()
+    db.upsert(conn, Lead("jp", "CV26-5", "eviction", "2026-09-28", None,
+                         plaintiff="NEW NOTICE HOMES LLC", in_pima=True, eviction_notice=True))
+    conn.commit()
+
+    class OverLimit:
+        name = "google"
+        only_eviction_notices = True
+
+        def find(self, lead, name):
+            raise ProviderUnavailable("daily limit of 30 Google lookups reached; more tomorrow")
+
+    site_only = FakeProvider({"NEW NOTICE HOMES LLC": Contact(website="https://example.com",
+                                                              source="osm")})
+    find_contacts(conn, [site_only, OverLimit()], scanner=None, log=lambda *a: None)
+    row = conn.execute("SELECT * FROM leads WHERE source_id = 'CV26-5'").fetchone()
+    assert row["contact_checked_at"] is None  # no phone yet: looked up again next run
