@@ -64,6 +64,14 @@ def _human(iso):
     return f"{d:%b} {d.day}, {d.year}"
 
 
+def _hearing_text(event):
+    """ "Eviction Action Oct 14, 2026 2:00 PM", in the same date format as the app."""
+    day = _iso(event.get("DATE"))
+    when = _human(day) if day else (event.get("DATE") or "")
+    time_ = re.sub(r"^0", "", (event.get("TIME") or "").strip())
+    return " ".join(x for x in (event.get("EVENT"), when, time_) if x)
+
+
 def _label(text, label):
     """Value after ``Label:`` in the page text, up to the next label."""
     m = re.search(re.escape(label) + r"\s*:?\s*(.+?)(?=\s+[A-Z][A-Za-z ]{2,25}:|$)", text)
@@ -212,7 +220,7 @@ def parse_case_html(html, url=None, today=None):
         f"Case {status.lower()}" if status else None,
         "Eviction notice filed" if notice else "No eviction notice on file yet",
         stage_text,
-        f"{hearing.get('EVENT')} {hearing.get('DATE')} {hearing.get('TIME') or ''}".strip() if hearing else None,
+        _hearing_text(hearing) if hearing else None,
     ]
     return Lead(
         source=JP_SOURCE,
