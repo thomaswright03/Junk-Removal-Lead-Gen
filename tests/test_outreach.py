@@ -404,9 +404,53 @@ def test_default_settings_assign_more_than_zero_on_a_real_mix(tmp_path):
     preview = app.state({"list": "queue", "channel": "door_hanger"})["split"]
     assert preview["combos"]["door_hanger+phone+property_manager"] == 4  # company-owned code cases
     assert preview["combos"]["door_hanger+phone"] == 8
-    assert preview["suggested"] == ["door_hanger", "phone", "property_manager"]
-    out = app.assign({"count": 40, "channels": preview["suggested"]})
-    assert sum(out["assigned"].values()) == 4
+    # A round of both kinds is suggested with the methods that take in the most
+    # evictions, not the ones that would fill it with code cases.
+    assert preview["suggested"] == ["phone", "property_manager"]
+    assert preview["evictions"]["phone+property_manager"] == 7
+    assert preview["evictions"]["door_hanger+phone+property_manager"] == 0
+    # The first round offered is evictions only.
+    assert preview["kind"] == "eviction"
+    assert preview["by_kind"]["eviction"]["suggested"] == ["phone", "property_manager"]
+    assert preview["by_kind"]["eviction"]["leads"] == 7
+    code = preview["by_kind"]["code_violation"]
+    assert code["suggested"] == ["door_hanger", "phone", "property_manager"]
+    out = app.assign({"count": 40, "channels": code["suggested"], "lead_type": "code_violation"})
+    assert sum(out["assigned"].values()) == 4 and out["kinds"] == {"code_violation": 4}
+
+
+def test_an_eviction_only_round_and_its_preview(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    app = App(path)
+    app.save_settings({"lead_view": "all"})
+    channels = ["phone", "property_manager"]
+    # The preview says which leads the round takes, and saves nothing.
+    both = app.assign({"count": 40, "channels": channels, "preview": True})
+    assert both["round"] is None and both["kinds"]["eviction"] == 7 and both["kinds"]["code_violation"] > 0
+    assert conn.execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
+    pre = app.assign({"count": 40, "channels": channels, "lead_type": "eviction", "preview": True})
+    assert pre["kinds"] == {"eviction": 7}
+    # The round itself takes exactly those.
+    out = app.assign({"count": 40, "channels": channels, "lead_type": "eviction"})
+    assert out["kinds"] == pre["kinds"] and out["round"]
+    rows = conn.execute("SELECT lead_type, COUNT(*) AS n FROM leads WHERE channel IS NOT NULL GROUP BY lead_type")
+    assert {r["lead_type"]: r["n"] for r in rows.fetchall()} == {"eviction": 7}
+    with pytest.raises(ValueError):
+        app.assign({"count": 4, "channels": channels, "lead_type": "civil"})
+
+
+def test_a_round_names_the_leads_it_left_out(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    app = App(path)
+    out = app.assign({"count": 40, "channels": ["door_hanger", "phone"]})
+    assert out["left_out"]["needs_address"] + out["left_out"]["needs_unit"] == 7
+    assert len(out["left_out_leads"]) == 7
+    left = out["left_out_leads"][0]
+    assert set(left) == {"id", "label", "reason"} and left["reason"] in ("needs_address", "needs_unit")
 
 
 def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):

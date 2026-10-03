@@ -3,84 +3,145 @@
 "use strict";
 // Methods ticked for Assign leads: the server's suggestion (the most methods
 // the unassigned leads can all be worked by) until Steve changes the ticks.
+// A round is one kind of lead (evictions first) unless he picks both:
+// Results compares methods within a kind, so a mixed round measures less.
 const comboKey = chans => Object.keys(S.channels).filter(c => chans.includes(c)).join("+");
 const methodList = chans => chans.map(chName).join(" + ");
-function splitLine(chans) {
-  const sp = S.split || { combos: {}, followed: 0, suggested: [] };
+const KIND_LABEL = { eviction: "Evictions only", code_violation: "City code cases only", "": "Evictions and code cases" };
+const kindWord = (k, n) => k === "eviction" ? `eviction${n === 1 ? "" : "s"}` : k === "code_violation" ? `code case${n === 1 ? "" : "s"}` : `lead${n === 1 ? "" : "s"}`;
+// The split numbers for one kind of round ("" is both kinds).
+function splitFor(kind) {
+  const sp = S.split || { combos: {}, followed: 0, suggested: [], by_kind: {} };
+  const k = kind && (sp.by_kind || {})[kind];
+  return k ? { combos: k.combos, followed: k.followed, suggested: k.suggested } : sp;
+}
+function splitLine(chans, kind) {
+  const sp = splitFor(kind);
   const n = chans.length ? sp.combos[comboKey(chans)] || 0 : 0;
   const followed = sp.followed ? ` ${sp.followed} more go to the method already working their landlord.` : "";
   if (!chans.length) return { n, html: "Tick at least one method." };
   const idle = Object.keys(S.channels).filter(c => !chans.includes(c) && !sp.combos[c]);
   const idleNote = idle.length ? ` ${esc(methodList(idle))}: no unassigned lead ${idle.length > 1 ? "they" : "it"} can work yet${idle.includes("door_hanger") ? " (door hangers need a property address)" : ""}.` : "";
-  if (n) return { n, html: `<strong>${n} lead${n === 1 ? "" : "s"}</strong> can be split between ${esc(methodList(chans))}.${followed}${idleNote}` };
+  // In a round of both kinds, how many of them are evictions.
+  const ev = !kind && S.split && S.split.evictions ? S.split.evictions[comboKey(chans)] || 0 : null;
+  const mix = ev != null ? ` (${ev} eviction${ev === 1 ? "" : "s"}, ${n - ev} code case${n - ev === 1 ? "" : "s"})` : "";
+  if (n) return { n, html: `<strong>${n} ${kindWord(kind, n)}</strong>${mix} can be split between ${esc(methodList(chans))}.${followed}${idleNote}` };
   // Nothing every ticked method can work: name the method that blocks it.
   const fixes = chans.map(c => chans.filter(x => x !== c)).filter(rest => rest.length && sp.combos[comboKey(rest)])
     .sort((a, b) => sp.combos[comboKey(b)] - sp.combos[comboKey(a)]);
   const fix = fixes[0];
   const drop = fix ? chans.find(c => !fix.includes(c)) : null;
   const why = chans.includes("door_hanger") ? " Door hangers need a property address (and a unit number at an apartment or condo complex)." : "";
-  return { n, html: `<strong>No unassigned lead</strong> can be worked by all of ${esc(methodList(chans))}.${why}${followed}`
+  return { n, html: `<strong>No unassigned ${kindWord(kind, 2)}</strong> can be worked by all of ${esc(methodList(chans))}.${why}${followed}`
     + (drop ? ` <button class="btn small" id="aDrop" data-drop="${drop}">Untick ${esc(chName(drop))} (${sp.combos[comboKey(fix)]} leads)</button>` : "") };
 }
-function otherChoices(chans) {
-  const sp = S.split || { combos: {} };
+function otherChoices(chans, kind) {
+  const sp = splitFor(kind);
   return Object.entries(sp.combos).filter(([k, n]) => n && k !== comboKey(chans) && k.includes("+"))
     .sort((a, b) => b[1] - a[1]).slice(0, 3)
     .map(([k, n]) => `<button class="linkbtn" data-combo="${k}">${esc(methodList(k.split("+")))}: ${n}</button>`).join(" · ");
+}
+// "Evictions only (12)", "City code cases only (30)", "Evictions and code cases (42)".
+function kindOptions(cur) {
+  const sp = S.split || { by_kind: {} }, bk = sp.by_kind || {};
+  const n = k => k ? (bk[k] || {}).leads || 0 : Object.values(bk).reduce((a, b) => a + (b.leads || 0), 0);
+  return ["eviction", "code_violation", ""].filter(k => k === cur || n(k) || (!k && !n("eviction") && !n("code_violation")))
+    .map(k => `<option value="${k}" ${k === cur ? "selected" : ""}>${KIND_LABEL[k]} (${n(k)})</option>`).join("");
+}
+// "28 evictions and 12 code cases".
+function kindsLine(kinds) {
+  const k = kinds || {}, ev = k.eviction || 0, code = k.code_violation || 0;
+  const other = Object.entries(k).filter(([t]) => t !== "eviction" && t !== "code_violation").reduce((a, [, v]) => a + v, 0);
+  const parts = [`${ev} eviction${ev === 1 ? "" : "s"}`, `${code} City code case${code === 1 ? "" : "s"}`];
+  if (other) parts.push(`${other} other lead${other === 1 ? "" : "s"}`);
+  return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
+// The last round's result stays on the Outreach tab until the next round or
+// until dismissed (kept for this browser tab across reloads).
+const LEFT_OUT_WHY = { needs_address: "no property address", needs_unit: "an apartment or condo with no unit number", no_contact: "no one a ticked method can contact" };
+try { ui.lastRound = JSON.parse(sessionStorage.getItem("leaddesk.lastRound") || "null"); } catch (e) { ui.lastRound = null; }
+function setLastRound(r) {
+  ui.lastRound = r;
+  try { if (r) sessionStorage.setItem("leaddesk.lastRound", JSON.stringify(r)); else sessionStorage.removeItem("leaddesk.lastRound"); } catch (e) { /* private mode */ }
+}
+function roundSummary(r) {
+  if (!r) return "";
+  const got = Object.entries(r.assigned || {}).map(([c, k]) => `${esc(chName(c))} ${k}`).join(", ");
+  const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
+  const lo = r.left_out || {}, nLeft = Object.values(lo).reduce((a, b) => a + b, 0);
+  const why = Object.entries(lo).filter(([, n]) => n).map(([k, n]) => `${n} with ${LEFT_OUT_WHY[k] || k}`).join("; ");
+  const fix = lo.needs_address || lo.needs_unit ? " Add the address (or unit) on the lead, or untick Door hanger next round." : "";
+  const leads = (r.left_out_leads || []).map(l => `<button class="linkbtn" data-lead="${l.id}" title="${esc(LEFT_OUT_WHY[l.reason] || "")}">${esc(title(l.label))}</button>`).join(" · ");
+  return `<div class="notice info mt8" id="roundSummary" role="status">
+    <div class="row" style="justify-content:space-between"><strong>Last round${r.lead_type ? ` (${esc(KIND_LABEL[r.lead_type].toLowerCase())})` : ""}: ${esc(kindsLine(r.kinds))} assigned</strong>
+      <button class="btn small" id="roundDismiss" aria-label="Dismiss the last round's summary">Dismiss</button></div>
+    <p class="hint">${got ? `By method: ${got}.` : "No leads were assigned."}${followed ? ` ${followed} more went to the method already working their landlord.` : ""}</p>
+    ${nLeft ? `<p class="hint">${nLeft} left out: ${esc(why)}.${fix}</p>${leads ? `<p class="hint">Left out${nLeft > (r.left_out_leads || []).length ? " (the first few)" : ""}: ${leads}</p>` : ""}` : ""}
+  </div>`;
 }
 function renderOutreach() {
   const c = S.counts || {}, per = c.channels || {};
   const unassignedCount = c.unassigned || 0;
   const t = ui.outreachTab;
-  const sp = S.split || { suggested: [] };
-  if (!ui.aChannels) ui.aChannels = sp.suggested.length ? sp.suggested.slice() : Object.keys(S.channels);
+  const sp = S.split || { suggested: [], kind: "" };
+  if (ui.aKind == null) ui.aKind = sp.kind || "";
+  const kind = ui.aKind;
+  if (!ui.aChannels) { const sug = splitFor(kind).suggested || []; ui.aChannels = sug.length ? sug.slice() : Object.keys(S.channels); }
   const chans = ui.aChannels;
-  const line = splitLine(chans), others = otherChoices(chans);
+  const line = splitLine(chans, kind), others = otherChoices(chans, kind);
   $("#tab-outreach").innerHTML = `
     <div class="card">
       <h2>Split leads between outreach methods</h2>
       <p class="hint">Assign leads deals the best of your ${unassignedCount} unassigned leads evenly across the ticked methods, so Results can say which one wins jobs.</p>
       <details class="hint"><summary>How the split works</summary><ul>
+        <li>A round is evictions only or City code cases only, unless you pick both: the methods reach different people on each, so Results compares them one kind at a time.</li>
         <li>Only leads every ticked method can work are used: door hangers need a property address (and a unit number at an apartment complex).</li>
         <li>All of one landlord's leads go to the same method, now and later, so no company hears from you twice.</li>
         <li>Each method gets the same mix of strong and weak leads, evictions and code cases.</li>
         <li>Each method reaches someone different or makes a different offer: the lead shows which.</li></ul></details>
       <div class="row">
+        <label>Which leads <select id="aKind">${kindOptions(kind)}</select></label>
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
         <button class="btn primary" id="aGo" ${line.n ? "" : "disabled"}>Assign leads</button>
       </div>
       <p class="hint mt8" id="aSplit" aria-live="polite">${line.html}</p>
       ${others ? `<p class="hint">Other choices: ${others}</p>` : ""}
+      ${roundSummary(ui.lastRound)}
     </div>
     <div class="tabs2">${Object.entries(S.channels).map(([c, n]) => `<button data-otab="${c}" class="${c === t ? "on" : ""}"><span class="dot" style="background:var(--c-${c})"></span> ${esc(n)} · ${(per[c] || {}).to_do || 0} to do / ${(per[c] || {}).active || 0}</button>`).join("")}</div>
     <div id="oBody"></div>`;
   const setChans = (list, focusSel) => { ui.aChannels = list; renderOutreach(); const f = $(focusSel); if (f) f.focus(); };
+  $("#aKind").onchange = e => { ui.aKind = e.target.value; ui.aChannels = null; renderOutreach(); $("#aKind").focus(); };
   document.querySelectorAll(".aCh").forEach(b => b.onchange = () =>
     setChans([...document.querySelectorAll(".aCh:checked")].map(x => x.value), `.aCh[value="${b.value}"]`));
   const drop = $("#aDrop");
   if (drop) drop.onclick = () => setChans(chans.filter(c => c !== drop.dataset.drop), "#aGo");
   document.querySelectorAll("[data-combo]").forEach(b => b.onclick = () => setChans(b.dataset.combo.split("+"), "#aGo"));
+  const dismiss = $("#roundDismiss");
+  if (dismiss) dismiss.onclick = () => { setLastRound(null); renderOutreach(); $("#aGo").focus(); };
   $("#aGo").onclick = async e => {
     const btn = e.currentTarget;
     if (!chans.length) return toast("Tick at least one outreach method.");
     const n = +$("#aCount").value;
-    const most = Math.min(n, line.n);
     const single = chans.length === 1;
+    const body = { count: n, channels: chans, single_method: single, lead_type: kind };
+    // Work the round out first, so the question says exactly which leads it takes.
+    let pre;
+    btn.disabled = true;
+    try { pre = await api("/api/assign", { ...body, preview: true }); }
+    catch (err) { toast(err.message, 8000); return; }
+    finally { btn.disabled = false; }
+    const most = Object.values(pre.assigned).reduce((a, b) => a + b, 0);
+    const followedPre = Object.values(pre.followed || {}).reduce((a, b) => a + b, 0);
+    if (!most && !followedPre) return toast("No lead can go out with these methods. Untick one, or pick another kind of lead.", 8000);
     if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}${single ? ` to ${chName(chans[0])} only` : ""}?`,
-      body: (single ? `Only one method is ticked, so this round won't compare methods: all ${most} go to ${chName(chans[0])}. Tick another method to compare.`
-        : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + ((S.split || {}).followed ? ` Up to ${Math.min(n, S.split.followed)} more go to the method already working their landlord.` : ""),
+      body: `This round: ${kindsLine(pre.kinds)}. ` + (single ? `Only one method is ticked, so this round won't compare methods: all ${most} go to ${chName(chans[0])}. Tick another method to compare.`
+        : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + (followedPre ? ` ${followedPre} more go to the method already working their landlord.` : ""),
       ok: `Assign ${most} lead${most === 1 ? "" : "s"}` }))) return;
     ui.aChannels = null;  // the next suggestion fits the leads that are left
-    act(() => api("/api/assign", { count: n, channels: chans, single_method: single }), r => {
-      const got = Object.entries(r.assigned).map(([c, k]) => `${chName(c)} ${k}`).join(", ");
-      const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
-      const lo = r.left_out || {};
-      return `Assigned: ${got}.` + (followed ? ` ${followed} more went to the method already working their landlord.` : "")
-        + (lo.needs_address ? ` ${lo.needs_address} leads left out because they have no property address (add one on the lead, or untick Door hanger).` : "")
-        + (lo.needs_unit ? ` ${lo.needs_unit} left out because they're at an apartment or condo complex with no unit number (type the unit or confirm the address on the lead, or untick Door hanger).` : "")
-        + (lo.no_contact ? ` ${lo.no_contact} left out because a ticked method has no one to contact.` : "");
-    }, btn);
+    const r = await act(() => api("/api/assign", body), r => `Assigned ${Object.values(r.assigned).reduce((a, b) => a + b, 0)} leads. The summary stays on the Outreach tab.`, btn);
+    if (r) { setLastRound(r); renderOutreach(); const box = $("#roundSummary"); if (box) box.scrollIntoView({ block: "nearest" }); }
   };
   document.querySelectorAll("[data-otab]").forEach(b => b.onclick = async () => {
     ui.outreachTab = b.dataset.otab; syncUrl(); await reloadList(); $(`[data-otab="${b.dataset.otab}"]`).focus();
@@ -92,6 +153,7 @@ function renderOutreach() {
   else renderManagers(body, q);
   if (S.list && S.list.total > q.length) body.insertAdjacentHTML("beforeend", `<p class="hint">Showing the first ${q.length} of ${S.list.total}.</p>`);
   bindRows(body);
+  document.querySelectorAll("#roundSummary [data-lead]").forEach(b => b.onclick = () => openAnyLead(+b.dataset.lead, b));
 }
 function routeOrder(q) {
   // Nearest-neighbour walk starting from Steve's base.

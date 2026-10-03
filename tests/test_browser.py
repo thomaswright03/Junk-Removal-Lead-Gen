@@ -269,26 +269,64 @@ def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     url, app, path = server
     page.goto(url)
     page.click("#nav [data-tab=outreach]")
-    # Only methods the leads can all be worked by are ticked at first.
-    page.wait_for_selector("#aSplit >> text=1 lead")
-    assert page.is_checked(".aCh[value=door_hanger]") and not page.is_checked(".aCh[value=property_manager]")
+    # The first round offered is evictions only, with the methods they can all be worked by.
+    page.wait_for_selector("#aSplit >> text=1 eviction")
+    assert page.input_value("#aKind") == "eviction"
+    assert page.is_checked(".aCh[value=phone]") and page.is_checked(".aCh[value=property_manager]")
+    assert not page.is_checked(".aCh[value=door_hanger]")
     # Ticking a method no lead fits says so before anything is pressed, and offers the fix.
-    page.check(".aCh[value=property_manager]")
-    page.wait_for_selector("#aSplit >> text=No unassigned lead")
+    page.check(".aCh[value=door_hanger]")
+    page.wait_for_selector("#aSplit >> text=No unassigned evictions")
     assert page.is_disabled("#aGo")
     page.click("#aDrop")
-    page.wait_for_selector("#aSplit >> text=1 lead")
-    # The page's own dialog, with the action on the button; Escape cancels.
+    page.wait_for_selector("#aSplit >> text=1 eviction")
+    # Code cases are a round of their own.
+    page.select_option("#aKind", "code_violation")
+    page.wait_for_selector("#aSplit >> text=1 code case")
+    assert page.is_checked(".aCh[value=door_hanger]") and page.is_checked(".aCh[value=phone]")
+
+    # Both kinds, with door hangers: the eviction (no address) is left out, and the
+    # summary of the round stays, naming it, until dismissed.
+    page.select_option("#aKind", "")
+    page.wait_for_selector("#aSplit >> text=(1 eviction, 0 code cases)")
+    page.uncheck(".aCh[value=property_manager]")
+    page.check(".aCh[value=door_hanger]")
+    page.wait_for_selector("#aSplit >> text=(0 evictions, 1 code case)")
     page.click("#aGo")
     page.wait_for_selector("#confirmBox[open]")
+    assert "This round: 0 evictions and 1 City code case" in page.inner_text("#confirmBody")
     assert page.inner_text("#confirmOk") == "Assign 1 lead"
+    # Escape cancels: nothing is assigned.
     page.keyboard.press("Escape")
     page.wait_for_selector("#confirmBox:not([open])", state="attached")
     assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
     page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
     page.click("#confirmOk")
-    page.wait_for_selector("text=Assigned:")
-    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 1
+    summary = page.locator("#roundSummary")
+    summary.wait_for()
+    assert "0 evictions and 1 City code case assigned" in summary.inner_text()
+    assert "1 left out: 1 with no property address" in summary.inner_text()
+    rows = db.connect(path).execute("SELECT lead_type FROM leads WHERE channel IS NOT NULL").fetchall()
+    assert [r[0] for r in rows] == ["code_violation"]  # what the question said
+    # It outlasts the toast and a redraw, and links the lead it left out.
+    page.evaluate("load()")
+    summary.wait_for()
+    page.click("#roundSummary [data-lead]")
+    page.wait_for_selector("#drawer.open >> text=Example Homes Llc")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#drawer.open", state="hidden")
+    page.click("#roundDismiss")
+    page.wait_for_selector("#roundSummary", state="detached")
+
+    # An eviction-only round in one step: the default.
+    page.wait_for_selector("#aSplit >> text=1 eviction")
+    page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
+    assert "This round: 1 eviction and 0 City code cases" in page.inner_text("#confirmBody")
+    page.click("#confirmOk")
+    page.wait_for_selector("#roundSummary >> text=1 eviction and 0 City code cases assigned")
+    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 2
 
 
 def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):

@@ -402,9 +402,12 @@ class App(JobRunner):
         channels = outreach.check_channels(
             list(outreach.CHANNELS) if raw is None else raw, single_method=body.get("single_method") is True
         )
+        kind = body.get("lead_type") or ""
+        if kind not in ("", *outreach.ROUND_KINDS):
+            raise ValueError("A round can be evictions only, City code cases only, or both.")
         with self.conn() as conn:
             leads = leadlist.lead_dicts(conn, self.settings(conn))
-            return outreach.assign(conn, leads, count, channels)
+            return outreach.assign(conn, leads, count, channels, lead_type=kind, preview=body.get("preview") is True)
 
     def split_preview(self, conn: Conn, settings: dict) -> dict:
         """What Assign leads can hand out with each choice of methods."""

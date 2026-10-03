@@ -149,9 +149,19 @@ or set its limits to 0.
   leads go to the same method (now and in later rounds), and leads are dealt
   in small random blocks within each kind (address or not, eviction or code
   case) so each method gets the same mix and a similar spread of priority.
+  A round is evictions only by default (or City code cases only, or both:
+  **Which leads**), since Results compares methods within one kind of lead
+  and door hangers can't go to most evictions (no address), which would
+  otherwise fill a mixed round with code cases. For a round of both kinds
+  the methods ticked first are the ones that take in the most evictions.
   Before you press it, the tab says how many unassigned leads each choice of
-  methods can split, ticks only methods the leads can all be worked by, and
-  offers to untick the method that blocks a round. Leads whose landlord is
+  methods can split (and, for both kinds, how many are evictions), ticks
+  only methods the leads can all be worked by, and offers to untick the
+  method that blocks a round. The confirm question says exactly how many
+  evictions and code cases the round takes. Afterwards a summary of the
+  round stays on the tab until the next round or **Dismiss**: how many went
+  to each method, and how many leads were left out and why, with links to
+  them. Leads whose landlord is
   already being worked by a method follow it; they don't count toward the
   round's number and are reported separately. Each method has its own work
   queue: a driving route for door hangers, a call list with a script, and a

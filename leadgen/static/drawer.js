@@ -43,6 +43,15 @@ async function openLead(id, from) {
   renderDrawer(); syncUrl(true);
   const h = $("#drawer h2"); if (h) h.focus();
 }
+// Open a lead that may not be in the list showing (a lead a round left out):
+// the page asks the server for it.
+async function openAnyLead(id, from) {
+  if (findLead(id)) return openLead(id, from);
+  if (ui.open != null && ui.open !== id && !(await leaveDrawer())) return;
+  ui.open = id; ui.returnFocus = from || document.activeElement;
+  syncUrl(true); await reloadList();
+  const h = $("#drawer h2"); if (h) h.focus();
+}
 async function closeDrawer() {
   if (!(await leaveDrawer())) return;
   const id = ui.open; ui.open = null; $("#drawer").classList.remove("open"); syncUrl(true);
