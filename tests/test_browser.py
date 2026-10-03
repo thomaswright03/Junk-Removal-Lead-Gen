@@ -800,3 +800,29 @@ def test_leads_tab_controls_have_distinct_labels_and_the_hint_fits_the_view(serv
     assert "City of Tucson only" in page.inner_text("#coverage")
     page.select_option("#fView", "evictions")
     page.wait_for_selector("#coverage >> text=Pick “All leads” under Show to see them")
+
+
+def test_revenue_on_a_lost_lead_asks_before_marking_it_won(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    conn.execute("UPDATE leads SET status = 'lost' WHERE source_id = 'CE-1'")
+    conn.commit()
+    status = lambda: db.connect(path).execute("SELECT status, revenue_cents FROM leads WHERE source_id = 'CE-1'")
+    page.goto(url + "#status=")
+    lead_row(page, "10 E Sample St").click()
+    page.wait_for_selector("#drawer.open")
+    page.fill("#dRev", "400")
+    page.click("#dSave")
+    page.wait_for_selector("#confirmBox[open]")
+    assert page.inner_text("#confirmTitle") == "Mark this lost lead as won?"
+    assert page.inner_text("#confirmCancel") == "Keep it lost"
+    page.click("#confirmCancel")
+    page.wait_for_selector("text=Saved. The lead stays Lost.")
+    assert tuple(status().fetchone()) == ("lost", 40000)
+    # Asked again and confirmed: Won.
+    page.fill("#dRev", "450")
+    page.click("#dSave")
+    page.wait_for_selector("#confirmBox[open]")
+    page.click("#confirmOk")
+    page.wait_for_selector("text=Saved and marked won")
+    assert tuple(status().fetchone()) == ("won", 45000)

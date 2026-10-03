@@ -37,10 +37,11 @@ function toast(msg, ms = 3200, undo) {
 // Ask before an action, in the page's own dialog: the buttons name the
 // action ("Assign 40 leads", "Remove key"). Resolves true for the action,
 // false for Cancel, Escape or a click outside.
-function confirmBox({ title: head, body, ok, danger }) {
+function confirmBox({ title: head, body, ok, danger, cancel }) {
   const dlg = $("#confirmBox");
   $("#confirmTitle").textContent = head;
   $("#confirmBody").textContent = body || "";
+  $("#confirmCancel").textContent = cancel || "Cancel";
   const okBtn = $("#confirmOk");
   okBtn.textContent = ok; okBtn.classList.toggle("danger-fill", !!danger); okBtn.classList.toggle("primary", !danger);
   const back = document.activeElement;

@@ -262,10 +262,22 @@ function renderDrawer() {
     if (r) { clearDrafts(l.id, Object.keys(extra)); renderDrawer(); }
   });
   $("#dSave").onclick = async e => {
+    const btn = e.currentTarget;
     if (!drawerOk(["dQuote", "dRev", "dNotes"])) return;
     const quote = moneyField($("#dQuote").value), rev = moneyField($("#dRev").value);
+    // Revenue means the job was done: Won. A lead marked Lost or Skip only
+    // becomes Won when Steve says so; otherwise its status stays.
+    let status = rev ? "won" : quote && !["won", "lost"].includes(l.status) ? "quoted" : null;
+    let kept = null;
+    if (status === "won" && ["lost", "skip"].includes(l.status)) {
+      const was = STATUS_LABEL[l.status];
+      const win = await confirmBox({ title: `Mark this ${was.toLowerCase()} lead as won?`,
+        body: `You entered job revenue, which usually means you did the job. Mark it Won, or keep it as ${was} and just save the amount and notes.`,
+        ok: "Mark won", cancel: `Keep it ${was.toLowerCase()}` });
+      if (!win) { status = null; kept = was; }
+    }
     const r = await act(() => api("/api/lead", { id: l.id, fields: { quote_amount: quote, job_revenue: rev, notes: $("#dNotes").value,
-      ...(rev ? { status: "won" } : quote && !["won", "lost"].includes(l.status) ? { status: "quoted" } : {}) } }), "Saved", e.currentTarget, undefined, drawerError);
+      ...(status ? { status } : {}) } }), kept ? `Saved. The lead stays ${kept}.` : status === "won" ? "Saved and marked won" : "Saved", btn, undefined, drawerError);
     if (r) { clearDrafts(l.id, RESULT_FIELDS); renderDrawer(); }
   };
   const op = $("#dOwnerProps");

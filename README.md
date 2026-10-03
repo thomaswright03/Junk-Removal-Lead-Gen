@@ -180,6 +180,9 @@ or set its limits to 0.
   own column and left out of the mix; "set by hand" counts only methods
   changed on the lead. Money is kept in whole cents; a quote or revenue over
   $100,000 (or a contact cost over $1,000) is refused as a likely typo.
+  Saving job revenue marks a lead Won, except that a lead marked Lost or
+  Skip asks first ("Mark won" or "Keep it lost"), so Results counts don't
+  change without you deciding.
   A value that can't be saved (a negative or too-large amount, a phone
   number without 10 digits, an email without an @, a unit with no street
   address, notes over the limit, a blank business name) is caught in the
