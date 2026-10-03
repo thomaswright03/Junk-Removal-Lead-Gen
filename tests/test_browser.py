@@ -219,8 +219,8 @@ def test_notes_survive_a_status_change_and_a_refresh(server, page):
     lead_row(page, "10 E Sample St").click()
     assert page.input_value("#dNotes") == "Owner wants a quote Friday"
     assert page.input_value("#dQuote") == "350"
-    row = db.connect(path).execute("SELECT status, notes, quote_amount FROM leads WHERE source_id = 'CE-1'").fetchone()
-    assert tuple(row) == ("responded", "Owner wants a quote Friday", 350)
+    row = db.connect(path).execute("SELECT status, notes, quote_cents FROM leads WHERE source_id = 'CE-1'").fetchone()
+    assert tuple(row) == ("responded", "Owner wants a quote Friday", 35000)
 
     # Unsaved typing survives another action (logging a contact) and the background refresh.
     page.select_option("#dChannel", "door_hanger")

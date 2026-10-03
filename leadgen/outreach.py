@@ -515,9 +515,9 @@ def results(conn: Conn, today: Optional[date] = None) -> list[dict]:
     """Per-channel funnel and cost numbers, and the mix of leads each got."""
     rows = conn.execute(
         """
-        SELECT l.*, COALESCE(t.n, 0) AS touch_count, COALESCE(t.cost, 0) AS touch_cost
+        SELECT l.*, COALESCE(t.n, 0) AS touch_count, COALESCE(t.cost_cents, 0) AS touch_cents
         FROM leads l
-        LEFT JOIN (SELECT lead_id, COUNT(*) AS n, SUM(cost) AS cost
+        LEFT JOIN (SELECT lead_id, COUNT(*) AS n, SUM(cost_cents) AS cost_cents
                    FROM touches GROUP BY lead_id) t ON t.lead_id = l.id
         WHERE l.channel IS NOT NULL
         """
@@ -538,10 +538,11 @@ def results(conn: Conn, today: Optional[date] = None) -> list[dict]:
         rs = by.get(ch, [])
         touched = sum(1 for r in rs if r["touch_count"])
         responded = sum(1 for r in rs if r["responded_at"] or r["status"] in ("responded", "quoted", "won"))
-        quoted = sum(1 for r in rs if r["status"] in ("quoted", "won") or r["quote_amount"] is not None)
+        quoted = sum(1 for r in rs if r["status"] in ("quoted", "won") or r["quote_cents"] is not None)
         won = sum(1 for r in rs if r["status"] == "won")
-        revenue = sum(float(r["job_revenue"] or 0) for r in rs)
-        cost = sum(float(r["touch_cost"] or 0) for r in rs)
+        # Sums in whole cents, so the totals are exact.
+        revenue = sum(int(r["revenue_cents"] or 0) for r in rs) / 100
+        cost = sum(int(r["touch_cents"] or 0) for r in rs) / 100
         out.append(
             {
                 "channel": ch,
@@ -551,8 +552,8 @@ def results(conn: Conn, today: Optional[date] = None) -> list[dict]:
                 "responded": responded,
                 "quoted": quoted,
                 "won": won,
-                "revenue": round(revenue, 2),
-                "cost": round(cost, 2),
+                "revenue": revenue,
+                "cost": cost,
                 "response_rate": responded / touched if touched else None,
                 "win_rate": won / touched if touched else None,
                 "cost_per_win": cost / won if won else None,

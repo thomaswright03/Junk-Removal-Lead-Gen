@@ -24,6 +24,7 @@ from .enrich import LANDLORD_SOURCE, ParcelClient, enrich, enrich_lead, fix_infe
 from .forms import (
     DUPLICATE_TOUCH_SECONDS,
     EDITABLE,
+    MAX_CONTACT_CENTS,
     NOTES_LIMIT,
     UNRECOGNISED_FILE,
     NotFound,
@@ -201,9 +202,15 @@ class App(JobRunner):
             raise ValueError("That outreach method doesn't exist. Pick one from the list.")
         if fields.get("channel") == "":
             fields["channel"] = None
-        for name, label in (("quote_amount", "Quote"), ("job_revenue", "Job revenue")):
+        # Money is stored in whole cents; the old dollar columns are cleared
+        # so an amount from before can't come back.
+        for name, column, label in (
+            ("quote_amount", "quote_cents", "Quote"),
+            ("job_revenue", "revenue_cents", "Job revenue"),
+        ):
             if name in fields:
-                fields[name] = money_value(fields[name], label)
+                fields[column] = money_value(fields.pop(name), label)
+                fields[name] = None
         if "notes" in fields:
             fields["notes"] = notes_value(fields["notes"])
         if (
@@ -312,7 +319,7 @@ class App(JobRunner):
         kind = body.get("kind")
         cost = body.get("cost")
         if cost is not None:
-            cost = money_value(cost, "Cost")
+            cost = money_value(cost, "Cost", MAX_CONTACT_CENTS)
         notes = notes_value(body.get("notes"))
         logged = duplicates = 0
         with self.conn() as conn:
@@ -343,9 +350,14 @@ class App(JobRunner):
                 if last and _seconds_between(last["created_at"], now) < DUPLICATE_TOUCH_SECONDS:
                     duplicates += 1
                     continue
-                this_cost = cost if cost is not None else money_value(settings["costs"].get(channel) or 0, "Cost")
+                this_cost = (
+                    cost
+                    if cost is not None
+                    else money_value(settings["costs"].get(channel) or 0, "Cost", MAX_CONTACT_CENTS)
+                )
                 conn.execute(
-                    "INSERT INTO touches (lead_id, channel, kind, cost, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO touches (lead_id, channel, kind, cost_cents, notes, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (lead_id, channel, kind, this_cost, notes, now),
                 )
                 logged += 1

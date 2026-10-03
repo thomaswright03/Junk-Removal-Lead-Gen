@@ -2,7 +2,7 @@
 columns the page gets for each, and the server-side filtering, sorting and
 paging that keep every response small however many leads there are."""
 
-from . import outreach
+from . import db, outreach
 from .tucson_codes import CODE_LABELS, code_of
 from .util import az_today
 
@@ -141,6 +141,9 @@ def lead_dict(r, settings, owner_counts, today=None):
     is, the latest court event, and which outreach methods can work it."""
     r = dict(zip(r.keys(), r))  # one plain dict: much faster to read than a database row
     d = {k: r[k] for k in LEAD_FIELDS}
+    # Money is kept in whole cents; the page gets dollars.
+    d["quote_amount"] = db.dollars(r.get("quote_cents"))
+    d["job_revenue"] = db.dollars(r.get("revenue_cents"))
     code = code_of(r["description"]) if r["lead_type"] == "code_violation" else None
     d["code"] = code
     d["code_label"] = CODE_LABELS.get(code) or (
@@ -183,7 +186,9 @@ def attach_touches(conn, leads, everything=False):
                     f"SELECT * FROM touches WHERE lead_id IN ({','.join('?' * len(chunk))}) ORDER BY id", chunk
                 ).fetchall()
     for t in rows:
-        by_lead.setdefault(t["lead_id"], []).append(dict(t))
+        t = dict(t)
+        t["cost"] = db.dollars(t.get("cost_cents")) or 0
+        by_lead.setdefault(t["lead_id"], []).append(t)
     for l in leads:
         l["touches"] = by_lead.get(l["id"], [])
     return leads

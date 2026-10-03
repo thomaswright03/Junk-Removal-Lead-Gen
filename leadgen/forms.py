@@ -81,7 +81,8 @@ def validate_settings(body):
         if not isinstance(costs, dict) or set(costs) - set(outreach.CHANNELS):
             raise ValueError("Cost per contact must list a dollar amount for each outreach method.")
         values["costs"] = {
-            c: money_value(v, f"Cost per contact for {outreach.CHANNELS[c]}") or 0.0 for c, v in costs.items()
+            c: (money_value(v, f"Cost per contact for {outreach.CHANNELS[c]}", MAX_CONTACT_CENTS) or 0) / 100
+            for c, v in costs.items()
         }
     if "tracking_numbers" in body:
         nums = body["tracking_numbers"]
@@ -124,21 +125,30 @@ def _lead_id(value, what="lead"):
     return n
 
 
-def money_value(value, label):
-    """A dollar amount: a non-negative number, or None for blank."""
+# The most one job, quote or contact can be: a typo (an extra zero, a pasted
+# number) above these is refused, so it can't skew the Results tab.
+MAX_JOB_CENTS = 100_000 * 100
+MAX_CONTACT_CENTS = 1_000 * 100
+
+
+def money_value(value, label, most=MAX_JOB_CENTS):
+    """A dollar amount as whole cents: a non-negative number up to ``most``
+    cents, or None for blank."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, bool):
         raise ValueError(f"{label} must be a dollar amount, like 250.")
     try:
-        amount = float(value)
+        amount = float(str(value).strip().replace("$", "").replace(",", "")) if isinstance(value, str) else float(value)
     except (TypeError, ValueError):
         raise ValueError(f"{label} must be a dollar amount, like 250.") from None
     if amount != amount or amount in (float("inf"), float("-inf")):
         raise ValueError(f"{label} must be a dollar amount, like 250.")
     if amount < 0:
         raise ValueError(f"{label} can't be negative.")
-    return round(amount, 2)
+    if amount * 100 > most:
+        raise ValueError(f"{label} can be at most ${most // 100:,}. Check for an extra zero.")
+    return int(round(amount * 100))
 
 
 def _seconds_between(a, b):

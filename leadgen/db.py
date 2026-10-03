@@ -97,8 +97,13 @@ _ADDED_COLUMNS = {
     # method already working its landlord) or "hand" (set on the lead).
     "assigned_by": "TEXT",
     "responded_at": "TEXT",
+    # Dollar amounts from before money was kept in whole cents; read once
+    # into the *_cents columns (see _money_to_cents) and no longer written.
     "quote_amount": "REAL",
     "job_revenue": "REAL",
+    # Quote and job revenue in whole cents.
+    "quote_cents": "INTEGER",
+    "revenue_cents": "INTEGER",
     # Looked up by hand or imported from a skip-tracing file (see contacts.py).
     "owner_phone": "TEXT",
     "owner_email": "TEXT",
@@ -122,6 +127,10 @@ _ADDED_COLUMNS = {
     "unit": "TEXT",
     "address_source": "TEXT",
 }
+
+# Columns added to touches after the first release. ``cost`` (dollars) is
+# kept for older rows; ``cost_cents`` is what's written and read.
+_ADDED_TOUCH_COLUMNS = {"cost_cents": "INTEGER"}
 
 # Columns a fetch is allowed to refresh on an existing row. A blank value
 # from upstream never wipes out a value we already have.
@@ -161,6 +170,9 @@ def connect(path: Any) -> Conn:
             conn.executescript(pg.SCHEMA)
             for col, kind in _ADDED_COLUMNS.items():
                 conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
+            for col, kind in _ADDED_TOUCH_COLUMNS.items():
+                conn.execute(f"ALTER TABLE touches ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
+            _money_to_cents(conn)
             _READY_URLS.add(str(path))
         return conn
     path = Path(path)
@@ -178,6 +190,11 @@ def _migrate(conn: Conn) -> None:
     added = [c for c in _ADDED_COLUMNS if c not in have]
     for col in added:
         conn.execute(f"ALTER TABLE leads ADD COLUMN {col} {_ADDED_COLUMNS[col]}")
+    have_touch = {r["name"] for r in conn.execute("PRAGMA table_info(touches)")}
+    for col, kind in _ADDED_TOUCH_COLUMNS.items():
+        if col not in have_touch:
+            conn.execute(f"ALTER TABLE touches ADD COLUMN {col} {kind}")
+    _money_to_cents(conn)
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
         for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
@@ -185,6 +202,31 @@ def _migrate(conn: Conn) -> None:
             if parcel:
                 conn.execute("UPDATE leads SET parcel = ? WHERE id = ?", (parcel, row["id"]))
     conn.commit()
+
+
+def _money_to_cents(conn: Conn) -> None:
+    """Dollar amounts saved before money was kept in whole cents, moved into
+    the cents columns (only rows not moved yet, so this runs on every open)."""
+    for table, dollars, cents in (
+        ("leads", "quote_amount", "quote_cents"),
+        ("leads", "job_revenue", "revenue_cents"),
+        ("touches", "cost", "cost_cents"),
+    ):
+        todo = f"{cents} IS NULL AND {dollars} IS NOT NULL"
+        # Look first: an open that writes nothing takes no write lock.
+        if conn.execute(f"SELECT 1 FROM {table} WHERE {todo} LIMIT 1").fetchone():
+            conn.execute(f"UPDATE {table} SET {cents} = CAST(ROUND({dollars} * 100) AS INTEGER) WHERE {todo}")
+            conn.commit()
+
+
+def cents(value: Any) -> Optional[int]:
+    """Whole cents from a stored value, or None."""
+    return None if value is None else int(value)
+
+
+def dollars(value: Any) -> Optional[float]:
+    """Cents as dollars for the page (exact to the cent), or None."""
+    return None if value is None else int(value) / 100
 
 
 def upsert(conn: Conn, lead: Lead) -> str:
