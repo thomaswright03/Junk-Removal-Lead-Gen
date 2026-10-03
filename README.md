@@ -30,10 +30,33 @@ leadgen serve
 Opens http://127.0.0.1:8765 in your browser. It only runs on your computer and
 uses the same database as the commands below.
 
+To put Lead Desk online (Vercel, behind a password, with the daily check on
+GitHub Actions), follow [docs/VERCEL.md](docs/VERCEL.md).
+
+**New evictions arrive by themselves.** Every morning (and whenever you press
+**Check for new evictions**) Lead Desk searches the Justice Court calendar
+for eviction hearings in the next 30 days, reads each new case page for the
+eviction notice, looks up the landlord in the county assessor's records (and
+their property, when they own just one complex), then looks up the landlord's
+phone, email and website. To have this run every morning even when Lead Desk
+isn't open, run once:
+
+```sh
+leadgen schedule install      # macOS: runs `leadgen daily` at 6:00 every day
+```
+
+Phone numbers for landlords come from OpenStreetMap and company websites,
+which cover only some businesses. A Google Places API key (Settings) finds
+most apartment complexes and property managers; without one, expect many
+evictions to still need a number (use the skip-trace export below).
+Google gives 1,000 of these searches a month free, then charges about $35
+per 1,000; Lead Desk stops at 1,000 a month unless you raise the limit in
+Settings.
+
 - **Leads**: by default only eviction cases with an eviction notice filed in
   the court case (the "Show" menu switches to all evictions, or all leads
   including Tucson code cases). Paste Justice Court case links
-  (`jcDisplayCase.aspx?ID=...`) into **Add cases**, and Lead Desk reads each
+  (`jcDisplayCase.aspx?ID=...`) into **Add cases** to add cases by hand; Lead Desk reads each
   case page for the eviction notice, parties and next court date. Each open
   lead is ranked by score, with the owner of record from
   the Pima County Assessor (name, mailing address, whether they live
@@ -73,9 +96,9 @@ columns:
 Check found numbers before calling, and scrub personal cell numbers against
 the Do Not Call registry before any cold call.
 
-**Refresh data** pulls new Tucson cases, looks up owners and re-reads open
-eviction case pages for new documents. **Update court cases** re-reads the
-case pages on demand. **Import court page / CSV** takes a saved Justice Court
+**Check for new evictions** runs the daily check now (it runs in the
+background; the page fills in as cases come in). **Update court cases**
+re-reads every open eviction case page. **Import court page / CSV** takes a saved Justice Court
 case page or calendar page, or any CSV.
 
 Score: up to 40 points for what the case says (vacant building, dumping and
@@ -84,6 +107,16 @@ address is elsewhere, +10 for a company/trust owner, +10 if the owner has
 several leads, +15 if under a week old (+8 under two weeks).
 
 ## Daily use from the command line
+
+```sh
+leadgen daily
+```
+
+The same daily check Lead Desk runs: new evictions from the court calendar,
+eviction notices from the case pages, owners and landlords from the
+assessor, landlord phones, new Tucson code cases. It prints a one-line
+summary. `leadgen schedule install` runs it every morning (`--hour 7` for a
+different time, `leadgen schedule remove` to stop).
 
 ```sh
 leadgen run
@@ -96,12 +129,12 @@ are in Pima County, marks leads older than 30 days as stale, and writes
 HTML file in a browser to search and filter; open the CSV in Excel or import it
 into a CRM.
 
-Add evictions from the Justice Court calendar (see
-[docs/DATA_SOURCES.md](docs/DATA_SOURCES.md#pima-county-consolidated-justice-court-evictions)
-for how to save the page):
+Search the Justice Court calendar for eviction hearings in a date range, or
+read a saved results page:
 
 ```sh
-leadgen fetch --source pima_jp_calendar --assume-eviction --file data/inbox/calendar.html
+leadgen fetch --source pima_jp_calendar --since 2026-10-03 --until 2026-11-02
+leadgen fetch --source pima_jp_calendar --file data/inbox/calendar.html
 ```
 
 Add or re-check eviction cases by their case page links:
@@ -149,12 +182,9 @@ Data lives in `data/leads.db` (SQLite) by default; set `LEADGEN_DB` or pass
 
 ### Running it on a schedule
 
-On Windows, use Task Scheduler to run `leadgen run` daily from the project
-folder. On macOS or Linux:
-
-```cron
-0 6 * * * cd /path/to/Junk-Removal-Lead-Gen && .venv/bin/leadgen run >> data/run.log 2>&1
-```
+`leadgen schedule install` sets up the daily run (a LaunchAgent on macOS; on
+Linux and Windows it prints the cron line or Task Scheduler command to add).
+The log goes to `data/daily.log`.
 
 Don't run it as a scheduled GitHub Action that uploads results: this
 repository is public and the leads contain names and addresses.

@@ -81,7 +81,7 @@ def cmd_contacts(args):
     conn = _connect(args)
     if args.action == "find":
         settings = outreach.merged_settings(db.get_settings(conn))
-        providers = providers_from(settings, google_key=args.google_key)
+        providers = providers_from(settings, google_key=args.google_key, conn=conn)
         names = ", ".join(p.name for p in providers)
         print(f"looking up business contacts with: {names} (+ company websites)")
         counts = find_contacts(conn, providers, limit=args.limit, refresh=args.refresh)
@@ -113,6 +113,29 @@ def cmd_cases(args):
     else:
         counts = update_cases(conn, limit=args.limit)
     print(counts)
+
+
+def cmd_daily(args):
+    from .daily import main_log, run_daily
+
+    conn = _connect(args)
+    if args.counts_only:  # public logs (GitHub Actions): step names and counts, nothing else
+        log = lambda m: print("  " + m) if m.startswith("checking ") else None  # noqa: E731
+    else:
+        log = lambda m: print("  " + m)  # noqa: E731
+    summary = run_daily(conn, stale_days=args.stale_days, log=log)
+    main_log(summary, public=args.counts_only)
+
+
+def cmd_schedule(args):
+    from . import schedule
+
+    if args.action == "install":
+        print(schedule.install(args.db, hour=args.hour, minute=args.minute))
+    elif args.action == "remove":
+        print(schedule.remove())
+    else:
+        print(schedule.status())
 
 
 def cmd_serve(args):
@@ -190,13 +213,15 @@ def cmd_list(args):
 
 def cmd_sources(args):
     for name, cls in SOURCES.items():
-        auto = " (automatic)" if name in AUTOMATIC else " (needs --file)"
+        auto = " (automatic)" if name in AUTOMATIC else ""
         print(f"{name}{auto}: {cls.description}")
 
 
 def build_parser():
     p = argparse.ArgumentParser(prog="leadgen", description=__doc__.splitlines()[0])
-    p.add_argument("--db", default=str(config.DB_PATH), help="SQLite file (default %(default)s)")
+    p.add_argument("--db", default=config.DATABASE_URL or str(config.DB_PATH),
+                   help="SQLite file or postgres:// URL (default: DATABASE_URL if set, "
+                        f"else {config.DB_PATH})")
     p.add_argument("--stale-days", type=int, default=config.STALE_AFTER_DAYS,
                    help="leads older than this are stale (default %(default)s)")
     sub = p.add_subparsers(dest="command", required=True)
@@ -252,6 +277,19 @@ def build_parser():
                     help="add: case page links (jcDisplayCase.aspx?ID=...) or IDs")
     sp.add_argument("--limit", type=int, help="update: max cases to re-read")
     sp.set_defaults(func=cmd_cases)
+
+    sp = sub.add_parser(
+        "daily",
+        help="the daily run: new evictions, eviction notices, owners, landlord phones, code cases")
+    sp.add_argument("--counts-only", action="store_true",
+                    help="print step names and counts only, no names or error details (public logs)")
+    sp.set_defaults(func=cmd_daily)
+
+    sp = sub.add_parser("schedule", help="run `leadgen daily` automatically every morning")
+    sp.add_argument("action", choices=("install", "remove", "status"))
+    sp.add_argument("--hour", type=int, default=6, help="hour of day, 0-23 (default 6)")
+    sp.add_argument("--minute", type=int, default=0)
+    sp.set_defaults(func=cmd_schedule)
 
     sp = sub.add_parser("serve", help="open the lead desk web app")
     sp.add_argument("--port", type=int, default=8765)

@@ -246,8 +246,14 @@ def add_cases(conn, text, client=None, log=print):
     return counts
 
 
-def update_cases(conn, client=None, limit=None, max_age_hours=12, log=print):
-    """Re-read case pages for open eviction leads not checked recently."""
+def update_cases(conn, client=None, limit=None, max_age_hours=12, log=print,
+                 only_unconfirmed=False):
+    """Re-read case pages for open eviction leads not checked recently.
+
+    Cases never read come first. ``only_unconfirmed`` skips cases already known
+    to have an eviction notice (the daily run uses it to keep requests down).
+    Stops after five failures in a row, since the court site is probably down.
+    """
     from .. import db
 
     cutoff = (datetime.now(timezone.utc).replace(microsecond=0)
@@ -255,20 +261,28 @@ def update_cases(conn, client=None, limit=None, max_age_hours=12, log=print):
     rows = conn.execute(
         "SELECT id, url FROM leads WHERE lead_type = 'eviction' AND url LIKE '%jcDisplayCase%' "
         "AND (case_status IS NULL OR case_status NOT LIKE 'Closed%') "
-        "AND (case_checked_at IS NULL OR case_checked_at <= ?) ORDER BY id",
+        "AND (case_checked_at IS NULL OR case_checked_at <= ?) "
+        + ("AND COALESCE(eviction_notice, 0) = 0 " if only_unconfirmed else "")
+        + "ORDER BY case_checked_at IS NOT NULL, id",
         (cutoff,),
     ).fetchall()
     if limit:
         rows = rows[:limit]
     counts = {"checked": 0, "with_notice": 0, "failed": 0}
     client = client or CaseClient()
+    failures = 0
     for r in rows:
         try:
             lead = client.fetch(r["url"])
         except requests.RequestException as e:
             counts["failed"] += 1
+            failures += 1
             log(f"lead {r['id']}: {type(e).__name__}")
+            if failures >= 5:
+                log("court case pages not responding; stopping for this run")
+                break
             continue
+        failures = 0
         if lead:
             db.upsert(conn, lead)
             counts["checked"] += 1

@@ -115,10 +115,80 @@ class ParcelClient:
         return self.query(f"ADDRESSEE LIKE {_sql_str(name + '%')}", limit=limit)
 
 
+_MULTI_RE = re.compile(r"APART|MULTI|MFR|CONDO|TOWNHOUSE|MOBILE HOME PARK|RESID")
+
+
+def landlord_name(plaintiff):
+    """First plaintiff as the assessor writes owner names, if it's a company."""
+    first = (plaintiff or "").split(";")[0]
+    name = re.sub(r"[.,]", " ", first.upper())
+    name = re.sub(r"\s+", " ", name).strip()
+    return name if is_entity(name) or re.search(r"\b(LTD|LP|LLLP|PARTNERS)\b", name) else None
+
+
+def landlord_property(client, plaintiff):
+    """The landlord's property from the assessor, when the court case has no address.
+
+    Returns ``(owner_attrs, site_attrs)``: owner_attrs fills the owner columns
+    whenever the landlord owns anything in the county; site_attrs is set only
+    when all their residential parcels share one site address, so the eviction
+    almost certainly happened there.
+    """
+    name = landlord_name(plaintiff)
+    if not name:
+        return None, None
+    rows = client.by_owner(name, limit=200)
+    if not rows:
+        return None, None
+    homes = [r for r in rows if _MULTI_RE.search((r.get("USE_DESC") or r.get("PPT_DESC") or "").upper())
+             and (r.get("SITE_ADDRESS") or "").strip()]
+    sites = {normalize_address(r["SITE_ADDRESS"]).split(" UNIT ")[0] for r in homes}
+    return rows[0], (homes[0] if len(sites) == 1 else None)
+
+
+def enrich_landlords(conn, client=None, limit=None):
+    """Owner and, when clear, property for eviction leads that have no address."""
+    client = client or ParcelClient()
+    sql = ("SELECT id, plaintiff FROM leads WHERE duplicate_of IS NULL AND lead_type = 'eviction' "
+           "AND address IS NULL AND parcel IS NULL AND plaintiff IS NOT NULL "
+           "AND enriched_at IS NULL ORDER BY id")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    counts = {"found": 0, "with_property": 0, "not_found": 0}
+    for r in conn.execute(sql).fetchall():
+        try:
+            owner, site = landlord_property(client, r["plaintiff"])
+        except Exception:
+            continue  # assessor unreachable: try again next run
+        fields = {}
+        if owner:
+            fields = owner_fields(owner)
+            fields["owner_absentee"] = None  # unknown without the eviction's address
+            counts["found"] += 1
+        else:
+            counts["not_found"] += 1
+        if site:
+            fields.update(owner_fields(site))
+            fields.update(address=site["SITE_ADDRESS"].strip(), parcel=site.get("PARCEL"),
+                          zip=(str(site.get("SITE_ZIP") or "").strip() or None))
+            fields["address_norm"] = normalize_address(fields["address"])
+            if site.get("LAT") and site.get("LON"):
+                fields.update(lat=float(site["LAT"]), lon=float(site["LON"]))
+            counts["with_property"] += 1
+        fields["enriched_at"] = now
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), r["id"]])
+    conn.commit()
+    return counts
+
+
 def enrich(conn, client=None, limit=None, refresh=False):
     """Fill owner_* columns. Returns counts by outcome."""
     client = client or ParcelClient()
-    sql = "SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL"
+    landlords = enrich_landlords(conn, client, limit=limit)
+    sql = ("SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL "
+           "AND (parcel IS NOT NULL OR address IS NOT NULL)")
     if not refresh:
         sql += " AND enriched_at IS NULL"
     sql += " ORDER BY id"
@@ -127,7 +197,8 @@ def enrich(conn, client=None, limit=None, refresh=False):
     rows = conn.execute(sql).fetchall()
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
-    counts = {"found": 0, "not_found": 0}
+    counts = {"found": landlords["found"], "not_found": landlords["not_found"],
+              "landlord_property": landlords["with_property"]}
     for r in rows:
         attrs = by_parcel.get(r["parcel"]) if r["parcel"] else None
         if attrs is None and r["address"]:

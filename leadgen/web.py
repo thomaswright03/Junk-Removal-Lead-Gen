@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import webbrowser
 from datetime import date, datetime, timedelta, timezone
@@ -16,12 +17,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import db, outreach
+from . import daily, db, outreach
 from .contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
 from .enrich import ParcelClient, enrich, owner_fields
+from .daily import run_daily
 from .geocode import CensusGeocoder
-from .lookup import find_contacts, providers_from
-from .sources import AUTOMATIC, SOURCES
+from .lookup import GoogleBudget, find_contacts, providers_from
+from .sources import SOURCES
 from .sources.pima_jp_case import add_cases, is_case_page, parse_case_html, update_cases
 from .tucson_codes import CODE_LABELS, code_of
 
@@ -51,9 +53,18 @@ def _now():
 
 class App:
     def __init__(self, db_path, stale_days=30, parcel_client=None, geocoder=None,
-                 case_client=None):
+                 case_client=None, calendar=None, code_cases=None, providers=None,
+                 serverless=False):
         self.db_path = db_path
+        # Online (Vercel): a request can't keep running after it answers, so
+        # the daily check runs on GitHub Actions instead (see wsgi.py).
+        self.serverless = serverless
         self.case_client = case_client
+        self.calendar = calendar
+        self.code_cases = code_cases
+        self.providers = providers
+        self.daily_lock = threading.Lock()
+        self.daily_message = None
         self.stale_days = stale_days
         self.parcel_client = parcel_client
         self.geocoder = geocoder
@@ -107,13 +118,21 @@ class App:
             public = dict(settings)
             key = public.pop("google_places_api_key", "") or ""
             public["google_key_set"] = bool(key or os.environ.get("GOOGLE_PLACES_API_KEY"))
+            public["google_used_this_month"] = GoogleBudget(conn).used()
             counts = conn.execute(
-                "SELECT COUNT(*) AS all_, SUM(lead_type = 'eviction') AS evictions, "
-                "SUM(lead_type = 'eviction' AND eviction_notice = 1) AS eviction_notice, "
-                "SUM(lead_type = 'eviction' AND eviction_notice IS NULL) AS unchecked "
+                "SELECT COUNT(*) AS all_, "
+                "SUM(CASE WHEN lead_type = 'eviction' THEN 1 ELSE 0 END) AS evictions, "
+                "SUM(CASE WHEN lead_type = 'eviction' AND eviction_notice = 1 THEN 1 ELSE 0 END) "
+                "AS eviction_notice, "
+                "SUM(CASE WHEN lead_type = 'eviction' AND eviction_notice IS NULL THEN 1 ELSE 0 END) "
+                "AS unchecked "
                 "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
             ).fetchone()
+            last = db.get_settings(conn).get("last_daily_summary")
             return {
+                "daily": {"running": self.daily_lock.locked(), "message": self.daily_message,
+                          "last_run": settings.get("last_daily_run"),
+                          "summary": daily.describe(last) if last else None},
                 "leads": self.leads(conn, settings),
                 "view_counts": {"all": counts["all_"] or 0, "evictions": counts["evictions"] or 0,
                                 "eviction_notice": counts["eviction_notice"] or 0,
@@ -209,6 +228,11 @@ class App:
             values = {k: v for k, v in body.items() if k in allowed}
             if "lead_view" in values and values["lead_view"] not in LEAD_VIEWS:
                 raise ValueError("lead_view must be one of " + ", ".join(LEAD_VIEWS))
+            if "google_monthly_limit" in values:
+                limit = int(values["google_monthly_limit"] or 0)
+                if limit < 0:
+                    raise ValueError("google_monthly_limit can't be negative")
+                values["google_monthly_limit"] = limit
             if not values.get("google_places_api_key"):
                 values.pop("google_places_api_key", None)  # blank field keeps the saved key
             if body.get("clear_google_key"):
@@ -232,29 +256,65 @@ class App:
                 db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})
 
     def refresh(self, body):
-        days = int(body.get("days") or 30)
-        since = (date.today() - timedelta(days=days)).isoformat()
-        until = date.today().isoformat()
-        summary = {}
-        with self.lock, self.conn() as conn:
-            for name in AUTOMATIC:
-                counts = {"new": 0, "updated": 0}
-                for lead in SOURCES[name]().fetch(since, until):
-                    counts[db.upsert(conn, lead)] += 1
-                conn.commit()
-                summary[name] = counts
-            summary["owners"] = enrich(conn, self.parcel_client or ParcelClient())
-            summary["cases"] = update_cases(conn, self.case_client, log=lambda m: None)
-            summary["stale"] = db.mark_stale(conn, self.stale_days)
+        """Run the daily check now and wait for it (the CLI and CI use this;
+        the page uses ``start_daily``)."""
+        with self.daily_lock, self.conn() as conn:
+            summary = run_daily(conn, stale_days=self.stale_days, case_client=self.case_client,
+                                parcel_client=self.parcel_client, calendar=self.calendar,
+                                code_cases=self.code_cases, geocoder=self.geocoder,
+                                providers=self.providers,
+                                case_limit=body.get("case_limit"),
+                                contact_limit=int(body.get("contact_limit") or 60),
+                                log=self._progress)
         self._ensure_base()
         return summary
+
+    def _progress(self, message):
+        self.daily_message = message
+
+    def _cap(self, n):
+        """Online, a request must finish within Vercel's time limit, so the
+        buttons do a batch at a time; the daily run does the rest."""
+        return n if self.serverless else None
+
+    def start_daily(self, body=None):
+        """Start the daily check in the background; the page polls /api/state."""
+        if self.serverless:
+            return start_github_check()
+        if self.daily_lock.locked():
+            return {"started": False, "running": True}
+
+        def work():
+            try:
+                self.refresh(body or {})
+            except Exception as e:
+                traceback.print_exc(file=sys.stderr)
+                self.daily_message = f"daily check failed: {type(e).__name__}: {e}"
+            else:
+                self.daily_message = None
+
+        threading.Thread(target=work, daemon=True, name="daily").start()
+        return {"started": True, "running": True}
+
+    def scheduler(self, hour=6, every_seconds=600):
+        """While Lead Desk is open, run the daily check once a day after ``hour``."""
+        def loop():
+            while True:
+                try:
+                    with self.conn() as conn:
+                        if daily.due(conn, hour=hour):
+                            self.start_daily()
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
+                time.sleep(every_seconds)
+        threading.Thread(target=loop, daemon=True, name="scheduler").start()
 
     def find_contacts(self, body):
         with self.lock, self.conn() as conn:
             settings = self.settings(conn)
             log = []
-            counts = find_contacts(conn, providers_from(settings),
-                                   limit=int(body.get("limit") or 0) or None,
+            counts = find_contacts(conn, providers_from(settings, conn=conn),
+                                   limit=int(body.get("limit") or 0) or self._cap(25),
                                    refresh=bool(body.get("refresh")), log=log.append)
             counts["google_used"] = any(p.name == "google" for p in providers_from(settings))
             counts["messages"] = log[:10]
@@ -270,14 +330,14 @@ class App:
     def update_cases(self, body):
         log = []
         with self.lock, self.conn() as conn:
-            counts = update_cases(conn, self.case_client, limit=int(body.get("limit") or 0) or None,
+            counts = update_cases(conn, self.case_client, limit=int(body.get("limit") or 0) or self._cap(60),
                                   max_age_hours=0 if body.get("force") else 12, log=log.append)
         counts["messages"] = log[:10]
         return counts
 
     def run_enrich(self, body):
         with self.lock, self.conn() as conn:
-            return enrich(conn, self.parcel_client or ParcelClient(),
+            return enrich(conn, self.parcel_client or ParcelClient(), limit=self._cap(150),
                           refresh=bool(body.get("refresh")))
 
     def import_file(self, source, filename, data, lead_type="eviction"):
@@ -323,6 +383,29 @@ class App:
         ]
 
 
+def start_github_check(session=None):
+    """Online, "Check for new evictions" starts the daily GitHub Actions run
+    (.github/workflows/daily.yml). Needs LEADDESK_GITHUB_TOKEN: a GitHub token
+    allowed to run this repository's workflows."""
+    import requests
+
+    token = os.environ.get("LEADDESK_GITHUB_TOKEN")
+    owner, repo = os.environ.get("VERCEL_GIT_REPO_OWNER"), os.environ.get("VERCEL_GIT_REPO_SLUG")
+    if not (token and owner and repo):
+        return {"started": False, "running": False,
+                "message": "The check runs by itself every morning at 6. To start it from here too, "
+                           "add LEADDESK_GITHUB_TOKEN in Vercel (see docs/VERCEL.md)."}
+    resp = (session or requests).post(
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/daily.yml/dispatches",
+        json={"ref": os.environ.get("LEADDESK_GITHUB_REF", "main")},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        timeout=30)
+    if resp.status_code >= 300:
+        raise ValueError(f"GitHub didn't start the check ({resp.status_code}): {resp.text[:200]}")
+    return {"started": True, "running": False,
+            "message": "Started. The check takes about 15 minutes; reload then to see new leads."}
+
+
 def render_template(settings, channel, lead):
     owner = (lead.get("owner_name") or lead.get("plaintiff") or "").strip()
     # Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
@@ -343,6 +426,64 @@ def render_template(settings, channel, lead):
     return text
 
 
+def handle(app, method, path, query, headers, body):
+    """Answer one request. ``headers`` needs only ``.get``. Returns
+    (status, body, content type); a body that isn't bytes or str is JSON."""
+    q = parse_qs(query or "")
+    try:
+        if method == "GET":
+            if path in ("/", "/index.html"):
+                return 200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8"
+            if path == "/api/state":
+                return 200, app.state(), "application/json"
+            if path == "/api/skiptrace.csv":
+                with app.conn() as conn:
+                    leads = [l for l in app.leads(conn)
+                             if l["status"] not in ("stale", "skip", "lost", "won")]
+                return 200, skiptrace_csv(leads), "text/csv; charset=utf-8"
+            if path == "/api/owner":
+                return 200, app.owner_properties(q.get("name", [""])[0]), "application/json"
+            return 404, {"error": "not found"}, "application/json"
+        if method != "POST":
+            return 405, {"error": "method not allowed"}, "application/json"
+        # Only accept requests from this app's own page.
+        origin = headers.get("Origin")
+        if origin and urlparse(origin).netloc != headers.get("Host"):
+            return 403, {"error": "cross-origin request refused"}, "application/json"
+        if path == "/api/import":
+            return 200, app.import_file(
+                q.get("source", ["pima_jp_calendar"])[0], q.get("filename", [""])[0],
+                body, q.get("lead_type", ["eviction"])[0]), "application/json"
+        data = json.loads(body or b"{}")
+        routes = {
+            "/api/lead": app.update_lead,
+            "/api/touch": app.add_touches,
+            "/api/assign": app.assign,
+            "/api/settings": app.save_settings,
+            "/api/refresh": app.start_daily,
+            "/api/enrich": app.run_enrich,
+            "/api/find-contacts": app.find_contacts,
+            "/api/cases/add": app.add_cases,
+            "/api/cases/update": app.update_cases,
+        }
+        if path not in routes:
+            return 404, {"error": "not found"}, "application/json"
+        return 200, routes[path](data), "application/json"
+    except (ValueError, KeyError) as e:
+        return 400, {"error": str(e)}, "application/json"
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        return 500, {"error": f"{type(e).__name__}: {e}"}, "application/json"
+
+
+def encode_body(body):
+    if isinstance(body, bytes):
+        return body
+    if isinstance(body, str):
+        return body.encode()
+    return json.dumps(body, default=str).encode()
+
+
 class Handler(BaseHTTPRequestHandler):
     app = None
 
@@ -350,8 +491,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code, body, ctype="application/json"):
-        data = body if isinstance(body, bytes) else (
-            body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode())
+        data = encode_body(body)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
@@ -363,63 +503,22 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(n) if n else b""
 
-    def do_GET(self):
+    def _handle(self, method):
         url = urlparse(self.path)
-        q = parse_qs(url.query)
-        try:
-            if url.path in ("/", "/index.html"):
-                return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-            if url.path == "/api/state":
-                return self._send(200, self.app.state())
-            if url.path == "/api/skiptrace.csv":
-                with self.app.conn() as conn:
-                    leads = [l for l in self.app.leads(conn)
-                             if l["status"] not in ("stale", "skip", "lost", "won")]
-                return self._send(200, skiptrace_csv(leads), "text/csv; charset=utf-8")
-            if url.path == "/api/owner":
-                return self._send(200, self.app.owner_properties(q.get("name", [""])[0]))
-            return self._send(404, {"error": "not found"})
-        except Exception as e:
-            traceback.print_exc(file=sys.stderr)
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        body = self._body() if method == "POST" else b""
+        self._send(*handle(self.app, method, url.path, url.query, self.headers, body))
+
+    def do_GET(self):
+        self._handle("GET")
 
     def do_POST(self):
-        url = urlparse(self.path)
-        q = parse_qs(url.query)
-        # Only accept requests from this app's own page.
-        origin = self.headers.get("Origin")
-        if origin and urlparse(origin).netloc != self.headers.get("Host"):
-            return self._send(403, {"error": "cross-origin request refused"})
-        try:
-            if url.path == "/api/import":
-                return self._send(200, self.app.import_file(
-                    q.get("source", ["pima_jp_calendar"])[0], q.get("filename", [""])[0],
-                    self._body(), q.get("lead_type", ["eviction"])[0]))
-            body = json.loads(self._body() or b"{}")
-            routes = {
-                "/api/lead": self.app.update_lead,
-                "/api/touch": self.app.add_touches,
-                "/api/assign": self.app.assign,
-                "/api/settings": self.app.save_settings,
-                "/api/refresh": self.app.refresh,
-                "/api/enrich": self.app.run_enrich,
-                "/api/find-contacts": self.app.find_contacts,
-                "/api/cases/add": self.app.add_cases,
-                "/api/cases/update": self.app.update_cases,
-            }
-            if url.path not in routes:
-                return self._send(404, {"error": "not found"})
-            return self._send(200, routes[url.path](body))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e)})
-        except Exception as e:
-            traceback.print_exc(file=sys.stderr)
-            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        self._handle("POST")
 
 
 def serve(db_path, host="127.0.0.1", port=8765, stale_days=30, open_browser=True):
     app = App(db_path, stale_days)
     app._ensure_base()
+    app.scheduler()
     handler = type("BoundHandler", (Handler,), {"app": app})
     server = ThreadingHTTPServer((host, port), handler)
     url = f"http://{host}:{port}/"

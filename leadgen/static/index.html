@@ -110,7 +110,7 @@ dt { color: var(--muted); font-size: 13px; } dd { margin: 0; }
     Import court page / CSV
     <input type="file" id="importFile" accept=".html,.htm,.csv" hidden>
   </label>
-  <button class="btn primary" id="refreshBtn">Refresh data</button>
+  <button class="btn primary" id="refreshBtn" title="Search the court calendar for new evictions, read the case pages, look up landlords and their phones, and pull new Tucson code cases. Runs by itself every morning.">Check for new evictions</button>
 </header>
 
 <main>
@@ -154,7 +154,12 @@ async function load() {
   render();
 }
 async function act(fn, okMsg) {
-  try { const r = await fn(); if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg); await load(); return r; }
+  try {
+    const r = await fn();
+    const msg = okMsg && (typeof okMsg === "function" ? okMsg(r) : okMsg);
+    if (msg) toast(msg, Math.max(3200, msg.length * 60));
+    await load(); return r;
+  }
   catch (e) { toast("Error: " + e.message, 6000); }
 }
 
@@ -252,7 +257,13 @@ function renderHeader() {
   const open = activeLeads();
   const assigned = open.filter(l => l.channel).length;
   const pending = S.leads.filter(l => !l.enriched_at).length;
-  $("#sub").textContent = `${open.length} open leads · ${assigned} in outreach` + (pending ? ` · ${pending} owners not looked up yet` : "");
+  const d = S.daily || {};
+  const msg = d.message || "starting the daily check";
+  const daily = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.last_run ? `Last check ${d.last_run}: ${d.summary}` : "Not checked yet today";
+  $("#sub").textContent = `${open.length} open leads · ${assigned} in outreach` + (pending ? ` · ${pending} owners not looked up yet` : "") + ` · ${daily}`;
+  const b = $("#refreshBtn"); b.disabled = !!d.running; b.textContent = d.running ? "Checking…" : "Check for new evictions";
+  if (d.running) watchDaily();
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === ui.tab));
   for (const t of ["leads", "outreach", "results", "settings"]) $("#tab-" + t).hidden = t !== ui.tab;
 }
@@ -284,9 +295,10 @@ function renderLeads() {
   const rows = filteredLeads();
   const opts = (pairs, cur) => pairs.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
   const vc = S.view_counts || {}, view = S.settings.lead_view || "eviction_notice";
-  const emptyMsg = view === "all" ? "No leads match. Try “Any status”, or press Refresh data."
-    : `No ${view === "eviction_notice" ? "eviction cases with an eviction notice" : "eviction cases"} yet. Paste court case links above (from the
-       <a href="https://www.jp.pima.gov/CaseSearch/" target="_blank" rel="noopener">Justice Court case search</a>), or import a saved case page.` +
+  const emptyMsg = view === "all" ? "No leads match. Try “Any status”, or press Check for new evictions."
+    : (S.daily || {}).running ? "Checking the court calendar for evictions. New cases show up here as their case pages are read."
+    : `No ${view === "eviction_notice" ? "eviction cases with an eviction notice" : "eviction cases"} yet. Press <b>Check for new evictions</b>
+       to search the court calendar now (it also runs by itself every morning), or paste case links above.` +
       (vc.unchecked ? ` ${vc.unchecked} eviction cases haven't been checked for a notice yet.` : "");
   $("#tab-leads").innerHTML = `
     <div class="card" style="margin-bottom:12px">
@@ -298,7 +310,7 @@ function renderLeads() {
         <input type="text" id="cLinks" style="flex:1;min-width:260px" placeholder="Paste Justice Court case links, e.g. https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=1234567">
         <button class="btn primary" id="cAdd">Add cases</button>
       </div>
-      <p class="hint" style="margin-bottom:0">Each case page is read once, with a short pause between cases. Lead Desk keeps cases whose documents include an eviction notice.</p>
+      <p class="hint" style="margin-bottom:0">Every morning Lead Desk searches the Justice Court calendar for eviction hearings, reads each new case page (with a short pause between cases) and keeps cases whose documents include an eviction notice. You can also paste case links here.</p>
     </div>
     <div class="row" style="margin-bottom:10px">
       <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes">Find landlord phones &amp; emails</button>
@@ -615,6 +627,8 @@ function renderSettings() {
       <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>
       <div class="row"><input id="sGoogle" type="password" placeholder="${st.google_key_set ? "Key saved. Paste a new one to replace it" : "Google Places API key"}" style="flex:1;min-width:260px" autocomplete="off">
       ${st.google_key_set ? `<span class="chip good">key saved</span> <button class="btn small" id="sGoogleClear">Remove key</button>` : `<span class="chip">no key</span>`}</div>
+      <div class="row" style="margin-top:8px"><label>Google lookups per month, at most <input id="sGoogleLimit" type="number" min="0" step="100" value="${st.google_monthly_limit ?? 1000}" style="width:90px"></label>
+      <span class="hint">${st.google_used_this_month || 0} used this month. Google gives 1,000 a month free, then charges about $35 per 1,000. 0 means no limit.</span></div>
     </div>
     <div class="card"><h2>Channels</h2>
       <p class="hint">A separate tracking phone number per channel (Google Voice, CallRail and similar) is the cleanest way to know which channel a caller came from. Cost is what one contact costs, including printing and postage.</p>
@@ -632,7 +646,7 @@ function renderSettings() {
     document.querySelectorAll("[data-cost]").forEach(i => costs[i.dataset.cost] = Number(i.value || 0));
     document.querySelectorAll("[data-track]").forEach(i => tracking[i.dataset.track] = i.value.trim());
     document.querySelectorAll("[data-tpl]").forEach(i => templates[i.dataset.tpl] = i.value);
-    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), google_places_api_key: $("#sGoogle").value.trim(), costs, tracking_numbers: tracking, templates }), "Settings saved");
+    act(() => api("/api/settings", { business_name: $("#sName").value.trim(), business_phone: $("#sPhone").value.trim(), base_address: $("#sBase").value.trim(), google_places_api_key: $("#sGoogle").value.trim(), google_monthly_limit: Number($("#sGoogleLimit").value || 0), costs, tracking_numbers: tracking, templates }), "Settings saved");
   };
 }
 
@@ -647,15 +661,21 @@ function render() {
 }
 document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; render(); });
 $("#refreshBtn").onclick = async () => {
-  const b = $("#refreshBtn"); b.disabled = true; b.textContent = "Refreshing…";
-  await act(() => api("/api/refresh", { days: 30 }), r => {
-    const t = r.tucson_code_cases || { new: 0, updated: 0 };
-    const c = r.cases || { checked: 0 };
-    return `Tucson cases: ${t.new} new, ${t.updated} updated · owners found for ${r.owners.found}` +
-      (c.checked ? ` · ${c.checked} court cases re-read` : "");
-  });
-  b.disabled = false; b.textContent = "Refresh data";
+  await act(() => api("/api/refresh", {}), r => r.message || "Checking the court calendar. This page updates as cases come in.");
 };
+// While the daily check runs, reload every few seconds so new cases appear.
+function watchDaily() {
+  if (watchDaily.t) return;
+  watchDaily.t = setInterval(async () => {
+    try {
+      S = await api("/api/state");
+      if (!S.daily.running) { clearInterval(watchDaily.t); watchDaily.t = null; toast("Done: " + (S.daily.summary || S.daily.message || ""), 8000); }
+      // Don't redraw under someone typing in a box.
+      const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+      if (typing && S.daily.running) renderHeader(); else render();
+    } catch (e) { /* keep trying */ }
+  }, 5000);
+}
 $("#importFile").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   const source = /\.csv$/i.test(f.name) ? "csv_import" : "pima_jp_calendar";

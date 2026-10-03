@@ -4,13 +4,11 @@ Every residential eviction in Pima County is filed in the Consolidated
 Justice Court, and each one gets an "Eviction Action" hearing on the court's
 public calendar: https://www.jp.pima.gov/NewCalendar2018/
 
-How to get the page for this importer:
-
-1. Open the calendar, choose Case Type ``CV`` and Event Type
-   ``Eviction Action`` and a date range (the last 7 days works well).
-2. Click *Load Calendar*, then save the results page (Ctrl+S, "Webpage, HTML
-   only") into ``data/inbox/``.
-3. Run ``leadgen fetch --source pima_jp_calendar --file data/inbox/*.html``.
+``CalendarClient`` runs that search live (Case Type "Eviction Actions", Event
+Type "Eviction Action", a date range) and reads every results page. Each row
+links to the case page, which ``pima_jp_case`` reads for the eviction notice.
+Saved results pages still work: ``leadgen fetch --source pima_jp_calendar
+--file data/inbox/*.html``.
 
 The parser does not depend on exact column positions: it looks for rows that
 carry a justice-court case number and pulls the parties, the hearing date
@@ -22,18 +20,18 @@ The calendar usually lists parties, not the property address. Those leads are
 stored with the landlord (plaintiff) name and no address; the landlord is the
 person who pays for the clean-out, so they are still worth a call. See
 docs/DATA_SOURCES.md for how to fill in addresses.
-
-A fully automatic fetch (no saving pages by hand) needs the live form, which
-was not reachable from the environment this was built in. It is the next step
-once the form's fields can be inspected.
 """
 
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
+import requests
 from bs4 import BeautifulSoup
+
+from ..config import USER_AGENT
 
 from ..models import Lead
 from .base import Source
@@ -46,7 +44,8 @@ CASE_PAGE_BASE = "https://www.jp.pima.gov/CaseSearch/"
 JP_SOURCE = "pima_jp_calendar"
 
 CASE_RE = re.compile(r"\b([A-Z]{2}\d{2}-\d{4,7}(?:-[A-Z]{1,3})?)\b")
-DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+DATE_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
+ROLE_RE = re.compile(r"^(.*?)\s*\((PLAINTIFF|PETITIONER|DEFENDANT|RESPONDENT)[^)]*\)\s*$", re.IGNORECASE)
 VS_RE = re.compile(r"^(.*?)\s+(?:vs\.?|v\.)\s+(.*)$", re.IGNORECASE)
 EVICTION_RE = re.compile(r"EVICT|DETAINER|\bFED\b|SPECIAL DETAINER", re.IGNORECASE)
 
@@ -87,8 +86,11 @@ def parse_calendar_html(html, assume_eviction=False):
     for table in soup.find_all("table"):
         header = {}
         for tr in table.find_all("tr"):
+            if tr.find_parent("table") is not table:
+                continue
             link = tr.find("a", href=re.compile(r"jcDisplayCase", re.IGNORECASE))
-            cells = [_clean(c.get_text(" ")) for c in tr.find_all(["th", "td"])]
+            tds = tr.find_all(["th", "td"])
+            cells = [_clean(c.get_text(" ")) for c in tds]
             if not cells:
                 continue
             row_text = " ".join(cells)
@@ -106,6 +108,17 @@ def parse_calendar_html(html, assume_eviction=False):
                 return cells[i] if i is not None and i < len(cells) else None
 
             plaintiff, defendant = col("plaintiff"), col("defendant")
+            if not (plaintiff and defendant) and header.get("parties") is not None \
+                    and header["parties"] < len(tds):
+                # Live calendar: one party per line, "NAME (Plaintiff)".
+                roles = {"P": [], "D": []}
+                for line in tds[header["parties"]].stripped_strings:
+                    m = ROLE_RE.match(_clean(line))
+                    if m:
+                        roles["P" if m.group(2).upper() in ("PLAINTIFF", "PETITIONER") else "D"].append(
+                            _clean(m.group(1)))
+                plaintiff = plaintiff or "; ".join(roles["P"]) or None
+                defendant = defendant or "; ".join(roles["D"]) or None
             if not (plaintiff and defendant):
                 for text in [col("parties")] + cells:
                     m = VS_RE.match(text or "")
@@ -135,17 +148,86 @@ def parse_calendar_html(html, assume_eviction=False):
     return list(leads.values())
 
 
+RESULT_URL = CALENDAR_URL + "SearchResult.aspx"
+GRID = "ctl00$MainContent$searchResultDView"
+
+
+def _form_fields(html):
+    soup = BeautifulSoup(html, "html.parser")
+    form = soup.find("form")
+    if form is None:
+        raise RuntimeError("calendar page has no form; the court site may have changed")
+    return {i["name"]: i.get("value") or "" for i in form.find_all("input")
+            if i.get("name") and i.get("type") not in ("submit", "button", "image")}
+
+
+def has_page_link(html, n):
+    """True when the results pager links to page ``n``. ASP.NET writes the
+    postback quotes as ``'`` or ``&#39;`` depending on the page."""
+    return re.search(rf"Page\${n}(?:'|&#39;|&#039;|&quot;)", html) is not None
+
+
+class CalendarClient:
+    """Runs the calendar search the way the court's page does: Case Type
+    "Eviction Actions", Event Type "Eviction Action", a date range, then every
+    results page (50 rows each)."""
+
+    def __init__(self, session=None, delay=1.5, max_pages=60):
+        self.session = session or requests.Session()
+        self.session.headers["User-Agent"] = USER_AGENT
+        self.delay = delay
+        self.max_pages = max_pages
+        self.pages = 0
+
+    def _post(self, data):
+        time.sleep(self.delay)
+        resp = self.session.post(RESULT_URL, data=data, timeout=90)
+        resp.raise_for_status()
+        return resp.text
+
+    def search(self, start, end):
+        """Yield the HTML of each results page for hearings from ``start`` to ``end`` (dates)."""
+        page = self.session.get(CALENDAR_URL, timeout=30)
+        page.raise_for_status()
+        data = _form_fields(page.text)
+        data.update({
+            "startDate": start.strftime("%m-%d-%Y"), "endDate": end.strftime("%m-%d-%Y"),
+            "Party": "All", "Attorney": "All", "ARSCode": "All", "drpDnJudge": "All",
+            "drpDnCaseType": "Eviction Actions",
+            "ctl00$MainContent$drpDnEventType": "Eviction Action",
+            "ctl00$MainContent$submitFilter": "submit",
+        })
+        html = self._post(data)
+        self.pages = 1
+        yield html
+        n = 2
+        while n <= self.max_pages and has_page_link(html, n):
+            data = _form_fields(html)
+            data.update({"__EVENTTARGET": GRID, "__EVENTARGUMENT": f"Page${n}"})
+            html = self._post(data)
+            self.pages = n
+            yield html
+            n += 1
+
+
 class PimaJpCalendar(Source):
     name = "pima_jp_calendar"
-    description = "Pima County Justice Court eviction hearings (saved calendar pages)"
+    description = "Pima County Justice Court eviction hearings (live calendar search, or saved pages with --file)"
 
-    def fetch(self, since, until, paths=None, assume_eviction=False, **options):
+    def fetch(self, since, until, paths=None, assume_eviction=False, client=None, **options):
+        """Saved pages when ``paths`` is given; otherwise the live calendar
+        from ``since`` to ``until`` (hearing dates, ISO strings)."""
         if not paths:
-            raise SystemExit(
-                "pima_jp_calendar reads saved calendar pages. Save the results of "
-                f"{CALENDAR_URL} (Case Type CV, Event Type 'Eviction Action') and pass "
-                "them with --file. See the module docstring for the steps."
-            )
+            client = client or CalendarClient()
+            start = datetime.strptime(since, "%Y-%m-%d").date()
+            end = datetime.strptime(until, "%Y-%m-%d").date()
+            seen = set()
+            for html in client.search(start, end):
+                for lead in parse_calendar_html(html, assume_eviction=True):
+                    if lead.source_id not in seen:
+                        seen.add(lead.source_id)
+                        yield lead
+            return
         for p in paths:
             html = Path(p).read_text(encoding="utf-8", errors="replace")
             for lead in parse_calendar_html(html, assume_eviction=assume_eviction):

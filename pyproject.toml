@@ -10,6 +10,8 @@ requires-python = ">=3.9"
 dependencies = [
     "requests>=2.28",
     "beautifulsoup4>=4.11",
+    # Postgres (Neon) for Lead Desk online; unused when the database is a SQLite file.
+    "psycopg[binary]>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +25,10 @@ packages = ["leadgen", "leadgen.sources"]
 
 [tool.setuptools.package-data]
 leadgen = ["static/*"]
+
+# Vercel runs Lead Desk online from this WSGI app (see docs/VERCEL.md).
+[tool.vercel]
+entrypoint = "leadgen.wsgi:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

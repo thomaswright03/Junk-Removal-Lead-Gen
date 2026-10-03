@@ -32,7 +32,7 @@ from urllib.robotparser import RobotFileParser
 
 import requests
 
-from . import config
+from . import config, db
 from .contacts import clean_email, clean_phone
 from .enrich import is_entity
 
@@ -44,6 +44,9 @@ OVERPASS_URLS = (
 )
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 GOOGLE_MAX_AGE_DAYS = 30
+# Google's free monthly allowance for Text Search Enterprise, the search tier
+# that returns phone numbers (1,000 a month as of October 2026).
+GOOGLE_MONTHLY_LIMIT = 1000
 TUCSON = (32.2226, -110.9747)
 
 _NAME_NOISE = {
@@ -212,14 +215,42 @@ def pick_osm(elements, business_name):
     )
 
 
+class GoogleBudget:
+    """Counts Google searches per calendar month in the settings table and
+    refuses more than ``limit`` (0 means no limit), so the lookup stays inside
+    the free allowance unless the limit is raised in Settings."""
+
+    KEY = "google_usage"
+
+    def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT):
+        self.conn = conn
+        self.limit = limit
+
+    def used(self, now=None):
+        month = (now or _now()).strftime("%Y-%m")
+        usage = db.get_settings(self.conn).get(self.KEY) or {}
+        return usage.get("count", 0) if usage.get("month") == month else 0
+
+    def take(self, now=None):
+        n = self.used(now)
+        if self.limit and n >= self.limit:
+            return False
+        db.put_settings(self.conn, {self.KEY: {"month": (now or _now()).strftime("%Y-%m"), "count": n + 1}})
+        return True
+
+
 class GooglePlacesProvider:
     name = "google"
 
-    def __init__(self, api_key, session=None):
+    def __init__(self, api_key, session=None, budget=None):
         self.key = api_key
         self.session = session or requests.Session()
+        self.budget = budget
 
     def _search(self, text, lat=None, lon=None):
+        if self.budget is not None and not self.budget.take():
+            raise ProviderUnavailable(
+                f"monthly limit of {self.budget.limit} Google lookups reached; raise it in Settings")
         lat, lon = (lat, lon) if lat is not None else TUCSON
         resp = self.session.post(
             PLACES_URL,
@@ -370,18 +401,24 @@ def _now():
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
-def providers_from(settings=None, google_key=None):
+def providers_from(settings=None, google_key=None, conn=None):
+    """OpenStreetMap, plus Google when a key is set. With ``conn``, Google
+    searches are counted against the monthly limit in settings."""
     import os
 
-    key = google_key or os.environ.get("GOOGLE_PLACES_API_KEY") or (settings or {}).get(
+    settings = settings or {}
+    key = google_key or os.environ.get("GOOGLE_PLACES_API_KEY") or settings.get(
         "google_places_api_key")
     out = [OsmProvider()]
     if key:
-        out.append(GooglePlacesProvider(key))
+        limit = settings.get("google_monthly_limit", GOOGLE_MONTHLY_LIMIT)
+        budget = GoogleBudget(conn, int(limit or 0)) if conn is not None else None
+        out.append(GooglePlacesProvider(key, budget=budget))
     return out
 
 
-def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print):
+def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=print,
+                  lead_types=None):
     """Look up phone/email/website for business owners and landlords.
 
     One lookup per company: every lead with the same owner/landlord name gets
@@ -390,17 +427,21 @@ def find_contacts(conn, providers, scanner=None, limit=None, refresh=False, log=
     """
     scanner = scanner if scanner is not None else WebsiteScanner()
     stale_google = (_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
+    due = "" if refresh else (
+        "AND (contact_checked_at IS NULL "
+        "OR (contact_source LIKE 'google%' AND contact_checked_at < ?))")
     rows = conn.execute(
-        """
+        f"""
         SELECT * FROM leads
         WHERE duplicate_of IS NULL AND status NOT IN ('stale', 'skip', 'lost', 'won')
           AND COALESCE(contact_source, '') != 'manual'
-          AND (? OR contact_checked_at IS NULL
-               OR (contact_source LIKE 'google%' AND contact_checked_at < ?))
-        ORDER BY event_date DESC
+          {due}
+        ORDER BY CASE WHEN lead_type = 'eviction' THEN 0 ELSE 1 END, event_date DESC
         """,
-        (int(bool(refresh)), stale_google),
+        () if refresh else (stale_google,),
     ).fetchall()
+    if lead_types:
+        rows = [r for r in rows if r["lead_type"] in lead_types]
     counts = {"checked": 0, "found": 0, "not_found": 0, "skipped_people": 0, "errors": 0}
     done = {}  # business name -> Contact or None
     for lead in rows:

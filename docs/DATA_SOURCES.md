@@ -91,9 +91,9 @@ in the Consolidated Justice Court at 240 N. Stone Ave, Tucson.
   filing date, case status, next court date, parties and the documents filed.
   An eviction case lists a `CIV – EVICTION NOTICE` document once the landlord
   files the notice served on the tenant; Lead Desk shows only those cases by
-  default. `leadgen/sources/pima_jp_case.py` reads pages only for links
-  someone pasted or saved (and re-reads open eviction cases at most every 12
-  hours), with a pause between requests. It does not step through ID numbers:
+  default. `leadgen/sources/pima_jp_case.py` reads pages only for cases
+  linked from the calendar search or pasted by hand, with a pause between
+  requests. It does not step through ID numbers:
   the IDs are sequential, but walking them is bulk collection of court
   records, which Arizona Supreme Court Rule 123 treats separately from
   looking up individual cases. Ask the court first if that is ever wanted.
@@ -116,13 +116,25 @@ an eviction lead without an address is still a name to call. Large plaintiffs
 (apartment complexes, property managers) show up over and over; a short list of
 them is worth building by hand.
 
-### Why the calendar is imported from saved pages for now
+### How the calendar is searched (built)
 
-This tool was built in a cloud environment whose network policy blocks
-`*.pima.gov` and `*.tucsonaz.gov`, so the live calendar form could not be
-inspected or tested. The parser reads a saved results page and does not rely
-on exact column positions. Making it fully automatic means submitting the form
-from a normal network and mapping its fields; that is the next step.
+`CalendarClient` in `leadgen/sources/pima_jp_calendar.py` fills in the same
+form a person uses: Case Type "Eviction Actions", Event Type "Eviction
+Action", a start and end date (`mm-dd-yyyy`), then reads every results page
+(50 rows each, ASP.NET `Page$N` postbacks) with a pause between pages. Each
+row carries the case number, the parties with their roles ("NAME
+(Plaintiff)"), the hearing date and a link to the case page. The daily run
+searches today through 30 days out once a day, which is about a dozen
+results pages, and reads only case pages it hasn't confirmed yet (capped at
+400 a day). That is the volume of someone checking the calendar each
+morning, not a bulk download; the case search form (which has a CAPTCHA) is
+not used.
+
+The calendar and case pages have no property address. For a company
+landlord, the daily run looks the name up in the assessor's parcel layer;
+when all of their residential parcels share one site address (a single
+apartment complex), that address is used for the lead. Otherwise the lead
+keeps the landlord's name and mailing address only.
 
 ## Other options reviewed
 

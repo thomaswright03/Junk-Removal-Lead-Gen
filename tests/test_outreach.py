@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from leadgen import db, outreach
 from leadgen.enrich import enrich, is_entity, owner_fields
@@ -25,7 +28,7 @@ class FakeParcels:
                 return r
         return None
 
-    def by_owner(self, name):
+    def by_owner(self, name, limit=200):
         return [r for r in self.records.values() if r["ADDRESSEE"].startswith(name.upper())]
 
 
@@ -71,14 +74,15 @@ def test_enrich_fills_owner_columns():
     conn = db.connect(":memory:")
     parcels = seed(conn)
     counts = enrich(conn, parcels)
-    assert counts == {"found": 3, "not_found": 1}
+    assert counts == {"found": 3, "not_found": 1, "landlord_property": 0}
     row = conn.execute("SELECT * FROM leads WHERE source_id = 'CE-1'").fetchone()
     assert row["owner_name"] == "FRC HOLDINGS OF TUCSON LLC"
     assert row["owner_zip"] == "85009-5517"
     # Second run skips leads already looked up.
-    assert enrich(conn, parcels) == {"found": 0, "not_found": 0}
+    assert enrich(conn, parcels) == {"found": 0, "not_found": 0, "landlord_property": 0}
 
 
+@pytest.mark.skipif(bool(os.environ.get("TEST_DATABASE_URL")), reason="migrates an old SQLite file")
 def test_migration_adds_columns_and_backfills_parcel(tmp_path):
     import sqlite3
 
