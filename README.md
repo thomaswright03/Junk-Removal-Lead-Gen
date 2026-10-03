@@ -283,6 +283,15 @@ fails when it finds no eviction hearings (there are always some), which
 means the court's page has changed. GitHub runs it every day
 (`.github/workflows/live-court.yml`); `--file` checks saved pages instead.
 
+When a website can't be reached (no internet, or the court, City or county
+site down), every command stops with a sentence naming the site, such as
+"Lead Desk stopped: the Pima County Justice Court website couldn't be
+reached. Check this computer's internet connection, or try again later if
+the site is down.", and a non-zero exit code. Commands that carry on past
+one failed case page or lookup do the same when every one failed. Add
+`--debug` (`leadgen --debug check-court`, or `LEADGEN_DEBUG=1`) for the full
+error.
+
 ```sh
 leadgen run
 ```

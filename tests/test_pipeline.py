@@ -239,3 +239,38 @@ def test_check_court_fails_when_the_calendar_has_no_evictions(tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         cli.main(["--db", db_path, "check-court", "--file", str(empty)])
     assert "no eviction hearings" in str(e.value.code)
+
+
+def test_cli_says_which_site_it_could_not_reach_without_a_traceback(tmp_path, monkeypatch, capsys):
+    import requests
+
+    from leadgen.sources import pima_jp_calendar
+
+    def offline(self, *a, **kw):
+        request = requests.Request("GET", "https://www.jp.pima.gov/NewCalendar2018/").prepare()
+        raise requests.exceptions.ProxyError("Unable to connect to proxy", request=request)
+
+    monkeypatch.setattr(pima_jp_calendar.PimaJpCalendar, "fetch", offline)
+    db_path = str(tmp_path / "l.db")
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--db", db_path, "check-court"])
+    message = str(stopped.value.code)
+    assert message.startswith("Lead Desk stopped: the Pima County Justice Court website couldn't be reached.")
+    assert "internet connection" in message and "Traceback" not in capsys.readouterr().err
+    # --debug shows the error itself.
+    with pytest.raises(requests.exceptions.ProxyError):
+        cli.main(["--db", db_path, "--debug", "check-court"])
+
+
+def test_cli_names_each_site():
+    import requests
+
+    def error(url, cls=requests.exceptions.ConnectionError):
+        return cls("down", request=requests.Request("GET", url).prepare())
+
+    assert cli.site_name(error("https://www.jp.pima.gov/CaseSearch/x")) == "the Pima County Justice Court website"
+    code = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PermitsCode/MapServer/103/query"
+    assert cli.site_name(error(code)) == "the City of Tucson code case service"
+    assert cli.site_name(error("https://geocoding.geo.census.gov/geocoder")) == "the US Census map service"
+    assert cli.site_name(error("https://example.org/x")) == "example.org"
+    assert "didn't answer in time" in cli.network_message(error("https://example.org", requests.exceptions.Timeout))

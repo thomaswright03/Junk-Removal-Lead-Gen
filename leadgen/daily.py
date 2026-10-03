@@ -70,7 +70,14 @@ def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
         summary[name] = fn()
     except Exception as e:  # one source being down shouldn't stop the rest
         summary[name] = {"error": f"{type(e).__name__}: {e}"}
-        log(f"{name} failed: {type(e).__name__}: {e}")
+        import requests
+
+        if isinstance(e, requests.RequestException):
+            from .cli import site_name
+
+            log(f"{STEP_LABELS.get(name, name)} failed: {site_name(e)} couldn't be reached ({type(e).__name__})")
+        else:
+            log(f"{STEP_LABELS.get(name, name)} failed: {type(e).__name__}: {e}")
 
 
 def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
