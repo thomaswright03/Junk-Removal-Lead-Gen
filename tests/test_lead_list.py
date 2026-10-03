@@ -253,6 +253,15 @@ def test_page_files_are_served_and_others_are_not(desk):
     assert get(app, "/static/index.html")[0] == 404
 
 
+def test_unknown_pages_are_a_page_and_unknown_api_paths_json(desk):
+    app, _ = desk
+    status, body, ctype = get(app, "/nope")
+    assert status == 404 and ctype.startswith("text/html")
+    assert b"Page not found" in body and b'href="/"' in body and b"/static/app.css" in body
+    status, body, ctype = get(app, "/api/nope")
+    assert status == 404 and ctype == "application/json" and body == {"error": "That page doesn't exist."}
+
+
 # ---- the rules as the page sees them ----------------------------------------
 
 

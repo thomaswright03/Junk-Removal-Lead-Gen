@@ -772,3 +772,13 @@ def test_header_says_when_a_failed_check_is_retried(server, page):
     page.goto(url)
     page.wait_for_selector("#sub >> text=Today's check failed (Justice Court calendar)")
     assert "trying again today at 11:58 PM" in page.inner_text("#sub")
+
+
+def test_a_mistyped_address_shows_a_page_with_a_way_back(server, page):
+    url, app, path = server
+    resp = page.goto(url + "nope")
+    assert resp.status == 404
+    assert page.inner_text("h2") == "Page not found"
+    assert page.evaluate("getComputedStyle(document.body).backgroundColor") != "rgba(0, 0, 0, 0)"
+    page.click("text=Back to the leads")
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
