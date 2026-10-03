@@ -7,7 +7,7 @@ https://geocoding.geo.census.gov/geocoder/
 
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -26,12 +26,12 @@ class GeocodeResult:
     zip: Optional[str] = None
 
 
-def in_pima_bbox(lat, lon):
+def in_pima_bbox(lat: float, lon: float) -> bool:
     west, south, east, north = config.PIMA_BBOX
     return west <= lon <= east and south <= lat <= north
 
 
-def parse_census_response(payload):
+def parse_census_response(payload: dict) -> Optional[GeocodeResult]:
     matches = (payload.get("result") or {}).get("addressMatches") or []
     if not matches:
         return None
@@ -54,14 +54,16 @@ def parse_census_response(payload):
 
 
 class CensusGeocoder:
-    def __init__(self, session=None, delay=0.5):
+    def __init__(self, session: Any = None, delay: float = 0.5) -> None:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
         self.delay = delay
 
-    def geocode(self, address, city=None, zip_code=None):
-        one_line = address
-        if city and city.upper() not in address.upper():
+    def geocode(
+        self, address: Optional[str], city: Optional[str] = None, zip_code: Optional[str] = None
+    ) -> Optional[GeocodeResult]:
+        one_line = address or ""
+        if city and city.upper() not in one_line.upper():
             one_line += f", {city}"
         if "AZ" not in one_line.upper() and "ARIZONA" not in one_line.upper():
             one_line += ", AZ"

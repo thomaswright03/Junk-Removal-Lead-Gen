@@ -2,7 +2,8 @@
 ids, counts and notes. Each check raises ValueError with a plain sentence
 the page shows as it is."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any, Optional
 
 from . import outreach
 from .leadlist import LEAD_VIEWS
@@ -33,7 +34,7 @@ _TEXT_SETTINGS = {
 }
 
 
-def _limit(value, label):
+def _limit(value: Any, label: str) -> Optional[int]:
     """A Google lookup limit: a whole number of 0 or more (0 = none allowed),
     or None / "unlimited" for no limit."""
     if value is None or (isinstance(value, str) and value.strip().lower() in ("unlimited", "none")):
@@ -49,10 +50,10 @@ def _limit(value, label):
     return int(n)
 
 
-def validate_settings(body):
+def validate_settings(body: dict) -> dict:
     """The settings in ``body`` that Lead Desk knows, checked. Raises
     ValueError naming the field when one has the wrong shape."""
-    values = {}
+    values: dict[str, Any] = {}
     for key, label in _TEXT_SETTINGS.items():
         if key in body:
             v = body[key]
@@ -115,7 +116,7 @@ class NotFound(LookupError):
     """Answered with 404 and the message."""
 
 
-def _lead_id(value, what="lead"):
+def _lead_id(value: Any, what: str = "lead") -> int:
     try:
         n = int(value)
     except (TypeError, ValueError):
@@ -131,7 +132,7 @@ MAX_JOB_CENTS = 100_000 * 100
 MAX_CONTACT_CENTS = 1_000 * 100
 
 
-def money_value(value, label, most=MAX_JOB_CENTS):
+def money_value(value: Any, label: str, most: int = MAX_JOB_CENTS) -> Optional[int]:
     """A dollar amount as whole cents: a non-negative number up to ``most``
     cents, or None for blank."""
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -151,14 +152,14 @@ def money_value(value, label, most=MAX_JOB_CENTS):
     return int(round(amount * 100))
 
 
-def _seconds_between(a, b):
+def _seconds_between(a: Any, b: Any) -> float:
     try:
         return abs((datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds())
     except (TypeError, ValueError):
         return float("inf")
 
 
-def _address_fields(address, unit):
+def _address_fields(address: str, unit: Optional[str]) -> dict:
     """Columns to set when Steve types a property address. The location,
     parcel and owner are looked up again from the new address."""
     if not address:
@@ -193,7 +194,7 @@ def _address_fields(address, unit):
 NOTES_LIMIT = 2000
 
 
-def notes_value(value, label="Notes"):
+def notes_value(value: Any, label: str = "Notes") -> Optional[str]:
     """Note text, or None. Too long or not text raises ValueError."""
     if value is None:
         return None
@@ -206,7 +207,7 @@ def notes_value(value, label="Notes"):
     return value
 
 
-def count_value(value, default=40):
+def count_value(value: Any, default: int = 40) -> int:
     """ "Leads this round" in Assign leads: a whole number of 1 or more."""
     if value is None or value == "":
         return default
@@ -221,7 +222,7 @@ def count_value(value, default=40):
     return int(n)
 
 
-def odd_dates(leads, today=None, days=365):
+def odd_dates(leads: list, today: Optional[date] = None, days: int = 365) -> int:
     """How many imported leads have a date more than a year before or after
     today: most likely a typo (1900, 2062) that would make the lead look
     years old, or not due for years."""

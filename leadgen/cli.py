@@ -12,19 +12,20 @@ import argparse
 import sys
 from datetime import timedelta
 from pathlib import Path
+from typing import Optional
 
 from . import config, db, export
 from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
-from .util import PAUSED_MESSAGE, az_today, decode_text, is_paused
+from .util import PAUSED_MESSAGE, Conn, az_today, decode_text, is_paused
 
 
-def _connect(args):
+def _connect(args: argparse.Namespace) -> Conn:
     return db.connect(args.db)
 
 
-def _exit_if_paused(conn):
+def _exit_if_paused(conn: Conn) -> None:
     """The kill switch: a command that would contact another website stops
     here, before any request, while Lead Desk is paused."""
     from . import outreach
@@ -33,7 +34,7 @@ def _exit_if_paused(conn):
         sys.exit(PAUSED_MESSAGE)
 
 
-def _uses_network(name, args):
+def _uses_network(name: str, args: argparse.Namespace) -> bool:
     """Whether fetching from this source contacts a website (saved files don't)."""
     if name == "csv_import":
         return False
@@ -42,7 +43,7 @@ def _uses_network(name, args):
     return True
 
 
-def cmd_fetch(args, conn=None):
+def cmd_fetch(args: argparse.Namespace, conn: Conn = None) -> dict:
     conn = conn or _connect(args)
     until = args.until or az_today().isoformat()
     since = args.since or (az_today() - timedelta(days=args.days)).isoformat()
@@ -65,7 +66,7 @@ def cmd_fetch(args, conn=None):
     return total
 
 
-def cmd_geocode(args, conn=None):
+def cmd_geocode(args: argparse.Namespace, conn: Conn = None) -> None:
     conn = conn or _connect(args)
     _exit_if_paused(conn)
     geocoder = CensusGeocoder()
@@ -88,14 +89,14 @@ def cmd_geocode(args, conn=None):
     print(f"geocoded {ok} in Pima County, {outside} outside, {failed} not found")
 
 
-def cmd_enrich(args, conn=None):
+def cmd_enrich(args: argparse.Namespace, conn: Conn = None) -> None:
     conn = conn or _connect(args)
     _exit_if_paused(conn)
     counts = enrich(conn, limit=getattr(args, "enrich_limit", None), refresh=getattr(args, "refresh", False))
     print(f"owners: {counts['found']} found, {counts['not_found']} not found")
 
 
-def cmd_contacts(args):
+def cmd_contacts(args: argparse.Namespace) -> None:
     from . import contacts, outreach
     from .lookup import find_contacts, providers_from
     from .web import App
@@ -126,7 +127,7 @@ def cmd_contacts(args):
         print(f"wrote owners missing a phone to {out}")
 
 
-def cmd_cases(args):
+def cmd_cases(args: argparse.Namespace) -> None:
     from .sources.pima_jp_case import add_cases, update_cases
 
     conn = _connect(args)
@@ -140,7 +141,7 @@ def cmd_cases(args):
     print(counts)
 
 
-def cmd_daily(args):
+def cmd_daily(args: argparse.Namespace) -> None:
     from .daily import main_log, run_daily
 
     conn = _connect(args)
@@ -152,7 +153,7 @@ def cmd_daily(args):
     main_log(summary, public=args.counts_only)
 
 
-def cmd_schedule(args):
+def cmd_schedule(args: argparse.Namespace) -> None:
     from . import schedule
 
     if args.action == "install":
@@ -163,20 +164,20 @@ def cmd_schedule(args):
         print(schedule.status())
 
 
-def cmd_serve(args):
+def cmd_serve(args: argparse.Namespace) -> None:
     from .web import serve
 
     serve(args.db, host=args.host, port=args.port, stale_days=args.stale_days, open_browser=not args.no_browser)
 
 
-def cmd_age(args, conn=None):
+def cmd_age(args: argparse.Namespace, conn: Conn = None) -> None:
     conn = conn or _connect(args)
     n = db.mark_stale(conn, args.stale_days)
     conn.commit()
     print(f"marked {n} leads stale (older than {args.stale_days} days)")
 
 
-def _rows_for_export(args, conn):
+def _rows_for_export(args: argparse.Namespace, conn: Conn) -> list:
     since = None
     if not args.include_stale:
         since = (az_today() - timedelta(days=args.stale_days)).isoformat()
@@ -193,12 +194,12 @@ def _rows_for_export(args, conn):
     )
 
 
-def _ranked_rows(args, conn):
+def _ranked_rows(args: argparse.Namespace, conn: Conn) -> list[dict]:
     """The rows to export or list, in Lead Desk's order with its priority."""
     return export.ranked(conn, _rows_for_export(args, conn), db.get_settings(conn))
 
 
-def cmd_export(args, conn=None):
+def cmd_export(args: argparse.Namespace, conn: Conn = None) -> Path:
     conn = conn or _connect(args)
     rows = _ranked_rows(args, conn)
     out = Path(args.out or f"exports/leads-{az_today().isoformat()}.{args.format}")
@@ -211,7 +212,7 @@ def cmd_export(args, conn=None):
     return out
 
 
-def cmd_run(args):
+def cmd_run(args: argparse.Namespace) -> None:
     conn = _connect(args)
     cmd_fetch(args, conn)
     cmd_enrich(args, conn)
@@ -223,7 +224,7 @@ def cmd_run(args):
         cmd_export(args, conn)
 
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
     conn = _connect(args)
     if not db.set_status(conn, args.id, args.status, args.notes):
         sys.exit(f"no lead with id {args.id}")
@@ -231,7 +232,7 @@ def cmd_status(args):
     print(f"lead {args.id} -> {args.status}")
 
 
-def cmd_list(args):
+def cmd_list(args: argparse.Namespace) -> None:
     conn = _connect(args)
     rows = _ranked_rows(args, conn)
     for r in rows[: args.limit]:
@@ -244,13 +245,13 @@ def cmd_list(args):
     print(f"{len(rows)} leads")
 
 
-def cmd_sources(args):
+def cmd_sources(args: argparse.Namespace) -> None:
     for name, cls in SOURCES.items():
         auto = " (automatic)" if name in AUTOMATIC else ""
         print(f"{name}{auto}: {cls.description}")
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="leadgen", description=__doc__.splitlines()[0])
     p.add_argument(
         "--db",
@@ -265,7 +266,7 @@ def build_parser():
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    def fetch_args(sp):
+    def fetch_args(sp: argparse.ArgumentParser) -> None:
         sp.add_argument(
             "--source",
             action="append",
@@ -286,7 +287,7 @@ def build_parser():
         )
         sp.add_argument("--lead-type", help="csv_import: lead type for rows without one")
 
-    def export_args(sp):
+    def export_args(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--type", action="append", help="only this lead type; repeatable")
         sp.add_argument("--status", action="append", choices=db.STATUSES)
         sp.add_argument("--include-stale", action="store_true")
@@ -375,7 +376,7 @@ def build_parser():
     return p
 
 
-def main(argv=None):
+def main(argv: Optional[list] = None) -> None:
     args = build_parser().parse_args(argv)
     args.func(args)
 

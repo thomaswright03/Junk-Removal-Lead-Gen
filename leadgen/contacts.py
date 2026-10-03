@@ -9,9 +9,10 @@ that file to the service, and import the file it sends back.
 import csv
 import io
 import re
+from typing import Any, Optional
 
 from .normalize import normalize_address
-from .util import pick
+from .util import Conn, LeadRow, pick
 
 _PHONE_KEYS = (
     "phone",
@@ -34,7 +35,7 @@ _NAME_KEYS = ("owner_name", "owner name", "owner", "name", "full name")
 _ID_KEYS = ("lead_id", "lead id")
 
 
-def clean_phone(value):
+def clean_phone(value: Any) -> Optional[str]:
     digits = re.sub(r"\D", "", value or "")
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
@@ -43,7 +44,7 @@ def clean_phone(value):
     return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
 
 
-def clean_email(value):
+def clean_email(value: Any) -> Optional[str]:
     value = (value or "").strip()
     return value if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value) else None
 
@@ -51,7 +52,7 @@ def clean_email(value):
 CLOSED_STATUSES = ("stale", "skip", "lost", "won")
 
 
-def import_contacts(conn, text):
+def import_contacts(conn: Conn, text: str) -> dict:
     """Fill owner_phone / owner_email from a CSV (a skip-tracing service's
     file, or Steve's own list).
 
@@ -69,7 +70,10 @@ def import_contacts(conn, text):
         "owner_email, contact_source, status FROM leads"
     ).fetchall()
     by_id = {str(l["id"]): dict(l) for l in leads}
-    by_parcel, by_addr, by_name, by_owner = {}, {}, {}, {}
+    by_parcel: dict[str, list] = {}
+    by_addr: dict[str, list] = {}
+    by_name: dict[str, list] = {}
+    by_owner: dict[Any, list] = {}
     for l in leads:
         if l["parcel"]:
             by_parcel.setdefault(l["parcel"].upper(), []).append(l["id"])
@@ -88,7 +92,7 @@ def import_contacts(conn, text):
         ids = (
             ([by_id[lead_id]["id"]] if lead_id in by_id else None)
             or by_parcel.get((pick(row, _PARCEL_KEYS) or "").upper())
-            or by_addr.get(normalize_address(pick(row, _ADDRESS_KEYS)))
+            or by_addr.get(normalize_address(pick(row, _ADDRESS_KEYS)) or "")
             or by_name.get((pick(row, _NAME_KEYS) or "").upper().strip())
         )
         if not ids:
@@ -134,11 +138,11 @@ def import_contacts(conn, text):
     return counts
 
 
-def _owner_key(lead):
+def _owner_key(lead: LeadRow) -> tuple[str, str]:
     return ((lead["owner_name"] or "").upper().strip(), (lead["owner_address"] or "").upper().strip())
 
 
-def skiptrace_csv(leads):
+def skiptrace_csv(leads: list) -> str:
     """CSV of owners still missing a phone, in the column layout most
     skip-tracing services accept."""
     buf = io.StringIO()

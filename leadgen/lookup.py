@@ -27,9 +27,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
-from typing import Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -37,7 +37,7 @@ import requests
 
 from . import config, db
 from .contacts import clean_email, clean_phone
-from .util import az_now, is_multifamily, is_paused, utc_now
+from .util import Conn, LeadRow, Log, StopCheck, az_now, is_multifamily, is_paused, utc_now
 
 _log = logging.getLogger(__name__)
 
@@ -90,16 +90,16 @@ class Contact:
     matched_name: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
-    def empty(self):
+    def empty(self) -> bool:
         return not (self.phone or self.email or self.website)
 
 
-def name_tokens(name):
+def name_tokens(name: Optional[str]) -> set[str]:
     words = re.findall(r"[A-Z0-9]+", (name or "").upper())
     return {w for w in words if w not in _NAME_NOISE and len(w) > 1}
 
 
-def names_match(a, b):
+def names_match(a: Optional[str], b: Optional[str]) -> bool:
     """True when two business names plausibly refer to the same company."""
     ta, tb = name_tokens(a), name_tokens(b)
     if not ta or not tb:
@@ -153,7 +153,7 @@ _BUSINESS_WORDS = {
 _SPLIT_RE = re.compile(r"\s*(?:\bATTN\b:?|\bC/O\b|%)\s*", re.I)
 
 
-def split_owner(name):
+def split_owner(name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """'SUMMIT RIDGE AZ LLC ATTN: DASMEN RESIDENTIAL' ->
     ('SUMMIT RIDGE AZ LLC', 'DASMEN RESIDENTIAL')."""
     parts = _SPLIT_RE.split((name or "").strip(), maxsplit=1)
@@ -162,16 +162,16 @@ def split_owner(name):
     return owner, attn or None
 
 
-def is_business(name):
+def is_business(name: Optional[str]) -> bool:
     """A company, not a person or a family/living trust."""
     words = set(re.findall(r"[A-Z]+", (name or "").upper()))
     return bool(words & _BUSINESS_WORDS)
 
 
-def lookup_targets(lead):
+def lookup_targets(lead: LeadRow) -> tuple[list[str], bool]:
     """Business names to search for this lead, best first, and whether to
     look for a business at the property itself (apartment leasing office)."""
-    names = []
+    names: list[str] = []
     for raw in (lead["plaintiff"], lead["owner_name"]):
         owner, attn = split_owner(raw)
         # "ATTN:" usually names the management company: the one to call.
@@ -193,7 +193,7 @@ class LimitReached(ProviderUnavailable):
     """The Google daily or monthly lookup limit is used up: not a failure."""
 
 
-def _is_key_problem(prov, error):
+def _is_key_problem(prov: Any, error: BaseException) -> bool:
     """True when Google refused the request itself: a missing, wrong or
     restricted API key (or billing off), which Steve fixes in Settings."""
     response = getattr(error, "response", None)
@@ -207,16 +207,16 @@ class OsmProvider:
     # waiting on each company. Worst case is servers x max_failures x timeout.
     max_failures = 2
 
-    def __init__(self, session=None, radius_m=80, delay=1.0, timeout=15):
+    def __init__(self, session: Any = None, radius_m: int = 80, delay: float = 1.0, timeout: float = 15) -> None:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
         self.radius = radius_m
         self.delay = delay
         self.timeout = timeout
-        self.strikes = {}
+        self.strikes: dict[str, int] = {}
         self.urls = list(OVERPASS_URLS)
 
-    def find(self, lead, business_name):
+    def find(self, lead: LeadRow, business_name: Optional[str]) -> Optional[Contact]:
         if lead["lat"] is None or lead["lon"] is None:
             return None
         if not self.urls:
@@ -232,7 +232,7 @@ class OsmProvider:
         );
         out tags center 20;
         """
-        last_error = None
+        last_error: Exception = ProviderUnavailable("no Overpass server to ask")
         for url in list(self.urls):
             try:
                 resp = self.session.post(
@@ -254,8 +254,9 @@ class OsmProvider:
         raise last_error
 
 
-def pick_osm(elements, business_name):
-    best, best_rank = None, (0,)
+def pick_osm(elements: list[dict], business_name: Optional[str]) -> Optional[Contact]:
+    best: Optional[dict] = None
+    best_rank: tuple[int, ...] = (0,)
     for el in elements:
         t = el.get("tags") or {}
         name = t.get("name") or t.get("operator") or ""
@@ -299,26 +300,28 @@ class GoogleBudget:
 
     LEGACY_KEY = "google_usage"  # where older versions kept the counts, in settings
 
-    def __init__(self, conn, limit=GOOGLE_MONTHLY_LIMIT, daily=GOOGLE_DAILY_LIMIT):
+    def __init__(
+        self, conn: Conn, limit: Optional[int] = GOOGLE_MONTHLY_LIMIT, daily: Optional[int] = GOOGLE_DAILY_LIMIT
+    ) -> None:
         self.conn = conn
         self.limit = limit
         self.daily = daily
 
-    def _keys(self, now=None):
+    def _keys(self, now: Optional[datetime] = None) -> tuple[str, str, datetime]:
         local = az_now(now)
         return f"google:month:{local:%Y-%m}", f"google:day:{local:%Y-%m-%d}", local
 
-    def _count(self, key):
+    def _count(self, key: str) -> Optional[int]:
         row = self.conn.execute("SELECT n FROM counters WHERE key = ?", (key,)).fetchone()
         return row["n"] if row else None
 
-    def _legacy(self, local):
+    def _legacy(self, local: datetime) -> tuple[int, int]:
         usage = db.get_settings(self.conn).get(self.LEGACY_KEY) or {}
         month = usage.get("count", 0) if usage.get("month") == f"{local:%Y-%m}" else 0
         day = usage.get("day_count", 0) if usage.get("day") == f"{local:%Y-%m-%d}" else 0
         return month, day
 
-    def _usage(self, now=None):
+    def _usage(self, now: Optional[datetime] = None) -> tuple[int, int]:
         month_key, day_key, local = self._keys(now)
         month, day = self._count(month_key), self._count(day_key)
         if month is None or day is None:
@@ -327,13 +330,13 @@ class GoogleBudget:
             day = old_day if day is None else day
         return month, day
 
-    def used(self, now=None):
+    def used(self, now: Optional[datetime] = None) -> int:
         return self._usage(now)[0]
 
-    def used_today(self, now=None):
+    def used_today(self, now: Optional[datetime] = None) -> int:
         return self._usage(now)[1]
 
-    def blocked(self, now=None):
+    def blocked(self, now: Optional[datetime] = None) -> Optional[str]:
         """Why no more searches are allowed right now, or None."""
         count, today = self._usage(now)
         if self.daily == 0 or self.limit == 0:
@@ -344,7 +347,7 @@ class GoogleBudget:
             return f"monthly limit of {self.limit} Google lookups reached; raise it in Settings"
         return None
 
-    def _reserve(self, key, limit):
+    def _reserve(self, key: str, limit: Optional[int]) -> bool:
         if limit is None:
             cur = self.conn.execute("UPDATE counters SET n = n + 1 WHERE key = ?", (key,))
         else:
@@ -352,7 +355,7 @@ class GoogleBudget:
         self.conn.commit()
         return cur.rowcount == 1
 
-    def take(self, now=None):
+    def take(self, now: Optional[datetime] = None) -> bool:
         """Reserve one search. False when a limit is reached."""
         month_key, day_key, local = self._keys(now)
         if self._count(month_key) is None or self._count(day_key) is None:
@@ -378,12 +381,12 @@ class GooglePlacesProvider:
     # first. The free providers still try every lead.
     only_eviction_notices = True
 
-    def __init__(self, api_key, session=None, budget=None):
+    def __init__(self, api_key: str, session: Any = None, budget: Optional[GoogleBudget] = None) -> None:
         self.key = api_key
         self.session = session or requests.Session()
         self.budget = budget
 
-    def _search(self, text, lat=None, lon=None):
+    def _search(self, text: str, lat: Any = None, lon: Any = None) -> list[dict]:
         if self.budget is not None and not self.budget.take():
             raise LimitReached(self.budget.blocked() or "Google lookup limit reached")
         lat, lon = (lat, lon) if lat is not None else TUCSON
@@ -404,7 +407,7 @@ class GooglePlacesProvider:
         resp.raise_for_status()
         return resp.json().get("places") or []
 
-    def find(self, lead, business_name):
+    def find(self, lead: LeadRow, business_name: Optional[str]) -> Optional[Contact]:
         if business_name:
             for p in self._search(f"{business_name} Tucson AZ", lead["lat"], lead["lon"]):
                 name = (p.get("displayName") or {}).get("text", "")
@@ -418,7 +421,7 @@ class GooglePlacesProvider:
         return None
 
 
-def _places_contact(p):
+def _places_contact(p: dict) -> Contact:
     return Contact(
         phone=clean_phone(p.get("nationalPhoneNumber")),
         website=p.get("websiteUri"),
@@ -436,11 +439,14 @@ _SKIP_EMAIL = re.compile(r"(example\.|sentry|wixpress|\.png|\.jpg|noreply|no-rep
 
 
 class _LinkParser(HTMLParser):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.links, self.tels, self.mails, self.text = [], [], [], []
+        self.links: list[str] = []
+        self.tels: list[str] = []
+        self.mails: list[str] = []
+        self.text: list[str] = []
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         if tag != "a":
             return
         href = dict(attrs).get("href") or ""
@@ -451,11 +457,11 @@ class _LinkParser(HTMLParser):
         else:
             self.links.append(href)
 
-    def handle_data(self, data):
+    def handle_data(self, data: str) -> None:
         self.text.append(data)
 
 
-def scan_html(html, base_url):
+def scan_html(html: str, base_url: str) -> tuple[list[str], list[str], list[str]]:
     """Return (phones, emails, contact_page_urls) found in one page."""
     p = _LinkParser()
     p.feed(html)
@@ -463,23 +469,23 @@ def scan_html(html, base_url):
     phones = [clean_phone(t) for t in p.tels] + [clean_phone("".join(m.groups())) for m in _PHONE_RE.finditer(text)]
     emails = [clean_email(m) for m in p.mails] + [clean_email(m) for m in _EMAIL_RE.findall(text)]
     host = urlparse(base_url).netloc
-    contact_pages = []
+    contact_pages: list[str] = []
     for href in p.links:
         url = urljoin(base_url, href)
         if urlparse(url).netloc == host and re.search(r"contact|about|office|leasing", url, re.I):
             if url not in contact_pages:
                 contact_pages.append(url)
-    phones = [x for x in dict.fromkeys(phones) if x]
-    emails = [x for x in dict.fromkeys(emails) if x and not _SKIP_EMAIL.search(x)]
-    return phones, emails, contact_pages[:3]
+    found_phones = [x for x in dict.fromkeys(phones) if x]
+    found_emails = [x for x in dict.fromkeys(emails) if x and not _SKIP_EMAIL.search(x)]
+    return found_phones, found_emails, contact_pages[:3]
 
 
 class WebsiteScanner:
-    def __init__(self, session=None):
+    def __init__(self, session: Any = None) -> None:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
 
-    def _allowed(self, url):
+    def _allowed(self, url: str) -> bool:
         root = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
         rp = RobotFileParser()
         try:
@@ -491,15 +497,17 @@ class WebsiteScanner:
         except requests.RequestException:
             return True
 
-    def scan(self, url):
+    def scan(self, url: Optional[str]) -> Optional[Contact]:
         if not url:
             return None
         if not urlparse(url).scheme:
             url = "https://" + url
         if not self._allowed(url):
             return None
-        phones, emails, queue = [], [], [url]
-        seen = set()
+        phones: list[str] = []
+        emails: list[str] = []
+        queue = [url]
+        seen: set[str] = set()
         while queue and len(seen) < 4:
             page = queue.pop(0)
             if page in seen:
@@ -527,16 +535,16 @@ class WebsiteScanner:
 # ------------------------------------------------------------------ runner --
 
 
-def _reach(c):
+def _reach(c: Contact) -> tuple[bool, bool, bool]:
     return (bool(c.phone), bool(c.email), bool(c.website))
 
 
-def google_key_in_use(settings):
+def google_key_in_use(settings: Optional[dict]) -> str:
     """The Google key lookups would use: the environment's, else Settings'."""
     return os.environ.get("GOOGLE_PLACES_API_KEY") or (settings or {}).get("google_places_api_key") or ""
 
 
-def providers_from(settings=None, google_key=None, conn=None):
+def providers_from(settings: Optional[dict] = None, google_key: Optional[str] = None, conn: Conn = None) -> list:
     """OpenStreetMap, plus Google when a key is set and Google is turned on in
     Settings. None at all while Lead Desk is paused. With ``conn``, Google
     searches are counted against the daily and monthly limits in settings."""
@@ -544,7 +552,7 @@ def providers_from(settings=None, google_key=None, conn=None):
     if is_paused(settings):
         return []
     key = google_key or google_key_in_use(settings)
-    out = [OsmProvider()]
+    out: list[Any] = [OsmProvider()]
     if key and settings.get("google_enabled", True) is not False:
         limit = settings.get("google_monthly_limit", GOOGLE_MONTHLY_LIMIT)
         daily = settings.get("google_daily_limit", GOOGLE_DAILY_LIMIT)
@@ -557,21 +565,21 @@ def providers_from(settings=None, google_key=None, conn=None):
     return out
 
 
-def _has_notice(lead):
+def _has_notice(lead: LeadRow) -> bool:
     return lead["lead_type"] == "eviction" and bool(lead["eviction_notice"])
 
 
 def find_contacts(
-    conn,
-    providers,
-    scanner=None,
-    limit=None,
-    refresh=False,
-    log=print,
-    lead_types=None,
-    progress=None,
-    should_stop=None,
-):
+    conn: Conn,
+    providers: list,
+    scanner: Any = None,
+    limit: Optional[int] = None,
+    refresh: bool = False,
+    log: Log = print,
+    lead_types: Optional[tuple[str, ...]] = None,
+    progress: Optional[Callable[[int, int], Any]] = None,
+    should_stop: StopCheck = None,
+) -> dict:
     """Look up phone/email/website for business owners and landlords.
 
     One lookup per company: every lead with the same owner/landlord name gets
@@ -600,10 +608,10 @@ def find_contacts(
     ).fetchall()
     if lead_types:
         rows = [r for r in rows if r["lead_type"] in lead_types]
-    counts = {"checked": 0, "found": 0, "not_found": 0, "skipped_people": 0, "errors": 0}
+    counts: dict[str, Any] = {"checked": 0, "found": 0, "not_found": 0, "skipped_people": 0, "errors": 0}
     if not providers:  # paused, or nothing to look up with
         return counts
-    done = {}  # business name -> Contact or None
+    done: dict[str, tuple[Optional[Contact], bool]] = {}  # business name -> (Contact or None, failed)
     for i, lead in enumerate(rows):
         if progress and i:
             progress(i, len(rows))
@@ -622,7 +630,8 @@ def find_contacts(
         else:
             counts["checked"] += 1
             contact, failed = None, False
-            for name in names or [None]:
+            candidates: list[Optional[str]] = [*names] or [None]
+            for name in candidates:
                 for prov in providers:
                     if getattr(prov, "only_eviction_notices", False) and not _has_notice(lead):
                         continue

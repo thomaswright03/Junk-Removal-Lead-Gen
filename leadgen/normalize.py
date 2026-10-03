@@ -6,6 +6,7 @@ whitespace, and abbreviate common street words the way USPS does, so that
 """
 
 import re
+from typing import Optional
 
 _WORDS = {
     "NORTH": "N",
@@ -43,7 +44,7 @@ _UNIT_RE = re.compile(r"\s(?:APT|UNIT|STE|SPC|LOT|#)\s*([A-Z0-9-]+)\b")
 _ZIP_RE = re.compile(r"\b(85\d{3})(?:-\d{4})?\b")
 
 
-def normalize_address(address):
+def normalize_address(address: Optional[str]) -> Optional[str]:
     """Return a comparison key for an address, or None if it is empty."""
     if not address:
         return None
@@ -64,7 +65,7 @@ def normalize_address(address):
     return s or None
 
 
-def extract_zip(address):
+def extract_zip(address: Optional[str]) -> Optional[str]:
     if not address:
         return None
     m = _ZIP_RE.search(address)

@@ -157,7 +157,7 @@ def landlord_property(client: Any, plaintiff: Optional[str]) -> tuple[Optional[d
         for r in rows
         if is_residential(r.get("USE_DESC") or r.get("PPT_DESC")) and (r.get("SITE_ADDRESS") or "").strip()
     ]
-    sites = {normalize_address(r["SITE_ADDRESS"]).split(" UNIT ")[0] for r in homes}
+    sites = {(normalize_address(r["SITE_ADDRESS"]) or "").split(" UNIT ")[0] for r in homes}
     return rows[0], (homes[0] if len(sites) == 1 else None)
 
 

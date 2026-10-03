@@ -2,9 +2,12 @@
 columns the page gets for each, and the server-side filtering, sorting and
 paging that keep every response small however many leads there are."""
 
+from datetime import date
+from typing import Any, Optional
+
 from . import db, outreach
 from .tucson_codes import CODE_LABELS, code_of
-from .util import az_today
+from .util import Conn, LeadRow, az_today
 
 LEAD_FIELDS = (
     "id",
@@ -101,7 +104,7 @@ SEARCHED = (
 )
 
 
-def status_condition(status):
+def status_condition(status: str) -> tuple[str, list]:
     """SQL condition and arguments for the Status filter (see ``_keep``)."""
     if status == "open":
         return f"status NOT IN ({', '.join(repr(s) for s in CLOSED)})", []
@@ -112,7 +115,7 @@ def status_condition(status):
     return "1=1", []
 
 
-def view_counts(conn, status="open"):
+def view_counts(conn: Conn, status: str = "open") -> dict[str, int]:
     """How many leads each choice of "Show" has, with the Status filter the
     list uses, so the number next to a view is what the list shows."""
     cond, args = status_condition(status)
@@ -130,13 +133,13 @@ def view_counts(conn, status="open"):
     return {name: int(r["v_" + name] or 0) for name in (*LEAD_VIEWS, "unchecked", "code_cases")}
 
 
-def in_view(settings):
+def in_view(settings: Optional[dict]) -> str:
     """SQL condition for the leads the chosen view shows."""
-    view = LEAD_VIEWS.get((settings or {}).get("lead_view")) or LEAD_VIEWS[DEFAULT_VIEW]
+    view = LEAD_VIEWS.get(str((settings or {}).get("lead_view"))) or LEAD_VIEWS[DEFAULT_VIEW]
     return f"duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL) AND {view}"
 
 
-def lead_dict(r, settings, owner_counts, today=None):
+def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[date] = None) -> dict:
     """One lead as the page gets it: its columns plus priority, what its date
     is, the latest court event, and which outreach methods can work it."""
     r = dict(zip(r.keys(), r))  # one plain dict: much faster to read than a database row
@@ -146,7 +149,7 @@ def lead_dict(r, settings, owner_counts, today=None):
     d["job_revenue"] = db.dollars(r.get("revenue_cents"))
     code = code_of(r["description"]) if r["lead_type"] == "code_violation" else None
     d["code"] = code
-    d["code_label"] = CODE_LABELS.get(code) or (
+    d["code_label"] = CODE_LABELS.get(code or "") or (
         "Vacant / nuisance building" if "VACANT/NUISANCE" in (r["description"] or "").upper() else None
     )
     d["score_parts"] = outreach.score_parts(r, owner_counts, today=today)
@@ -160,10 +163,10 @@ def lead_dict(r, settings, owner_counts, today=None):
     return d
 
 
-def lead_dicts(conn, settings, today=None):
+def lead_dicts(conn: Conn, settings: dict, today: Optional[date] = None) -> list[dict]:
     """Every lead in the view (without its contact history)."""
     rows = conn.execute(f"SELECT * FROM leads WHERE {in_view(settings)} ORDER BY event_date DESC, id DESC").fetchall()
-    owner_counts = {}
+    owner_counts: dict[str, int] = {}
     for r in rows:
         if r["owner_name"]:
             owner_counts[r["owner_name"]] = owner_counts.get(r["owner_name"], 0) + 1
@@ -171,9 +174,9 @@ def lead_dicts(conn, settings, today=None):
     return [lead_dict(r, settings, owner_counts, today) for r in rows]
 
 
-def attach_touches(conn, leads, everything=False):
+def attach_touches(conn: Conn, leads: list[dict], everything: bool = False) -> list[dict]:
     """Add each lead's logged contacts (``touches``), oldest first."""
-    by_lead = {}
+    by_lead: dict[Any, list] = {}
     if everything:
         rows = conn.execute("SELECT * FROM touches ORDER BY id").fetchall()
     else:
@@ -194,7 +197,7 @@ def attach_touches(conn, leads, everything=False):
     return leads
 
 
-def one_lead(conn, settings, lead_id):
+def one_lead(conn: Conn, settings: dict, lead_id: int) -> Optional[dict]:
     """One lead with its contact history, whether or not the view shows it."""
     r = conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
     if not r:
@@ -208,7 +211,7 @@ def one_lead(conn, settings, lead_id):
     return attach_touches(conn, [lead_dict(r, settings, owner_counts)])[0]
 
 
-def _keep(l, p, touched):
+def _keep(l: dict, p: dict, touched: set) -> bool:
     status = p.get("status", "open")
     if status == "open" and l["status"] in CLOSED:
         return False
@@ -242,7 +245,7 @@ def _keep(l, p, touched):
     return True
 
 
-def sort_leads(leads, key="score"):
+def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
     """Highest priority first; or newest first by the latest real event
     (filing, judgment or writ; cases not read yet, which only have a hearing
     date, come last); or closest first."""
@@ -257,7 +260,7 @@ def sort_leads(leads, key="score"):
     return leads
 
 
-def _int(value, default, low, high):
+def _int(value: Any, default: int, low: int, high: int) -> int:
     try:
         n = int(value)
     except (TypeError, ValueError):
@@ -265,7 +268,7 @@ def _int(value, default, low, high):
     return max(low, min(high, n))
 
 
-def page(conn, settings, params):
+def page(conn: Conn, settings: dict, params: dict) -> dict:
     """One page of the filtered, sorted lead list: ``{"leads", "total",
     "offset", "limit"}``. ``params`` are the page's filters (status, type,
     channel, q, sort, untouched) and ``offset`` / ``limit``."""
@@ -282,7 +285,7 @@ def page(conn, settings, params):
     return {"leads": shown, "total": len(rows), "offset": offset, "limit": limit}
 
 
-def counts(conn, settings):
+def counts(conn: Conn, settings: dict) -> dict:
     """The numbers the header and the Outreach tab show, counted in the database."""
     inactive = ", ".join(f"'{s}'" for s in INACTIVE)
     closed = ", ".join(f"'{s}'" for s in CLOSED)
@@ -300,7 +303,9 @@ def counts(conn, settings):
         "THEN 1 ELSE 0 END) AS evictions_with_address "
         f"FROM leads WHERE {in_view(settings)}"
     ).fetchone()
-    out = {k: int(r[k] or 0) for k in ("total", "active", "assigned", "owners_pending", "with_phone", "with_email")}
+    out: dict[str, Any] = {
+        k: int(r[k] or 0) for k in ("total", "active", "assigned", "owners_pending", "with_phone", "with_email")
+    }
     out["unassigned"] = int(r["unassigned"] or 0)
     # Open eviction leads, and how many of them have a property address that
     # is not a guess from the landlord's parcels (typed, confirmed, imported).

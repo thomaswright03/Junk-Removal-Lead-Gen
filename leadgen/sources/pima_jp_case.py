@@ -17,8 +17,9 @@ pasted, with a pause between requests. This module never walks ID ranges.
 
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Callable, Iterator, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -26,7 +27,7 @@ from bs4 import BeautifulSoup
 
 from ..config import USER_AGENT
 from ..models import Lead
-from ..util import az_today
+from ..util import Conn, Log, StopCheck, az_today
 from .base import Source
 from .pima_jp_calendar import CASE_RE, JP_SOURCE
 
@@ -47,11 +48,11 @@ DISMISS_RE = re.compile(r"\bDISMISS", re.IGNORECASE)
 STAGES = ("filed", "notice", "judgment", "writ")
 
 
-def _clean(text):
+def _clean(text: Optional[str]) -> str:
     return re.sub(r"\s+", " ", (text or "").replace("\xa0", " ")).strip()
 
 
-def _iso(text):
+def _iso(text: Optional[str]) -> Optional[str]:
     m = DATE_RE.search(text or "")
     if not m:
         return None
@@ -59,12 +60,12 @@ def _iso(text):
     return datetime(year, month, day).date().isoformat()
 
 
-def _human(iso):
+def _human(iso: str) -> str:
     d = datetime.strptime(iso, "%Y-%m-%d")
     return f"{d:%b} {d.day}, {d.year}"
 
 
-def _hearing_text(event):
+def _hearing_text(event: dict) -> str:
     """ "Eviction Action Oct 14, 2026 2:00 PM", in the same date format as the app."""
     day = _iso(event.get("DATE"))
     when = _human(day) if day else (event.get("DATE") or "")
@@ -72,16 +73,17 @@ def _hearing_text(event):
     return " ".join(x for x in (event.get("EVENT"), when, time_) if x)
 
 
-def _label(text, label):
+def _label(text: str, label: str) -> Optional[str]:
     """Value after ``Label:`` in the page text, up to the next label."""
     m = re.search(re.escape(label) + r"\s*:?\s*(.+?)(?=\s+[A-Z][A-Za-z ]{2,25}:|$)", text)
     return _clean(m.group(1)) if m else None
 
 
-def _tables(soup):
+def _tables(soup: Any) -> Iterator[tuple[list[str], list[dict]]]:
     """Yield (headers, rows) for each table, headers upper-cased."""
     for table in soup.find_all("table"):
-        headers, rows = None, []
+        headers: Optional[list[str]] = None
+        rows: list[dict] = []
         for tr in table.find_all("tr"):
             if tr.find_parent("table") is not table or tr.find("table"):
                 continue  # rows of a nested table, or a layout row wrapping one
@@ -96,7 +98,7 @@ def _tables(soup):
             yield headers, rows
 
 
-def case_id(text):
+def case_id(text: Optional[str]) -> Optional[str]:
     """Case page ID from a link, or a bare number. ``None`` otherwise."""
     text = (text or "").strip()
     if text.isdigit():
@@ -107,14 +109,16 @@ def case_id(text):
     return None
 
 
-def is_case_page(html):
+def is_case_page(html: str) -> bool:
     return "Document SubType" in html or ("Case Number" in html and "Case Status" in html and "Matter Type" in html)
 
 
-def _first_date(rows, regex, date_keys=("FILE DATE", "DATE", "FILED")):
+def _first_date(
+    rows: list[dict], regex: re.Pattern, date_keys: tuple[str, ...] = ("FILE DATE", "DATE", "FILED")
+) -> Optional[str]:
     """Earliest date among table rows whose text matches ``regex``; ``""``
     when a row matches but has no readable date, ``None`` when none match."""
-    found = None
+    found: Optional[str] = None
     for r in rows:
         if not regex.search(" ".join(r.values())):
             continue
@@ -125,7 +129,7 @@ def _first_date(rows, regex, date_keys=("FILE DATE", "DATE", "FILED")):
     return found
 
 
-def parse_case_html(html, url=None, today=None):
+def parse_case_html(html: str, url: Optional[str] = None, today: Optional[date] = None) -> Optional[Lead]:
     """Return a Lead for one saved or fetched case page, or ``None``."""
     soup = BeautifulSoup(html, "html.parser")
     text = _clean(soup.get_text(" "))
@@ -243,13 +247,13 @@ def parse_case_html(html, url=None, today=None):
 
 
 class CaseClient:
-    def __init__(self, session=None, delay=1.5):
+    def __init__(self, session: Any = None, delay: float = 1.5) -> None:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT
         self.delay = delay
         self._last = 0.0
 
-    def fetch(self, id_or_url):
+    def fetch(self, id_or_url: str) -> Optional[Lead]:
         cid = case_id(id_or_url)
         if not cid:
             raise ValueError(f"not a Justice Court case link: {id_or_url}")
@@ -267,7 +271,15 @@ class PimaJpCase(Source):
     name = "pima_jp_case"
     description = "Pima County Justice Court case pages (links, IDs or saved pages)"
 
-    def fetch(self, since, until, paths=None, cases=None, client=None, **options):
+    def fetch(
+        self,
+        since: str,
+        until: str,
+        paths: Optional[list] = None,
+        cases: Optional[list] = None,
+        client: Any = None,
+        **options: Any,
+    ) -> Iterator[Lead]:
         """Read saved case pages (``paths``) and/or case links or IDs (``cases``)."""
         if not (paths or cases):
             raise SystemExit("pima_jp_case needs saved case pages (--file) or case links (--case).")
@@ -282,9 +294,10 @@ class PimaJpCase(Source):
                 yield lead
 
 
-def split_case_inputs(text):
+def split_case_inputs(text: Optional[str]) -> tuple[list[str], list[str]]:
     """Case links/IDs from pasted text; also returns entries that aren't links."""
-    ids, unknown = [], []
+    ids: list[str] = []
+    unknown: list[str] = []
     for token in re.split(r"[\s,;]+", text or ""):
         if not token:
             continue
@@ -296,13 +309,13 @@ def split_case_inputs(text):
     return ids, unknown
 
 
-def add_cases(conn, text, client=None, log=print, should_stop=None):
+def add_cases(conn: Conn, text: str, client: Any = None, log: Log = print, should_stop: StopCheck = None) -> dict:
     """Read each pasted case link or ID and store it. Returns counts.
     ``should_stop()`` is asked before each case (True stops, e.g. paused)."""
     from .. import db
 
     ids, unknown = split_case_inputs(text)
-    counts = {"new": 0, "updated": 0, "with_notice": 0, "failed": 0, "skipped": unknown}
+    counts: dict[str, Any] = {"new": 0, "updated": 0, "with_notice": 0, "failed": 0, "skipped": unknown}
     client = client or CaseClient()
     for cid in ids:
         if should_stop and should_stop():
@@ -342,7 +355,7 @@ _OPEN_CASE_SQL = (
 )
 
 
-def cases_due(conn, now=None, limit=None):
+def cases_due(conn: Conn, now: Optional[datetime] = None, limit: Optional[int] = None) -> list:
     """Open eviction cases the daily run should re-read, most urgent first:
     never read, then those whose court date has passed since the last read,
     then those not read for a while. Closed and dismissed cases are left out."""
@@ -359,7 +372,7 @@ def cases_due(conn, now=None, limit=None):
         checked = r["case_checked_at"]
         court = (r["next_court_date"] or "")[:10]
         if not checked:
-            rank = 0
+            rank: Optional[int] = 0
         elif court and court < today and checked[:10] <= court:
             rank = 1  # the hearing happened since the last read: what was decided?
         elif r["eviction_notice"] or r["case_stage"] in ("judgment", "writ"):
@@ -374,8 +387,15 @@ def cases_due(conn, now=None, limit=None):
 
 
 def update_cases(
-    conn, client=None, limit=None, max_age_hours=12, log=print, scheduled=False, progress=None, should_stop=None
-):
+    conn: Conn,
+    client: Any = None,
+    limit: Optional[int] = None,
+    max_age_hours: int = 12,
+    log: Log = print,
+    scheduled: bool = False,
+    progress: Optional[Callable[[int, int], Any]] = None,
+    should_stop: StopCheck = None,
+) -> dict:
     """Re-read case pages for open eviction leads.
 
     ``scheduled`` (the daily run) picks cases with ``cases_due``; otherwise
@@ -400,7 +420,7 @@ def update_cases(
         ).fetchall()
         if limit:
             rows = rows[:limit]
-    counts = {"checked": 0, "with_notice": 0, "failed": 0, "total": len(rows)}
+    counts: dict[str, Any] = {"checked": 0, "with_notice": 0, "failed": 0, "total": len(rows)}
     client = client or CaseClient()
     failures = 0
     for i, r in enumerate(rows):

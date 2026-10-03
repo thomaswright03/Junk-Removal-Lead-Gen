@@ -12,17 +12,18 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 from xml.sax.saxutils import escape
 
 LABEL = "com.leadgen.daily"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
-def command(db_path):
+def command(db_path: Any) -> list[str]:
     return [sys.executable, "-m", "leadgen", "--db", str(Path(db_path).resolve()), "daily"]
 
 
-def plist(db_path, hour, minute, workdir, log_path):
+def plist(db_path: Any, hour: int, minute: int, workdir: Any, log_path: Any) -> str:
     args = "\n".join(f"        <string>{escape(a)}</string>" for a in command(db_path))
     workdir, log_path = escape(str(workdir)), escape(str(log_path))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -53,7 +54,7 @@ def plist(db_path, hour, minute, workdir, log_path):
 """
 
 
-def install(db_path, hour=6, minute=0):
+def install(db_path: Any, hour: int = 6, minute: int = 0) -> str:
     db_path = Path(db_path).resolve()
     workdir = Path.cwd().resolve()
     log_path = db_path.parent / "daily.log"
@@ -77,7 +78,7 @@ def install(db_path, hour=6, minute=0):
     return f"Add this line with `crontab -e`:\n{minute} {hour} * * * cd {workdir} && {cmd} >> {log_path} 2>&1"
 
 
-def remove():
+def remove() -> str:
     if platform.system() != "Darwin":
         return "Remove the line you added with `crontab -e` (or the scheduled task on Windows)."
     if PLIST.exists():
@@ -87,7 +88,7 @@ def remove():
     return "No daily run was scheduled."
 
 
-def status():
+def status() -> str:
     if platform.system() == "Darwin":
         return f"Scheduled ({PLIST})" if PLIST.exists() else "Not scheduled"
     return "Check `crontab -l` (or Task Scheduler on Windows)."

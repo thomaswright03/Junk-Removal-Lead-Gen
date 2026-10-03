@@ -60,7 +60,7 @@ TOUCH_KINDS = {
     "property_manager": [["emailed", "Emailed"], ["voicemail", "Left voicemail"], ["talked", "Talked"]],
 }
 
-DEFAULT_SETTINGS = {
+DEFAULT_SETTINGS: dict[str, Any] = {
     "business_name": "Steve's Junk Removal",
     "business_phone": "",
     "base_address": "8790 N Wellside Dr, Tucson, AZ",

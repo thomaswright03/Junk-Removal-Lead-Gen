@@ -4,10 +4,12 @@ page Steve can open in a browser and filter."""
 import csv
 import html
 import json
+from datetime import date
+from typing import Any, Optional
 from urllib.parse import quote_plus
 
 from . import leadlist, outreach
-from .util import az_today
+from .util import Conn, LeadRow, az_today
 
 # The ranking Lead Desk shows, first: priority, how far the case has got
 # (filed, notice, judgment, writ), whether an eviction notice is filed, and
@@ -48,7 +50,7 @@ COLUMNS = (
 )
 
 
-def _maps_link(row):
+def _maps_link(row: LeadRow) -> str:
     if row["lat"] is not None and row["lon"] is not None:
         return f"https://www.google.com/maps/search/?api=1&query={row['lat']},{row['lon']}"
     if row["address"]:
@@ -58,11 +60,11 @@ def _maps_link(row):
     return ""
 
 
-def _as_dict(r):
+def _as_dict(r: LeadRow) -> dict:
     return dict(r) if isinstance(r, dict) else dict(zip(r.keys(), r))
 
 
-def ranked(conn, rows, settings=None, today=None):
+def ranked(conn: Conn, rows: list, settings: Optional[dict] = None, today: Optional[date] = None) -> list[dict]:
     """``rows`` as dicts with the Lead Desk ranking columns added, highest
     priority first (newest first among equal priorities), as Lead Desk sorts
     them. Repeat owners are counted over the leads Lead Desk shows, so a lead
@@ -86,7 +88,7 @@ def ranked(conn, rows, settings=None, today=None):
     return leadlist.sort_leads(out, "score")
 
 
-def write_csv(rows, path):
+def write_csv(rows: list, path: Any) -> int:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(COLUMNS + ("map",))
@@ -148,15 +150,15 @@ render();
 """
 
 
-def write_html(rows, path, today=None):
+def write_html(rows: list, path: Any, today: Optional[date] = None) -> int:
     data = []
     for r in rows:
         row = _as_dict(r)
         d = {c: row.get(c) for c in COLUMNS}
         d["map"] = _maps_link(r)
         data.append(d)
-    types = sorted({d["lead_type"] for d in data})
-    statuses = sorted({d["status"] for d in data})
+    types = sorted({str(d["lead_type"]) for d in data})
+    statuses = sorted({str(d["status"]) for d in data})
     opts = lambda vals: "".join(f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in vals)
     page = (
         _PAGE.replace("__DATE__", (today or az_today()).isoformat())
