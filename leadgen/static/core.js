@@ -1,0 +1,272 @@
+// Lead Desk page: shared state, talking to the server, formatting helpers
+// and the header. The other scripts draw one part of the page each.
+"use strict";
+let S = null;                 // server state: settings, counts, one page of leads (S.list), the open lead (S.lead)
+const ui = { tab: "leads", q: "", type: "", status: "open", channel: "", sort: "score", offset: 0, outreachTab: "door_hanger", open: null };
+
+const $ = (s, el = document) => el.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const pct = v => v == null ? "–" : (v * 100).toFixed(v < 0.1 && v > 0 ? 1 : 0) + "%";
+const title = s => String(s ?? "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+  .replace(/\b(Llc|Lllp|Lp|Po|Nw|Ne|Sw|Se|Hoa|Usa|Az)\b/g, w => w.toUpperCase());
+// Assessor names are "LAST FIRST MIDDLE"; the first name is the second word.
+const firstName = name => { const w = String(name || "").replace(/[&,].*$/, "").trim().split(/\s+/); return w.length > 1 && /^[A-Za-z]{2,}$/.test(w[1]) ? title(w[1]) : ""; };
+
+const OFFLINE = "Lead Desk didn't answer. Check that it is still running (and your internet connection), then try again.";
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  return send(path, opt);
+}
+async function send(path, opt) {
+  let r;
+  try { r = await fetch(path, opt); } catch (e) { throw new Error(OFFLINE); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || (r.status >= 500 ? "Something went wrong on the Lead Desk server. Try again in a minute." : "That didn't work. Reload the page and try again."));
+  return j;
+}
+function toast(msg, ms = 3200, undo) {
+  const t = $("#toast");
+  t.innerHTML = esc(msg) + (undo ? ` <button class="btn small" id="toastUndo">Undo</button>` : "");
+  t.style.display = "block";
+  if (undo) $("#toastUndo").onclick = () => { t.style.display = "none"; undo(); };
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", undo ? Math.max(ms, 8000) : ms);
+}
+// What the page asks the server for: one page of the lead list for the tab
+// that's showing (filtered, sorted and paged on the server) and the open lead.
+const QUEUE_LIMIT = 500;
+function stateQuery() {
+  const p = new URLSearchParams();
+  if (ui.tab === "leads") {
+    p.set("list", "leads");
+    for (const k of ["q", "type", "status", "channel", "sort", "offset"]) p.set(k, ui[k]);
+  } else if (ui.tab === "outreach") {
+    p.set("list", "queue"); p.set("channel", ui.outreachTab); p.set("sort", "score"); p.set("limit", QUEUE_LIMIT);
+    // Door hangers and calls: the leads still to do. Landlords: everyone in that method.
+    if (ui.outreachTab === "property_manager") p.set("status", "active");
+    else { p.set("status", "new"); p.set("untouched", "1"); }
+  }
+  if (ui.open != null) p.set("lead", ui.open);
+  return "/api/state?" + p.toString();
+}
+async function load() {
+  S = await api(stateQuery());
+  render();
+}
+// Reload after a filter, page or tab change; a failure shows as a toast.
+async function reloadList() {
+  try { await load(); } catch (e) { toast(e.message, 8000); }
+}
+const listLeads = () => (S && S.list && S.list.leads) || [];
+const findLead = id => (S.lead && S.lead.id === id ? S.lead : listLeads().find(l => l.id === id));
+// Run one action: the button is disabled while it runs (so a double click
+// can't log twice), the page reloads, then the result is shown in a toast
+// (so the toast never describes leads the list isn't showing yet).
+async function act(fn, okMsg, btn, undo) {
+  if (btn) { if (btn.disabled) return; btn.disabled = true; btn.setAttribute("aria-busy", "true"); }
+  try {
+    const r = await fn();
+    await load();
+    const msg = okMsg && (typeof okMsg === "function" ? okMsg(r) : okMsg);
+    if (msg) toast(msg, Math.max(3200, msg.length * 60), undo);
+    return r;
+  }
+  catch (e) { toast(e.message, 8000); }
+  finally { if (btn) { btn.disabled = false; btn.removeAttribute("aria-busy"); } }
+}
+
+// ---------- helpers ---------------------------------------------------------
+const chName = c => S.channels[c] || "Unassigned";
+const chDot = c => c ? `<span class="ch"><span class="dot" style="background:var(--c-${c})"></span>${esc(chName(c))}</span>` : `<span class="muted">–</span>`;
+function scoreChip(s) {
+  const cls = s >= 60 ? "good" : s >= 40 ? "acc" : s >= 25 ? "warn" : "";
+  return `<span class="score chip ${cls}">${s}</span>`;
+}
+const STATUS_LABEL = { new: "New", contacted: "Contacted", responded: "Responded", quoted: "Quoted", won: "Won", lost: "Lost", skip: "Skip", stale: "Old" };
+function statusChip(s) {
+  const m = { new: "acc", contacted: "", responded: "warn", quoted: "warn", won: "good", lost: "bad", skip: "", stale: "" };
+  return `<span class="chip ${m[s] || ""}">${esc(STATUS_LABEL[s] || s)}</span>`;
+}
+function whatLabel(l) {
+  if (l.lead_type === "eviction") return "Eviction";
+  if (l.lead_type === "civil") return "Civil case";
+  return l.code_label || (l.description || "").split(" | ")[0] || l.lead_type;
+}
+function mapUrl(l) {
+  if (l.lat != null && l.lon != null) return `https://www.google.com/maps/search/?api=1&query=${l.lat},${l.lon}`;
+  if (l.address) return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(l.address + ", " + (l.city || "Tucson") + ", AZ");
+  return null;
+}
+function ownerLine(l) {
+  const who = l.owner_name || l.plaintiff;
+  if (!who) return `<span class="muted">${l.enriched_at ? "not found" : "lookup pending"}</span>`;
+  let tags = "";
+  if (l.owner_absentee) tags += ` <span class="chip warn" title="Owner's mailing address is somewhere else">owner lives elsewhere</span>`;
+  if (l.owner_entity) tags += ` <span class="chip" title="Company, trust or estate">company owner</span>`;
+  if (l.owner_lead_count > 1) tags += ` <span class="chip acc" title="Owner has several leads">${l.owner_lead_count} leads</span>`;
+  return esc(title(who)) + tags;
+}
+const fullAddress = l => l.address ? l.address + (l.unit ? " #" + String(l.unit).replace(/^#/, "") : "") : "";
+const isMultifamily = l => /APART|MULTI|MFR|CONDO|TOWNHOUSE|MOBILE HOME PARK/i.test(l.property_use || "");
+// Where an address came from, when it isn't certain: a guess from the
+// landlord's parcels, or an apartment complex with no unit number.
+function addressNote(l, plain) {
+  const notes = [];
+  if (l.address_source === "landlord") notes.push([`landlord's only ${isMultifamily(l) ? "complex" : "property"} — confirm`,
+    "Court cases list no address. The landlord owns one property in the county, so the eviction is probably there. Check it, then press Confirm address on the lead."]);
+  if (l.door_hanger_problem === "needs_unit") notes.push(["unit needed for a door hanger", "An apartment or condo parcel: type the unit number, or confirm the address, before a door hanger goes out."]);
+  if (plain) return notes.map(n => n[0]).join("; ");
+  return notes.map(([t, tip]) => ` <span class="chip warn" title="${esc(tip)}">${esc(t)}</span>`).join("");
+}
+// The one message renderer: fills a template from Settings for one lead.
+// Phone calls on eviction cases use the landlord script, code cases the owner one.
+const templateKey = (channel, l) => channel === "phone" && l.lead_type === "eviction" ? "phone_eviction" : channel;
+function fill(channel, l) {
+  const st = S.settings, owner = (l.owner_name || l.plaintiff || "").trim();
+  const first = owner && !l.owner_entity ? firstName(owner) : "";
+  const phone = (st.tracking_numbers || {})[channel] || st.business_phone || "[phone]";
+  const addr = title(fullAddress(l));
+  return (st.templates[templateKey(channel, l)] || st.templates[channel] || "")
+    .replaceAll("{owner}", title(owner) || "Property Owner")
+    .replaceAll("{owner_first}", first || "there")
+    .replaceAll("{at_address}", addr ? ` at ${addr}` : "")
+    .replaceAll("{address}", addr || "your property")
+    .replaceAll("{phone}", phone)
+    .replaceAll("{business}", st.business_name || "");
+}
+// Where the eviction case is: notice filed, judgment, writ (lockout), etc.
+function noticeChip(l) {
+  if (l.lead_type !== "eviction") return "";
+  const stage = l.case_stage;
+  if (stage === "writ") return ` <span class="chip bad" title="Writ of restitution: the tenant is being locked out, so the unit needs clearing now">writ issued${l.writ_date ? " " + esc(fmtDate(l.writ_date)) : ""}</span>`;
+  if (stage === "judgment") return ` <span class="chip warn" title="The court ruled for the landlord; a writ (lockout) usually follows within days">judgment${l.judgment_date ? " " + esc(fmtDate(l.judgment_date)) : ""}</span>`;
+  if (stage === "dismissed") return ` <span class="chip" title="The case was dismissed">dismissed</span>`;
+  if (l.eviction_notice === 1) return ` <span class="chip good" title="An eviction notice is filed in the court case">notice filed</span>`;
+  if (l.eviction_notice === 0) return ` <span class="chip" title="No eviction notice in the case documents yet">no notice yet</span>`;
+  return ` <span class="chip warn" title="${l.url ? "Case page not read yet; the daily check reads it, or press Update court cases." : "Added by you, with no court case link to check."}">${l.url ? "case not checked" : "added by you"}</span>`;
+}
+// One date format everywhere: "Oct 1, 2026" and "2:00 PM". Plain dates are
+// shown as they are; timestamps (stored in UTC) are shown in Tucson time.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const fmtTime = (h, m) => `${(+h % 12) || 12}:${m} ${+h < 12 ? "AM" : "PM"}`;
+function fmtDate(v) {
+  if (!v) return "";
+  const s = String(v);
+  if (/T\d\d:\d\d/.test(s)) {
+    const d = new Date(s);
+    if (!isNaN(d)) return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/Phoenix" });
+  }
+  const m = s.match(/^(\d{4})-(\d\d)-(\d\d)/);
+  return m ? `${MONTHS[+m[2] - 1]} ${+m[3]}, ${m[1]}` : s;
+}
+const courtDate = v => { if (!v) return ""; const m = String(v).match(/ (\d\d):(\d\d)$/); return fmtDate(v) + (m ? `, ${fmtTime(m[1], m[2])}` : ""); };
+// Every date says what it is: the latest real event (Filed, Judgment, Writ,
+// Opened), or for a case not read yet, its upcoming Hearing.
+function leadDate(l) {
+  if (l.latest_date) return [l.latest_label, l.latest_date];
+  if (l.event_date) return [l.date_label || "Dated", l.event_date];
+  return [null, null];
+}
+function dateCell(l) {
+  const [label, d] = leadDate(l);
+  return d ? `<span class="small-line">${esc(label)}</span><br>${esc(fmtDate(d))}` : '<span class="muted">–</span>';
+}
+const fmtDateTime = v => { if (!v) return ""; const d = new Date(v); return isNaN(d) ? fmtDate(v) : d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Phoenix" }); };
+const VIEW_LABEL = { eviction_notice: "Evictions with a notice, judgment or writ", evictions: "All evictions", all: "All leads (code cases too)" };
+const SOURCE_LABEL = { manual: "entered by hand", import: "imported file", osm: "OpenStreetMap", google: "Google Places",
+  "osm+website": "OpenStreetMap + company website", "google+website": "Google Places + company website", website: "company website" };
+function phoneCell(l) {
+  return l.owner_phone ? `<a href="tel:${esc(l.owner_phone.replace(/\D/g, ""))}">${esc(l.owner_phone)}</a>` : '<span class="muted">–</span>';
+}
+function emailCell(l) {
+  return l.owner_email ? `<a href="mailto:${esc(l.owner_email)}">${esc(l.owner_email)}</a>` : '<span class="muted">–</span>';
+}
+const touchButtons = ch => (S.touch_kinds || {})[ch] || [];
+
+// ---------- long jobs -------------------------------------------------------
+// "Update court cases" and "Find landlord phones" run in the background on
+// this computer (progress shows in the header); online they do one batch.
+const PAUSED_STOP = " Stopped because Lead Desk was paused.";
+const JOB_DONE = {
+  cases: r => `Re-read ${r.checked} court case${r.checked === 1 ? "" : "s"}, ${r.with_notice} with an eviction notice` + (r.failed ? `, ${r.failed} couldn't be read` : "")
+    + (r.paused ? "." + PAUSED_STOP : r.cancelled ? " (cancelled)" : r.stopped_early ? ". More remain; press again to continue." : "."),
+  contacts: r => `Checked ${r.checked} companies: contacts found for ${r.found} leads, none for ${r.not_found}.` +
+    (r.google_used ? "" : " Add a Google Places key in Settings to find more.")
+    + (r.errors ? ` ${r.errors} lookup${r.errors === 1 ? "" : "s"} failed; they'll be tried again${r.error_cause === "google_key" ? ". Google refused the key: check it in Settings" : ""}.` : "")
+    + (r.paused ? PAUSED_STOP : r.cancelled ? " (cancelled)" : ""),
+};
+async function startJob(name, path, body, btn) {
+  await act(() => api(path, body), r => r.paused && !r.result ? r.message || "Lead Desk is paused." : (!r.started && !r.result) ? r.message
+    : r.result ? JOB_DONE[name](r.result) : "Started. Progress shows at the top of the page.", btn);
+}
+const updateCases = btn => startJob("cases", "/api/cases/update", { force: true }, btn);
+const findContacts = btn => startJob("contacts", "/api/find-contacts", {}, btn);
+async function addCases(text, btn) {
+  if (!text.trim()) return toast("Paste one or more case page links first.");
+  await act(() => api("/api/cases/add", { text }), r => r.paused && !(r.new + r.updated) ? r.message || "Lead Desk is paused." :
+    `Cases: ${r.new} new, ${r.updated} updated, ${r.with_notice} with an eviction notice` +
+    (r.failed ? `, ${r.failed} could not be read (the court site may be busy; try again later)` : "") + (r.skipped.length ? `. Skipped (not case links): ${r.skipped.slice(0, 3).join(", ")}` : "")
+    + (r.paused ? "." + PAUSED_STOP : ""), btn);
+}
+async function importContacts(file) {
+  await act(async () => send(`/api/import?source=contacts&filename=${encodeURIComponent(file.name)}`, { method: "POST", body: await file.arrayBuffer() }),
+    r => `Phones and emails: ${r.matched} of ${r.rows} rows matched a lead, ${r.updated} leads filled in.`
+    + (r.skipped_manual ? ` ${r.skipped_manual} row${r.skipped_manual > 1 ? "s" : ""} skipped because the lead has a number entered by hand.` : "")
+    + (r.kept_existing ? ` ${r.kept_existing} lead${r.kept_existing > 1 ? "s" : ""} kept the different number they already had.` : "")
+    + (r.rows && !r.matched ? " No rows matched: the file needs a lead_id, parcel, property address or owner name column." : ""));
+}
+
+// ---------- header ----------------------------------------------------------
+const runningJobs = () => Object.values(S.jobs || {}).filter(j => j.running);
+function jobLine(j) {
+  const n = j.total ? `${j.done} of ${j.total}` : "starting";
+  return `<span class="job">${esc(j.label)}: ${n}${j.total ? ` <progress max="${j.total}" value="${j.done}"></progress>` : ""}
+    ${j.cancelling ? "stopping…" : `<button class="btn small" data-cancel="${esc(j.name)}">Cancel</button>`}</span>`;
+}
+function renderHeader() {
+  const c = S.counts || {};
+  const d = S.daily || {};
+  const unchecked = (S.view_counts || {}).unchecked || 0;
+  const msg = d.message || "starting the daily check";
+  const daily = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.last_run ? `Last check ${fmtDate(d.last_run)}: ${d.summary}` : "Not checked yet today";
+  $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson junk cases`;
+  $("#sub").textContent = `${c.active || 0} open leads · ${c.assigned || 0} in outreach` + (c.owners_pending ? ` · ${c.owners_pending} owners not looked up yet` : "")
+    + (unchecked ? ` · ${unchecked} court case${unchecked > 1 ? "s" : ""} still to check (${d.running ? "checking now" : "next check " + (d.next_run || "tomorrow 6:00 AM")})` : "")
+    + ` · ${daily}`;
+  $("#jobs").innerHTML = runningJobs().map(jobLine).join(" · ");
+  $("#jobs").querySelectorAll("[data-cancel]").forEach(b => b.onclick = () =>
+    act(() => api("/api/job/cancel", { name: b.dataset.cancel }), r => r.message, b));
+  const banner = $("#pausedBanner");
+  banner.hidden = !S.paused;
+  if (S.paused) banner.innerHTML = `<strong>Paused.</strong> The daily check, court case reads and phone lookups are stopped${S.paused_by_env ? " by LEADDESK_PAUSED in the server settings" : ""}.
+    ${S.paused_by_env ? "" : `<button class="btn small" id="unpause">Turn the pause off</button>`}`;
+  const up = $("#unpause"); if (up) up.onclick = e => act(() => api("/api/settings", { paused: false }), "Lead Desk is running again.", e.currentTarget);
+  const b = $("#refreshBtn"); b.disabled = !!d.running || !!S.paused; b.textContent = d.running ? "Checking…" : "Check for new evictions";
+  if (d.running || runningJobs().length) watch();
+  document.querySelectorAll("#nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === ui.tab); b.setAttribute("aria-current", b.dataset.tab === ui.tab ? "page" : "false"); });
+  for (const t of ["leads", "outreach", "results", "settings"]) $("#tab-" + t).hidden = t !== ui.tab;
+}
+
+// File pickers are labels styled as buttons: make them reachable with Tab too.
+function bindLabels(root) {
+  root.querySelectorAll("label.btn").forEach(lb => {
+    lb.tabIndex = 0; lb.setAttribute("role", "button");
+    lb.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); lb.querySelector("input").click(); } };
+  });
+}
+// Lead rows open the drawer on click, or on Enter / Space when focused with Tab.
+function bindRows(root) {
+  root.querySelectorAll("tr.click[data-id], [data-open]").forEach(tr => {
+    tr.tabIndex = 0;
+    tr.setAttribute("aria-label", "Open lead " + (tr.dataset.label || ""));
+    tr.onclick = e => {
+      if (e.target.closest("a,button,input,select")) return;
+      openLead(+(tr.dataset.id || tr.dataset.open), tr);
+    };
+    tr.onkeydown = e => {
+      if (e.target !== tr || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault(); openLead(+(tr.dataset.id || tr.dataset.open), tr);
+    };
+  });
+}

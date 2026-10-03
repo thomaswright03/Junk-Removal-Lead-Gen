@@ -32,7 +32,9 @@ jobs:
         run: ruff format --check .
       - name: Type check
         run: mypy
-      - run: pytest -q
+      # Line coverage is reported, and the run fails below the floor in pyproject.toml.
+      # A missing Playwright browser fails the browser tests here (CI is set), not skips them.
+      - run: pytest -q --cov --cov-report=term
       - name: Same tests on Postgres (Lead Desk online uses Neon)
         run: pytest -q
         env:

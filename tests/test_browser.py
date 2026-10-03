@@ -1,11 +1,14 @@
 """The Lead Desk page in a real (headless) browser: opening a lead from the
 keyboard, keeping typed notes through other actions and refreshes, importing
-a CSV, splitting leads, logging a contact once, and the address bar keeping
-the view. Skipped when Playwright or its browser isn't installed:
+a CSV, splitting leads, logging a contact once, the address bar keeping
+the view, labelled dates and guessed addresses, and the page on a phone.
+Skipped when Playwright or its browser isn't installed (in CI, where CI=1,
+a missing browser fails instead):
 
-    pip install playwright && python -m playwright install chromium
+    pip install -e ".[dev]" && python -m playwright install chromium
 """
 
+import os
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -79,13 +82,26 @@ def server(tmp_path):
     httpd.server_close()
 
 
+def _launch():
+    """Start Playwright and Chromium. If the browser can't start, Playwright
+    is stopped again (otherwise every later test fails with a misleading
+    "Sync API inside the asyncio loop" error) and the real reason is given:
+    a skip on a computer without the browser, a failure in CI, where a
+    missing browser must not pass quietly."""
+    pw = sync_api.sync_playwright().start()
+    try:
+        return pw, pw.chromium.launch()
+    except Exception as e:
+        pw.stop()
+        reason = f"no browser for Playwright: {str(e).strip().splitlines()[0]}"
+        if os.environ.get("CI"):
+            pytest.fail(reason + " (CI must run `python -m playwright install chromium`)")
+        pytest.skip(reason)
+
+
 @pytest.fixture
 def page(server):
-    try:
-        pw = sync_api.sync_playwright().start()
-        browser = pw.chromium.launch()
-    except Exception as e:  # browser not downloaded
-        pytest.skip(f"no browser for Playwright: {e}")
+    pw, browser = _launch()
     page = browser.new_page()
     page.set_default_timeout(5000)
     errors = []
@@ -203,7 +219,7 @@ def test_reload_keeps_the_filter_and_the_open_lead(server, page):
     assert page.locator("#drawer.open").is_visible()
     assert "Example Homes" in page.inner_text("#dTitle")
     page.go_back()  # back closes the lead
-    assert not page.locator("#drawer.open").is_visible()
+    page.wait_for_selector("#drawer.open", state="hidden")
 
 
 def _luminance(rgb):
@@ -236,3 +252,107 @@ def test_theme_choice_is_remembered(server, page):
     page.select_option("#sTheme", "dark")
     page.reload()
     assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+
+
+def test_dates_and_guessed_addresses_are_labelled(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000002-EA",
+            "eviction",
+            "2099-10-14",  # not read yet: the date is an upcoming hearing
+            None,
+            plaintiff="SAMPLE RIVER LLC",
+            in_pima=True,
+            url="https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=1000002",
+        ),
+    )
+    conn.execute(
+        "UPDATE leads SET address = '100 W EXAMPLE APTS', address_source = 'landlord', "
+        "property_use = 'APARTMENTS 25+ UNITS' WHERE source_id = 'CV26-000001-EA'"
+    )
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    cells = page.locator("#leadTable tbody td.datecell").all_inner_texts()
+    assert len(cells) == 3
+    for cell in cells:
+        assert cell.split()[0] in ("Filed", "Opened", "Hearing", "Writ", "Judgment"), cell
+    assert any(c.startswith("Hearing") and "2099" in c for c in cells)
+    row = lead_row(page, "100 W Example Apts")
+    assert "landlord's only complex — confirm" in row.inner_text()
+    row.click()
+    page.wait_for_selector("#dConfirm")
+    assert page.locator("#dChannel option[value=door_hanger]").is_disabled()
+    page.click("#dConfirm")
+    page.wait_for_selector("text=Address confirmed")
+    page.wait_for_selector("#drawer.open:not(:has(#dConfirm))")
+    assert not page.locator("#dChannel option[value=door_hanger]").is_disabled()
+
+
+def test_notes_counter_and_limit(server, page):
+    url, app, path = server
+    page.goto(url)
+    lead_row(page, "10 E Sample St").click()
+    page.fill("#dNotes", "x" * 2001)
+    page.wait_for_selector("#dNotesCount.over")
+    assert "2,001 / 2,000" in page.inner_text("#dNotesCount")
+    page.click("#dSave")
+    page.wait_for_selector("text=Notes can be up to 2,000 characters")
+
+
+def test_works_on_a_phone(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    for i in range(30):
+        db.upsert(
+            conn,
+            Lead(
+                "tucson_code_cases",
+                f"CE-{100 + i}",
+                "code_violation",
+                "2026-09-20",
+                f"{200 + i} N SAMPLE AVENUE WITH A LONG NAME",
+                in_pima=True,
+                description="Property Maintenance | Active | REFS / trash in yard",
+            ),
+        )
+    conn.commit()
+    page.set_viewport_size({"width": 375, "height": 740})
+    for tab in ("leads", "outreach", "results", "settings"):
+        page.goto(f"{url}#tab={tab}")
+        page.wait_for_selector(f"#tab-{tab}:not([hidden]) > *")
+        assert page.evaluate("document.documentElement.scrollWidth") == 375, tab
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.mouse.wheel(0, 1500)
+    page.wait_for_function("window.scrollY > 500")
+    assert page.evaluate("Math.max(0, document.querySelector('header').getBoundingClientRect().bottom)") <= 110
+
+    # Each lead is a card: property, landlord, stage and phone readable without sideways scrolling.
+    card = lead_row(page, "Example Homes")
+    card.scroll_into_view_if_needed()
+    box = card.bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= 375
+    text = card.inner_text()
+    assert "Example Homes" in text and "notice filed" in text and "(520) 555-0101" in text
+    phone = card.locator("a[href^='tel:']")
+    assert phone.get_attribute("href") == "tel:5205550101" and phone.bounding_box()["height"] >= 44
+
+    # Open it, set the door-hanger method and log a contact: every target is big enough to tap.
+    lead_row(page, "10 E Sample St").click()
+    page.wait_for_selector("#drawer.open")
+    page.select_option("#dChannel", "door_hanger")
+    page.click("#dSaveCh")
+    page.wait_for_selector("[data-touch=visited]")
+    small = page.evaluate(
+        """[...document.querySelectorAll('#drawer button, #drawer select, #drawer input:not([type=checkbox])')]
+        .filter(e => e.offsetParent && e.getBoundingClientRect().height < 44).map(e => e.id || e.textContent)"""
+    )
+    assert small == []
+    page.click("[data-touch=visited]")
+    page.wait_for_selector("text=Logged: Hanger left")
+    assert db.connect(path).execute("SELECT COUNT(*) FROM touches").fetchone()[0] == 1

@@ -11,12 +11,14 @@ that address, so exports show each property once.
 
 import json
 import sqlite3
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
+from typing import Any, Optional, Sequence
 
 from . import pg
+from .models import Lead
 from .normalize import extract_zip, normalize_address
-from .util import az_today, now_iso
+from .util import Conn, az_today, is_paused, now_iso
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
@@ -147,7 +149,7 @@ _REFRESHABLE = (
 _READY_URLS: set = set()  # Postgres databases whose schema was checked by this process
 
 
-def connect(path):
+def connect(path: Any) -> Conn:
     """Open the lead database: a SQLite file, or Postgres (Neon) when
     ``path`` is a ``postgres://`` URL (see pg.py)."""
     if pg.is_url(path):
@@ -161,14 +163,14 @@ def connect(path):
     path = Path(path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    return conn
+    lite = sqlite3.connect(str(path))
+    lite.row_factory = sqlite3.Row
+    lite.executescript(SCHEMA)
+    _migrate(lite)
+    return lite
 
 
-def _migrate(conn):
+def _migrate(conn: Conn) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(leads)")}
     added = [c for c in _ADDED_COLUMNS if c not in have]
     for col in added:
@@ -182,7 +184,7 @@ def _migrate(conn):
     conn.commit()
 
 
-def upsert(conn, lead):
+def upsert(conn: Conn, lead: Lead) -> str:
     """Insert or refresh one Lead. Returns ``"new"``, ``"updated"``."""
     now = now_iso()
     d = lead.to_dict()
@@ -220,6 +222,12 @@ def upsert(conn, lead):
         if d.get("case_checked_at"):
             sets.append("case_checked_at = ?")
             args.append(d["case_checked_at"])
+        if existing["status"] == "stale" and any(
+            d[col] and d[col] != existing[col] for col in ("judgment_date", "writ_date")
+        ):
+            # A judgment or writ (lockout) came after the lead went old: the
+            # clean-out is now, so it is a new lead again.
+            sets.append("status = 'new'")
 
         args.append(existing["id"])
         conn.execute(f"UPDATE leads SET {', '.join(sets)} WHERE id = ?", args)
@@ -246,7 +254,7 @@ def upsert(conn, lead):
     return "new"
 
 
-def _link_duplicate(conn, row_id, address_norm):
+def _link_duplicate(conn: Conn, row_id: int, address_norm: str) -> None:
     first = conn.execute(
         "SELECT id FROM leads WHERE address_norm = ? AND id != ? AND duplicate_of IS NULL ORDER BY id LIMIT 1",
         (address_norm, row_id),
@@ -255,18 +263,21 @@ def _link_duplicate(conn, row_id, address_norm):
         conn.execute("UPDATE leads SET duplicate_of = ? WHERE id = ?", (first["id"], row_id))
 
 
-def mark_stale(conn, days, today=None):
-    """Move ``new`` leads whose event is older than ``days`` to ``stale``."""
+def mark_stale(conn: Conn, days: int, today: Optional[date] = None) -> int:
+    """Move ``new`` leads to ``stale`` when their latest event is older than
+    ``days``. For an eviction that is the latest of its filing, judgment and
+    writ dates, so a writ that comes weeks after the filing keeps it fresh."""
     today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
-        "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ?",
-        (cutoff,),
+        "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ? "
+        "AND (judgment_date IS NULL OR judgment_date < ?) AND (writ_date IS NULL OR writ_date < ?)",
+        (cutoff, cutoff, cutoff),
     )
     return cur.rowcount
 
 
-def set_status(conn, lead_id, status, notes=None):
+def set_status(conn: Conn, lead_id: int, status: str, notes: Optional[str] = None) -> int:
     if status not in STATUSES:
         raise ValueError(f"status must be one of {', '.join(STATUSES)}")
     if notes is None:
@@ -276,7 +287,14 @@ def set_status(conn, lead_id, status, notes=None):
     return cur.rowcount
 
 
-def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=False, only_pima=False):
+def query(
+    conn: Conn,
+    since: Optional[str] = None,
+    statuses: Optional[Sequence[str]] = None,
+    lead_types: Optional[Sequence[str]] = None,
+    include_duplicates: bool = False,
+    only_pima: bool = False,
+) -> list:
     sql = ["SELECT * FROM leads WHERE 1=1"]
     args = []
     if since:
@@ -296,14 +314,14 @@ def query(conn, since=None, statuses=None, lead_types=None, include_duplicates=F
     return conn.execute(" ".join(sql), args).fetchall()
 
 
-def needs_geocode(conn, limit=None):
+def needs_geocode(conn: Conn, limit: Optional[int] = None) -> list:
     sql = "SELECT * FROM leads WHERE address IS NOT NULL AND lat IS NULL AND geocode_tried = 0 ORDER BY id"
     if limit:
         sql += f" LIMIT {int(limit)}"
     return conn.execute(sql).fetchall()
 
 
-def save_geocode(conn, lead_id, result):
+def save_geocode(conn: Conn, lead_id: int, result: Any) -> None:
     if result is None:
         conn.execute("UPDATE leads SET geocode_tried = 1 WHERE id = ?", (lead_id,))
         return
@@ -314,11 +332,26 @@ def save_geocode(conn, lead_id, result):
     )
 
 
-def get_settings(conn):
+class PauseWatch:
+    """``should_stop`` for long loops: True once Lead Desk is paused (Settings
+    or LEADDESK_PAUSED), checked before each request. ``hit`` says whether it
+    stopped the work."""
+
+    def __init__(self, conn: Conn) -> None:
+        self.conn = conn
+        self.hit = False
+
+    def __call__(self) -> bool:
+        if not self.hit and is_paused(get_settings(self.conn)):
+            self.hit = True
+        return self.hit
+
+
+def get_settings(conn: Conn) -> dict:
     return {r["key"]: json.loads(r["value"]) for r in conn.execute("SELECT * FROM settings")}
 
 
-def put_settings(conn, values):
+def put_settings(conn: Conn, values: dict) -> None:
     for k, v in values.items():
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

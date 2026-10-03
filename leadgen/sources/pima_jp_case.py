@@ -296,14 +296,18 @@ def split_case_inputs(text):
     return ids, unknown
 
 
-def add_cases(conn, text, client=None, log=print):
-    """Read each pasted case link or ID and store it. Returns counts."""
+def add_cases(conn, text, client=None, log=print, should_stop=None):
+    """Read each pasted case link or ID and store it. Returns counts.
+    ``should_stop()`` is asked before each case (True stops, e.g. paused)."""
     from .. import db
 
     ids, unknown = split_case_inputs(text)
     counts = {"new": 0, "updated": 0, "with_notice": 0, "failed": 0, "skipped": unknown}
     client = client or CaseClient()
     for cid in ids:
+        if should_stop and should_stop():
+            counts["stopped_early"] = True
+            break
         try:
             lead = client.fetch(cid)
         except requests.RequestException as e:

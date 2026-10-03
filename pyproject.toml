@@ -17,11 +17,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
+    "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.10",
     "types-requests",
-    # Browser tests (tests/test_browser.py); also run `python -m playwright install chromium`.
-    "playwright>=1.40",
+    # Browser tests (tests/test_browser.py); also run `python -m playwright install chromium`,
+    # which installs the browser build for exactly this version. Pinned so a new
+    # Playwright release can't arrive without its browser.
+    "playwright==1.63.0; python_version >= \"3.10\"",
 ]
 
 [project.scripts]
@@ -39,6 +42,15 @@ entrypoint = "leadgen.wsgi:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# CI runs `pytest --cov` and fails below this share of lines run by the tests.
+[tool.coverage.run]
+source = ["leadgen"]
+
+[tool.coverage.report]
+fail_under = 82
+skip_covered = true
+show_missing = true
 
 [tool.ruff]
 line-length = 120
@@ -59,3 +71,11 @@ python_version = "3.11"
 packages = ["leadgen"]
 ignore_missing_imports = true
 warn_unused_ignores = true
+
+# The modules that decide which leads Steve chases (ranking, ageing, the
+# daily run, owners and addresses) must be fully annotated.
+[[tool.mypy.overrides]]
+module = ["leadgen.outreach", "leadgen.db", "leadgen.daily", "leadgen.enrich"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true

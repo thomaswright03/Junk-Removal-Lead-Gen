@@ -11,12 +11,13 @@ address are matched on the parcel's site address.
 """
 
 import re
+from typing import Any, Iterable, Optional
 
 import requests
 
-from . import config
+from . import config, db
 from .normalize import normalize_address
-from .util import is_residential, now_iso
+from .util import Conn, LeadRow, StopCheck, is_dwelling_use, is_residential, now_iso
 
 PARCEL_LAYER = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17"
 FIELDS = (
@@ -48,16 +49,16 @@ _ENTITY_RE = re.compile(
 )
 
 
-def is_entity(name):
+def is_entity(name: Optional[str]) -> bool:
     """True for owners that are companies, trusts or estates, not people."""
     return bool(name and _ENTITY_RE.search(name.upper()))
 
 
-def _sql_str(value):
+def _sql_str(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def owner_fields(attrs):
+def owner_fields(attrs: dict) -> dict:
     """Map one parcel record to the lead's owner_* columns."""
     name = (attrs.get("ADDRESSEE") or attrs.get("MAIL1") or "").strip() or None
     mail = (attrs.get("ADDRESS") or attrs.get("MAIL2") or "").strip() or None
@@ -79,12 +80,12 @@ def owner_fields(attrs):
 
 
 class ParcelClient:
-    def __init__(self, session=None):
+    def __init__(self, session: Any = None) -> None:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
 
-    def query(self, where, limit=None):
-        params = {
+    def query(self, where: str, limit: Optional[int] = None) -> list[dict]:
+        params: dict[str, Any] = {
             "where": where,
             "outFields": ",".join(FIELDS),
             "returnGeometry": "false",
@@ -99,8 +100,8 @@ class ParcelClient:
             raise RuntimeError(f"ArcGIS error: {payload['error']}")
         return [f.get("attributes") or {} for f in payload.get("features") or []]
 
-    def by_parcels(self, parcels):
-        found = {}
+    def by_parcels(self, parcels: Iterable[Optional[str]]) -> dict:
+        found: dict = {}
         parcels = sorted({p for p in parcels if p})
         for i in range(0, len(parcels), BATCH):
             chunk = parcels[i : i + BATCH]
@@ -109,7 +110,7 @@ class ParcelClient:
                 found.setdefault(attrs.get("PARCEL"), attrs)
         return found
 
-    def by_site_address(self, address):
+    def by_site_address(self, address: Optional[str]) -> Optional[dict]:
         """Best-effort match of a street address to a parcel."""
         norm = normalize_address(address)
         if not norm:
@@ -118,7 +119,7 @@ class ParcelClient:
         rows = self.query(f"SITE_ADDRESS = {_sql_str(street)}", limit=5)
         return rows[0] if rows else None
 
-    def by_owner(self, name, limit=200):
+    def by_owner(self, name: Optional[str], limit: int = 200) -> list[dict]:
         """Parcels whose owner name starts with ``name`` (for landlords)."""
         name = re.sub(r"\s+", " ", (name or "").upper()).strip()
         if len(name) < 4:
@@ -126,7 +127,7 @@ class ParcelClient:
         return self.query(f"ADDRESSEE LIKE {_sql_str(name + '%')}", limit=limit)
 
 
-def landlord_name(plaintiff):
+def landlord_name(plaintiff: Optional[str]) -> Optional[str]:
     """First plaintiff as the assessor writes owner names, if it's a company."""
     first = (plaintiff or "").split(";")[0]
     name = re.sub(r"[.,]", " ", first.upper())
@@ -134,7 +135,7 @@ def landlord_name(plaintiff):
     return name if is_entity(name) or re.search(r"\b(LTD|LP|LLLP|PARTNERS)\b", name) else None
 
 
-def landlord_property(client, plaintiff):
+def landlord_property(client: Any, plaintiff: Optional[str]) -> tuple[Optional[dict], Optional[dict]]:
     """The landlord's property from the assessor, when the court case has no address.
 
     Returns ``(owner_attrs, site_attrs)``: owner_attrs fills the owner columns
@@ -157,8 +158,17 @@ def landlord_property(client, plaintiff):
     return rows[0], (homes[0] if len(sites) == 1 else None)
 
 
-def enrich_landlords(conn, client=None, limit=None):
-    """Owner and, when clear, property for eviction leads that have no address."""
+# ``address_source`` of an address inferred from the landlord's only property:
+# shown as "landlord's only property, confirm" until Steve confirms or edits it.
+LANDLORD_SOURCE = "landlord"
+
+
+def enrich_landlords(
+    conn: Conn, client: Any = None, limit: Optional[int] = None, should_stop: StopCheck = None
+) -> dict:
+    """Owner and, when clear, property for eviction leads that have no address.
+    The property is a guess (court cases carry no address), so it is stored
+    with ``address_source = "landlord"``."""
     client = client or ParcelClient()
     sql = (
         "SELECT id, plaintiff FROM leads WHERE duplicate_of IS NULL AND lead_type = 'eviction' "
@@ -170,6 +180,9 @@ def enrich_landlords(conn, client=None, limit=None):
     now = now_iso()
     counts = {"found": 0, "with_property": 0, "not_found": 0}
     for r in conn.execute(sql).fetchall():
+        if should_stop and should_stop():
+            counts["stopped_early"] = True
+            break
         try:
             owner, site = landlord_property(client, r["plaintiff"])
         except Exception:
@@ -185,6 +198,7 @@ def enrich_landlords(conn, client=None, limit=None):
             fields.update(owner_fields(site))
             fields.update(
                 address=site["SITE_ADDRESS"].strip(),
+                address_source=LANDLORD_SOURCE,
                 parcel=site.get("PARCEL"),
                 zip=(str(site.get("SITE_ZIP") or "").strip() or None),
             )
@@ -199,7 +213,7 @@ def enrich_landlords(conn, client=None, limit=None):
     return counts
 
 
-def enrich_lead(conn, client, row, attrs=None, now=None):
+def enrich_lead(conn: Conn, client: Any, row: LeadRow, attrs: Optional[dict] = None, now: Optional[str] = None) -> bool:
     """Owner columns for one lead (``row`` has id, parcel, address) from its
     parcel record, or by matching its address. Returns True when found."""
     if attrs is None and row["address"]:
@@ -219,10 +233,44 @@ def enrich_lead(conn, client, row, attrs=None, now=None):
     return True
 
 
-def enrich(conn, client=None, limit=None, refresh=False):
+def fix_inferred_addresses(conn: Conn) -> int:
+    """Bring addresses guessed by older versions in line with today's rules:
+    mark them as the landlord's property, and drop those on a parcel nobody
+    lives in (a condominium's common area, vacant land) so the landlord is
+    looked up again. Returns how many were dropped."""
+    # Once per database: court records carry no property address (the live
+    # calendar has no address column), so an address on a court case that
+    # wasn't typed in or imported came from the landlord's parcels.
+    if not db.get_settings(conn).get("inferred_addresses_tagged"):
+        conn.execute(
+            "UPDATE leads SET address_source = ? WHERE source = 'pima_jp_calendar' AND address IS NOT NULL "
+            "AND address_source IS NULL AND parcel IS NOT NULL AND enriched_at IS NOT NULL "
+            "AND COALESCE(added_by_hand, 0) = 0",
+            (LANDLORD_SOURCE,),
+        )
+        db.put_settings(conn, {"inferred_addresses_tagged": True})
+    rows = conn.execute(
+        "SELECT id, property_use FROM leads WHERE address_source = ? AND address IS NOT NULL", (LANDLORD_SOURCE,)
+    ).fetchall()
+    dropped = [r["id"] for r in rows if not is_dwelling_use(r["property_use"])]
+    for lead_id in dropped:
+        conn.execute(
+            "UPDATE leads SET address = NULL, address_norm = NULL, parcel = NULL, zip = NULL, lat = NULL, "
+            "lon = NULL, geocode_tried = 0, address_source = NULL, property_use = NULL, year_built = NULL, "
+            "enriched_at = NULL WHERE id = ?",
+            (lead_id,),
+        )
+    conn.commit()
+    return len(dropped)
+
+
+def enrich(
+    conn: Conn, client: Any = None, limit: Optional[int] = None, refresh: bool = False, should_stop: StopCheck = None
+) -> dict:
     """Fill owner_* columns. Returns counts by outcome."""
     client = client or ParcelClient()
-    landlords = enrich_landlords(conn, client, limit=limit)
+    fix_inferred_addresses(conn)
+    landlords = enrich_landlords(conn, client, limit=limit, should_stop=should_stop)
     sql = (
         "SELECT id, parcel, address FROM leads WHERE duplicate_of IS NULL "
         "AND (parcel IS NOT NULL OR address IS NOT NULL)"
@@ -234,13 +282,19 @@ def enrich(conn, client=None, limit=None, refresh=False):
         sql += f" LIMIT {int(limit)}"
     rows = conn.execute(sql).fetchall()
     now = now_iso()
-    by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
     counts = {
         "found": landlords["found"],
         "not_found": landlords["not_found"],
         "landlord_property": landlords["with_property"],
     }
+    if should_stop and should_stop():
+        counts["stopped_early"] = True
+        return counts
+    by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
     for r in rows:
+        if should_stop and should_stop():
+            counts["stopped_early"] = True
+            break
         found = enrich_lead(conn, client, r, by_parcel.get(r["parcel"]) if r["parcel"] else None, now)
         counts["found" if found else "not_found"] += 1
     conn.commit()

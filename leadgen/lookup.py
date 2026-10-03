@@ -186,6 +186,17 @@ class ProviderUnavailable(Exception):
     pass
 
 
+class LimitReached(ProviderUnavailable):
+    """The Google daily or monthly lookup limit is used up: not a failure."""
+
+
+def _is_key_problem(prov, error):
+    """True when Google refused the request itself: a missing, wrong or
+    restricted API key (or billing off), which Steve fixes in Settings."""
+    response = getattr(error, "response", None)
+    return prov.name == "google" and response is not None and response.status_code in (400, 401, 403)
+
+
 class OsmProvider:
     name = "osm"
     # A server that fails this many times in a row is dropped for the rest of
@@ -371,7 +382,7 @@ class GooglePlacesProvider:
 
     def _search(self, text, lat=None, lon=None):
         if self.budget is not None and not self.budget.take():
-            raise ProviderUnavailable(self.budget.blocked() or "Google lookup limit reached")
+            raise LimitReached(self.budget.blocked() or "Google lookup limit reached")
         lat, lon = (lat, lon) if lat is not None else TUCSON
         resp = self.session.post(
             PLACES_URL,
@@ -614,8 +625,14 @@ def find_contacts(
                         continue
                     try:
                         c = prov.find(lead, name)
+                    except LimitReached:
+                        counts["over_limit"] = counts.get("over_limit", 0) + 1
+                        failed = True
+                        continue
                     except Exception as e:  # one provider failing shouldn't stop the run
                         counts["errors"] += 1
+                        if _is_key_problem(prov, e):
+                            counts["error_cause"] = "google_key"
                         failed = True
                         log(f"  {prov.name} lookup failed: {type(e).__name__}: {e}")
                         continue

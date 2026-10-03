@@ -87,7 +87,7 @@ def test_password_required(online):
     assert call(password="wrong")[0].startswith("401")
     status, headers, out = call(password="hauling")
     assert status.startswith("200") and headers["X-Robots-Tag"] == "noindex"
-    assert "leads" in json.loads(out)
+    assert "counts" in json.loads(out)
 
 
 def test_page_and_settings_online(online):
