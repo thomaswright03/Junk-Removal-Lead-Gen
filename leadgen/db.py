@@ -372,13 +372,15 @@ def _link_duplicate(conn: Conn, row_id: int, address_norm: str) -> None:
 def mark_stale(conn: Conn, days: int, today: Optional[date] = None) -> int:
     """Move ``new`` leads to ``stale`` when their latest event is older than
     ``days``. For an eviction that is the latest of its filing, judgment and
-    writ dates, so a writ that comes weeks after the filing keeps it fresh."""
+    writ dates, so a writ that comes weeks after the filing keeps it fresh.
+    A case with a court date today or later is still under way: never stale."""
     today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
         "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ? "
-        "AND (judgment_date IS NULL OR judgment_date < ?) AND (writ_date IS NULL OR writ_date < ?)",
-        (cutoff, cutoff, cutoff),
+        "AND (judgment_date IS NULL OR judgment_date < ?) AND (writ_date IS NULL OR writ_date < ?) "
+        "AND (next_court_date IS NULL OR SUBSTR(next_court_date, 1, 10) < ?)",
+        (cutoff, cutoff, cutoff, today.isoformat()),
     )
     return cur.rowcount
 
