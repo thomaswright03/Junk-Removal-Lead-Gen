@@ -62,6 +62,9 @@ def validate_settings(body: dict) -> dict:
             if not isinstance(v, str) or len(v) > 300:
                 raise ValueError(f"{label} must be text (up to 300 characters).")
             values[key] = v.strip()
+    if "business_name" in values and not values["business_name"]:
+        # Every message says "Steve with <business>": it can't be blank.
+        raise ValueError("Type your business name: every door hanger and call script uses it. Nothing was saved.")
     if "lead_view" in body:
         if body["lead_view"] not in LEAD_VIEWS:
             raise ValueError("Show must be one of: " + ", ".join(LEAD_VIEWS) + ".")
