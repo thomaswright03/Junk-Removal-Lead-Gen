@@ -324,3 +324,229 @@ def test_import_calendar_upload(tmp_path):
 def test_miles_tolerates_text_coordinates():
     assert outreach.miles_between("32.36", "-111.12", 32.22, -110.97) > 0
     assert outreach.miles_between("", -111.0, 32.2, -110.9) is None
+
+
+def seed_real_mix(conn):
+    """What a real daily run gives: eviction notices with no address, one at
+    an apartment complex with no unit, and City code cases with addresses."""
+    for i in range(6):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                f"CV26-{i:06d}-EA",
+                "eviction",
+                "2026-09-28",
+                None,
+                plaintiff=f"CACTUS {i} LLC",
+                in_pima=True,
+                eviction_notice=True,
+            ),
+        )
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_case",
+            "CV26-000099-EA",
+            "eviction",
+            "2026-09-28",
+            "500 N BIG COMPLEX DR",
+            plaintiff="BIG COMPLEX LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute(
+        "UPDATE leads SET property_use = 'APARTMENTS 25+ UNITS', owner_name = 'BIG COMPLEX LLC', owner_entity = 1 "
+        "WHERE source_id = 'CV26-000099-EA'"
+    )
+    for i in range(8):
+        db.upsert(
+            conn,
+            Lead(
+                "tucson_code_cases",
+                f"CE-{i}",
+                "code_violation",
+                "2026-09-25",
+                f"{10 + i} E JUNK ST",
+                in_pima=True,
+                description="Property Maintenance | Active | DUMP / items in yard",
+            ),
+        )
+        conn.execute(
+            "UPDATE leads SET owner_name = ?, owner_entity = ? WHERE source_id = ?",
+            (f"OWNER {i} LLC" if i % 2 else f"PERSON {i} PAT", i % 2, f"CE-{i}"),
+        )
+    conn.commit()
+
+
+def test_default_settings_assign_more_than_zero_on_a_real_mix(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    app = App(path)  # default settings: evictions with a notice
+    preview = app.state({"list": "queue", "channel": "door_hanger"})["split"]
+    combos = preview["combos"]
+    # No eviction has a door a hanger can go to (no address, or a complex with no unit).
+    assert combos["door_hanger+phone+property_manager"] == 0 and combos["door_hanger"] == 0
+    assert combos["phone+property_manager"] == 7
+    # So the methods ticked at first are the ones the pool can work.
+    assert preview["suggested"] == ["phone", "property_manager"]
+    out = app.assign({"count": 40, "channels": preview["suggested"]})
+    assert sum(out["assigned"].values()) == 7
+
+    # All leads (code cases too): door hangers become possible.
+    conn.execute("UPDATE leads SET channel = NULL, assigned_by = NULL, assign_round = NULL")
+    conn.commit()
+    app.save_settings({"lead_view": "all"})
+    preview = app.state({"list": "queue", "channel": "door_hanger"})["split"]
+    assert preview["combos"]["door_hanger+phone+property_manager"] == 4  # company-owned code cases
+    assert preview["combos"]["door_hanger+phone"] == 8
+    assert preview["suggested"] == ["door_hanger", "phone", "property_manager"]
+    out = app.assign({"count": 40, "channels": preview["suggested"]})
+    assert sum(out["assigned"].values()) == 4
+
+
+def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn, with_address=6, without=0)
+    app = App(path)
+    app.assign({"count": 6, "channels": ["door_hanger", "phone"]})
+    # More cases for the same landlords, and new landlords.
+    for i in range(4):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_calendar",
+                f"CV26-MORE{i}-EA",
+                "eviction",
+                "2026-09-30",
+                f"{i} W MORE ST",
+                plaintiff="MESA ADDR 0 LLC" if i < 3 else "NEW LANDLORD LLC",
+                in_pima=True,
+                eviction_notice=True,
+            ),
+        )
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-OTHER-EA",
+            "eviction",
+            "2026-09-30",
+            "7 W OTHER ST",
+            plaintiff="OTHER LANDLORD LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.commit()
+    out = app.assign({"count": 3, "channels": ["door_hanger", "phone"]})
+    # The 3 followed leads don't use up the round's 3.
+    assert sum(out["followed"].values()) == 3 and sum(out["assigned"].values()) == 2
+    state = app.state()
+    mix = {r["channel"]: r["mix"] for r in state["results"]}
+    assert sum(m["followed"] for m in mix.values()) == 3
+    assert sum(m["set_by_hand"] for m in mix.values()) == 0
+    assert not any("by hand" in r for r in state["comparison"]["reasons"])
+    assert any("already working their landlord" in n for n in state["comparison"]["notes"])
+
+    # Only a method changed on the lead counts as set by hand.
+    lead = next(l for l in state["leads"] if l["source_id"] == "CV26-OTHER-EA")
+    other = "phone" if lead["channel"] == "door_hanger" else "door_hanger"
+    app.update_lead({"id": lead["id"], "fields": {"channel": other}})
+    mix = {r["channel"]: r["mix"] for r in app.state()["results"]}
+    assert sum(m["set_by_hand"] for m in mix.values()) == 1
+
+
+def test_older_followed_leads_are_recognised(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn, with_address=3, without=0)
+    ids = [r["id"] for r in conn.execute("SELECT id FROM leads ORDER BY id").fetchall()]
+    # As an older version stored them: a round, a lead that followed its
+    # landlord in that round (no round id), and one set by hand later.
+    conn.execute("UPDATE leads SET channel = 'phone', assigned_at = 'T1', assign_round = 'R1' WHERE id = ?", (ids[0],))
+    conn.execute("UPDATE leads SET channel = 'phone', assigned_at = 'T1' WHERE id = ?", (ids[1],))
+    conn.execute("UPDATE leads SET channel = 'phone', assigned_at = 'T2' WHERE id = ?", (ids[2],))
+    conn.commit()
+    mix = {r["channel"]: r["mix"] for r in App(path).state()["results"]}["phone"]
+    assert (mix["followed"], mix["set_by_hand"]) == (1, 1)
+
+
+class DownParcels(FakeParcels):
+    """The county parcel service answering with errors."""
+
+    def by_parcels(self, parcels):
+        raise ConnectionError("county service down")
+
+    def by_site_address(self, address):
+        raise ConnectionError("county service down")
+
+    def by_owner(self, name, limit=200):
+        raise ConnectionError("county service down")
+
+
+def test_assessor_outage_leaves_leads_for_the_next_run(caplog):
+    conn = db.connect(":memory:")
+    parcels = seed(conn)
+    with caplog.at_level("WARNING"):
+        counts = enrich(conn, DownParcels([]))
+    # Three code cases (by parcel) and the eviction's landlord: all failed, none marked as looked up.
+    assert counts["errors"] == 4 and counts["found"] == counts["not_found"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM leads WHERE enriched_at IS NOT NULL").fetchone()[0] == 0
+    assert "owner lookup by parcel failed" in caplog.text and "ConnectionError" in caplog.text
+    assert "landlord lookup failed for lead" in caplog.text
+    # The next run, with the county back, finds them.
+    assert enrich(conn, parcels)["found"] == 3
+
+    # A lead with only an address: the address match fails the same way.
+    conn.execute("UPDATE leads SET parcel = NULL, enriched_at = NULL WHERE source_id = 'CE-2'")
+    with caplog.at_level("WARNING"):
+        counts = enrich(conn, DownParcels([]))
+    assert counts["errors"] == 1
+    assert "owner lookup failed for lead" in caplog.text
+    assert conn.execute("SELECT enriched_at FROM leads WHERE source_id = 'CE-2'").fetchone()[0] is None
+
+
+def test_daily_summary_names_failed_lookups():
+    from leadgen import daily
+
+    summary = {"owners": {"found": 2, "not_found": 0, "errors": 3}, "geocode": {"geocoded": 0, "errors": 1}}
+    line = daily.describe(summary)
+    assert "3 owner lookups failed" in line and "1 map lookup failed" in line
+    assert daily.problems(summary) == ["3 owner lookups failed", "1 map lookup failed"]
+
+
+def test_records_request_csv_fills_addresses_of_known_cases(tmp_path):
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_real_mix(conn)
+    conn.execute(
+        "UPDATE leads SET address = '1 W GUESS ST', address_source = 'landlord' WHERE source_id = 'CV26-000001-EA'"
+    )
+    conn.execute(
+        "UPDATE leads SET address = '2 W TYPED ST', address_source = 'manual' WHERE source_id = 'CV26-000002-EA'"
+    )
+    conn.commit()
+    app = App(path, parcel_client=FakeParcels([]))
+    before = app.state({"list": "leads"})["counts"]
+    assert (before["evictions_open"], before["evictions_with_address"]) == (7, 2)
+    csv = (
+        "Case Number,Property Address,Plaintiff\n"
+        "CV26-000000-EA,10 N FOUND AVE,CACTUS 0 LLC\n"
+        "CV26-000001-EA,11 N FOUND AVE,CACTUS 1 LLC\n"
+        "CV26-000002-EA,12 N FOUND AVE,CACTUS 2 LLC\n"
+        "CV26-777777-EA,13 N NEW AVE,SOMEONE NEW LLC\n"
+    )
+    counts = app.import_file("csv_import", "records.csv", csv.encode(), lead_type="eviction")
+    assert counts["addresses_filled"] == 3 and counts["new"] == 1
+    rows = {r["source_id"]: r for r in conn.execute("SELECT * FROM leads").fetchall()}
+    assert rows["CV26-000000-EA"]["address"] == "10 N FOUND AVE"
+    assert rows["CV26-000000-EA"]["address_source"] == "import"
+    assert rows["CV26-000001-EA"]["address"] == "11 N FOUND AVE"  # a guess is replaced
+    assert rows["CV26-000002-EA"]["address"] == "2 W TYPED ST"  # what Steve typed is kept
+    after = app.state({"list": "leads"})["counts"]
+    # Three filled or kept, plus the new case from the file.
+    assert (after["evictions_open"], after["evictions_with_address"]) == (8, 5)

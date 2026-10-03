@@ -4,11 +4,19 @@ page Steve can open in a browser and filter."""
 import csv
 import html
 import json
+from datetime import date
+from typing import Any, Optional
 from urllib.parse import quote_plus
 
-from .util import az_today
+from . import leadlist, outreach
+from .util import Conn, LeadRow, az_today
 
+# The ranking Lead Desk shows, first: priority, how far the case has got
+# (filed, notice, judgment, writ), whether an eviction notice is filed, and
+# the latest real event with what it is (Filed, Judgment, Writ, Opened).
+RANK_COLUMNS = ("priority", "case_stage", "eviction_notice", "latest_event", "latest_event_date")
 COLUMNS = (
+    *RANK_COLUMNS,
     "id",
     "lead_type",
     "event_date",
@@ -42,7 +50,7 @@ COLUMNS = (
 )
 
 
-def _maps_link(row):
+def _maps_link(row: LeadRow) -> str:
     if row["lat"] is not None and row["lon"] is not None:
         return f"https://www.google.com/maps/search/?api=1&query={row['lat']},{row['lon']}"
     if row["address"]:
@@ -52,12 +60,41 @@ def _maps_link(row):
     return ""
 
 
-def write_csv(rows, path):
+def _as_dict(r: LeadRow) -> dict:
+    return dict(r) if isinstance(r, dict) else dict(zip(r.keys(), r))
+
+
+def ranked(conn: Conn, rows: list, settings: Optional[dict] = None, today: Optional[date] = None) -> list[dict]:
+    """``rows`` as dicts with the Lead Desk ranking columns added, highest
+    priority first (newest first among equal priorities), as Lead Desk sorts
+    them. Repeat owners are counted over the leads Lead Desk shows, so a lead
+    gets the same priority here as there."""
+    settings = outreach.merged_settings(settings)
+    today = today or az_today()
+    owner_counts = {
+        r["owner_name"]: int(r["n"])
+        for r in conn.execute(
+            f"SELECT owner_name, COUNT(*) AS n FROM leads WHERE {leadlist.in_view(settings)} "
+            "AND owner_name IS NOT NULL GROUP BY owner_name"
+        ).fetchall()
+    }
+    out = []
+    for r in rows:
+        d = _as_dict(r)
+        d["priority"] = d["score"] = outreach.score(d, owner_counts, today=today)
+        d["latest_label"], d["latest_date"] = outreach.latest_event(d, today)
+        d["latest_event"], d["latest_event_date"] = d["latest_label"], d["latest_date"]
+        out.append(d)
+    return leadlist.sort_leads(out, "score")
+
+
+def write_csv(rows: list, path: Any) -> int:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(COLUMNS + ("map",))
         for r in rows:
-            w.writerow([r[c] for c in COLUMNS] + [_maps_link(r)])
+            d = _as_dict(r)
+            w.writerow([d.get(c) for c in COLUMNS] + [_maps_link(r)])
     return len(rows)
 
 
@@ -89,7 +126,7 @@ a{color:var(--accent)}.muted{color:var(--muted)}
 <select id="status"><option value="">All statuses</option>__STATUSES__</select>
 </div>
 <div class="wrap"><table><thead><tr>
-<th>Date</th><th>Type</th><th>Address</th><th>Landlord / owner</th><th>Details</th><th>Status</th><th>Case</th>
+<th>Priority</th><th>Latest event</th><th>Type</th><th>Stage</th><th>Address</th><th>Landlord / owner</th><th>Details</th><th>Status</th><th>Case</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const LEADS = __DATA__;
@@ -101,7 +138,8 @@ function render(){
     (!q || JSON.stringify(l).toLowerCase().includes(q)));
   document.getElementById("count").textContent = rows.length + " of " + LEADS.length + " leads";
   document.getElementById("rows").innerHTML = rows.map(l => `<tr>
-    <td>${esc(l.event_date)}</td><td><span class="chip">${esc(l.lead_type)}</span></td>
+    <td>${esc(l.priority)}</td><td>${l.latest_event ? `<span class="muted">${esc(l.latest_event)}</span> ` : ""}${esc(l.latest_event_date || l.event_date)}</td>
+    <td><span class="chip">${esc(l.lead_type)}</span></td><td>${esc(l.case_stage)}${l.eviction_notice ? " (notice filed)" : ""}</td>
     <td>${l.address ? (l.map ? `<a href="${esc(l.map)}" target="_blank" rel="noopener">${esc(l.address)}</a>` : esc(l.address)) : '<span class="muted">address needed</span>'}</td>
     <td>${esc(l.plaintiff)}</td><td>${esc(l.description)}</td><td>${esc(l.status)}</td>
     <td class="muted">${esc(l.source_id)}</td></tr>`).join("");
@@ -112,14 +150,15 @@ render();
 """
 
 
-def write_html(rows, path, today=None):
+def write_html(rows: list, path: Any, today: Optional[date] = None) -> int:
     data = []
     for r in rows:
-        d = {c: r[c] for c in COLUMNS}
+        row = _as_dict(r)
+        d = {c: row.get(c) for c in COLUMNS}
         d["map"] = _maps_link(r)
         data.append(d)
-    types = sorted({d["lead_type"] for d in data})
-    statuses = sorted({d["status"] for d in data})
+    types = sorted({str(d["lead_type"]) for d in data})
+    statuses = sorted({str(d["status"]) for d in data})
     opts = lambda vals: "".join(f'<option value="{html.escape(v)}">{html.escape(v)}</option>' for v in vals)
     page = (
         _PAGE.replace("__DATE__", (today or az_today()).isoformat())

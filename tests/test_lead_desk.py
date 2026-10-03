@@ -3,6 +3,7 @@ the kill switch, background jobs, input checks and duplicate contacts.
 All names and addresses are made up; nothing here touches the network."""
 
 import json
+import os
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -252,6 +253,73 @@ def test_pause_stops_the_daily_check_and_lookups(tmp_path, monkeypatch):
     monkeypatch.setenv("LEADDESK_PAUSED", "1")
     status, body, _ = handle(app, "POST", "/api/find-contacts", "", {"Host": "x"}, b"{}")
     assert body.get("paused")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["fetch", "--source", "tucson_code_cases", "--days", "3"],
+        ["fetch"],
+        ["fetch", "--source", "pima_jp_calendar"],
+        ["enrich"],
+        ["geocode"],
+        ["run"],
+        ["cases", "update"],
+        ["contacts", "find"],
+    ],
+)
+def test_paused_commands_make_no_requests(tmp_path, monkeypatch, capsys, argv):
+    from leadgen import cli, sources
+
+    class Refuse:
+        def __getattr__(self, name):
+            raise AssertionError("contacted a website while paused")
+
+    monkeypatch.setenv("LEADDESK_PAUSED", "1")
+
+    def no_request(*a, **kw):
+        raise AssertionError("contacted a website while paused")
+
+    monkeypatch.setattr("requests.Session.request", no_request)
+    monkeypatch.setitem(sources.SOURCES, "tucson_code_cases", lambda: Refuse())
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--db", str(tmp_path / "l.db"), *argv])
+    assert "Lead Desk is paused" in str(e.value.code)
+
+
+def test_paused_fetch_from_saved_files_still_works(tmp_path, monkeypatch, capsys):
+    from leadgen import cli
+
+    monkeypatch.setenv("LEADDESK_PAUSED", "1")
+    csv = tmp_path / "leads.csv"
+    csv.write_text("address,date\n1 W TEST ST,2026-09-30\n")
+    cli.main(["--db", str(tmp_path / "l.db"), "fetch", "--source", "csv_import", "--file", str(csv)])
+    assert "1 new" in capsys.readouterr().out
+
+
+def test_paused_lead_desk_skips_owner_and_map_lookups(tmp_path, monkeypatch):
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    db.upsert(
+        conn, Lead("pima_jp_calendar", "CV26-1-EA", "eviction", "2026-09-30", None, in_pima=True, eviction_notice=True)
+    )
+    conn.commit()
+    app = App(path, parcel_client=NoNetwork(), geocoder=NoNetwork())
+    app.save_settings({"paused": True})
+    lead_id = app.state()["leads"][0]["id"]
+    r = app.update_lead({"id": lead_id, "fields": {"address": "1 W Test St"}})
+    assert "paused" in r["message"]
+    assert app.run_enrich({})["paused"]
+    with pytest.raises(ValueError, match="paused"):
+        app.owner_properties("EXAMPLE HOMES")
+
+
+def test_saving_nothing_is_refused(desk):
+    app, lead_id, _ = desk
+    status, body, _ = post(app, "/api/lead", {"id": lead_id})
+    assert status == 400 and body["error"] == "Nothing to save."
+    status, body, _ = post(app, "/api/lead", {"id": lead_id, "fields": {"not_a_field": 1}})
+    assert status == 400 and body["error"] == "Nothing to save."
 
 
 # ---- #8 background jobs ----------------------------------------------------------
@@ -509,8 +577,8 @@ def test_typed_address_survives_the_map_service_being_down(tmp_path):
 def test_status_change_saves_notes_sent_with_it(desk):
     app, lead_id, conn = desk
     app.update_lead({"id": lead_id, "fields": {"status": "responded", "notes": "Call back Tue", "quote_amount": "300"}})
-    row = conn.execute("SELECT status, notes, quote_amount FROM leads").fetchone()
-    assert tuple(row) == ("responded", "Call back Tue", 300)
+    row = conn.execute("SELECT status, notes, quote_cents FROM leads").fetchone()
+    assert tuple(row) == ("responded", "Call back Tue", 30000)
 
 
 def test_next_daily_run_wording():
@@ -550,3 +618,45 @@ def test_simultaneous_presses_start_one_job(tmp_path):
         t.join()
     _wait(app, "cases")
     assert results.count(True) == 1
+
+
+def test_money_is_whole_cents_with_a_ceiling(desk):
+    app, lead_id, conn = desk
+    status, body, _ = post(app, "/api/lead", {"id": lead_id, "fields": {"quote_amount": 1e308}})
+    assert status == 400 and "at most $100,000" in body["error"]
+    status, body, _ = post(app, "/api/lead", {"id": lead_id, "fields": {"job_revenue": "100000.01"}})
+    assert status == 400
+    app.update_lead({"id": lead_id, "fields": {"channel": "phone", "quote_amount": "0.10", "job_revenue": 0.2}})
+    for _ in range(3):  # three contacts at 10 cents: floats would give 0.30000000000000004
+        app.add_touches({"lead_id": lead_id, "kind": "talked", "cost": 0.1})
+        conn.execute("UPDATE touches SET created_at = '2000-01-01T00:00:00+00:00'")
+        conn.commit()
+    row = conn.execute("SELECT quote_cents, revenue_cents FROM leads").fetchone()
+    assert tuple(row) == (10, 20)
+    res = {r["channel"]: r for r in app.state()["results"]}["phone"]
+    assert res["cost"] == 0.3 and res["revenue"] == 0.2
+    lead = app.state({"lead": str(lead_id)})["lead"]
+    assert lead["quote_amount"] == 0.1 and [t["cost"] for t in lead["touches"]] == [0.1, 0.1, 0.1]
+    status, body, _ = post(app, "/api/touch", {"lead_id": lead_id, "kind": "talked", "cost": 5000})
+    assert status == 400 and "at most $1,000" in body["error"]
+
+
+@pytest.mark.skipif(bool(os.environ.get("TEST_DATABASE_URL")), reason="migrates an old SQLite file")
+def test_dollar_amounts_from_before_become_cents(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    db.connect(path).close()
+    old = sqlite3.connect(path)
+    old.execute(
+        "INSERT INTO leads (source, source_id, lead_type, first_seen, last_seen, quote_amount, job_revenue) "
+        "VALUES ('a', '1', 'eviction', 'x', 'x', 249.99, 300.1)"
+    )
+    old.execute(
+        "INSERT INTO touches (lead_id, channel, kind, cost, created_at) VALUES (1, 'phone', 'talked', 0.35, 'x')"
+    )
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert tuple(conn.execute("SELECT quote_cents, revenue_cents FROM leads").fetchone()) == (24999, 30010)
+    assert conn.execute("SELECT cost_cents FROM touches").fetchone()[0] == 35

@@ -10,6 +10,7 @@ import hashlib
 import io
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Iterator, Optional
 
 from ..models import Lead
 from ..util import decode_text, pick
@@ -29,7 +30,7 @@ ALIASES = {
 }
 
 
-def _iso_date(value):
+def _iso_date(value: Optional[str]) -> Optional[str]:
     """ISO date from the common spreadsheet formats; None when unreadable."""
     if not value:
         return None
@@ -41,7 +42,9 @@ def _iso_date(value):
     return None
 
 
-def read_csv_text(text, name="upload.csv", source_name="csv_import", default_type="manual"):
+def read_csv_text(
+    text: str, name: str = "upload.csv", source_name: str = "csv_import", default_type: str = "manual"
+) -> Iterator[Lead]:
     """Leads from CSV text. A date that can't be read is left empty, and the
     lead's ``raw["unreadable_date"]`` keeps what the file said."""
     for row in csv.DictReader(io.StringIO(text)):
@@ -72,7 +75,7 @@ def read_csv_text(text, name="upload.csv", source_name="csv_import", default_typ
         )
 
 
-def read_csv(path, source_name="csv_import", default_type="manual"):
+def read_csv(path: Any, source_name: str = "csv_import", default_type: str = "manual") -> Iterator[Lead]:
     text = decode_text(Path(path).read_bytes())
     yield from read_csv_text(text, Path(path).name, source_name, default_type)
 
@@ -81,7 +84,9 @@ class CsvImport(Source):
     name = "csv_import"
     description = "Any CSV of leads (records requests, writ lists, manual lists)"
 
-    def fetch(self, since, until, paths=None, lead_type="manual", **options):
+    def fetch(
+        self, since: str, until: str, paths: Optional[list] = None, lead_type: str = "manual", **options: Any
+    ) -> Iterator[Lead]:
         if not paths:
             raise SystemExit("csv_import needs --file path/to/leads.csv")
         for p in paths:

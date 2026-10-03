@@ -1,6 +1,7 @@
 """Violation-code helpers shared by the Tucson source and lead scoring."""
 
 import re
+from typing import Optional
 
 _CODE_RE = re.compile(r"^\s*([A-Z]{2,8})\s*[/:-]")
 
@@ -17,7 +18,7 @@ CODE_LABELS = {
 }
 
 
-def code_of(description):
+def code_of(description: Optional[str]) -> Optional[str]:
     """Leading violation code of a code-case description, e.g. "WEEDS"."""
     text = description or ""
     # Our stored description is "CaseType | status | DESCRIPTION".

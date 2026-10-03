@@ -101,12 +101,29 @@ def test_lead_desk_shows_only_evictions_with_notice(tmp_path):
 
     state = app.state()
     assert [l["source_id"] for l in state["leads"]] == ["CV26-012345-EA"]
-    assert state["view_counts"] == {"all": 3, "evictions": 2, "eviction_notice": 1, "unchecked": 0}
+    assert state["view_counts"] == {"all": 3, "evictions": 2, "eviction_notice": 1, "unchecked": 0, "code_cases": 1}
 
     app.save_settings({"lead_view": "evictions"})
     assert len(app.state()["leads"]) == 2
     app.save_settings({"lead_view": "all"})
     assert len(app.state()["leads"]) == 3
+
+
+def test_view_counts_follow_the_status_filter(tmp_path):
+    from leadgen.models import Lead
+
+    path = tmp_path / "l.db"
+    app = App(path)
+    with app.conn() as conn:
+        for i in range(3):
+            db.upsert(conn, Lead("tucson_code_cases", f"T{i}", "code_violation", address=f"{i} MAIN ST", in_pima=True))
+        conn.execute("UPDATE leads SET status = 'won' WHERE source_id = 'T0'")
+        conn.commit()
+    app.save_settings({"lead_view": "all"})
+    state = app.state({"list": "leads", "status": "open"})
+    assert state["view_counts"]["all"] == state["view_counts"]["code_cases"] == state["list"]["total"] == 2
+    state = app.state({"list": "leads", "status": ""})
+    assert state["view_counts"]["all"] == state["list"]["total"] == 3
 
 
 def test_update_cases_rereads_open_evictions(tmp_path):

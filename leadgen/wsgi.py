@@ -15,23 +15,24 @@ Setup steps: docs/VERCEL.md.
 import base64
 import hmac
 import os
+from typing import Any, Iterable, Optional
 
 from .web import App, encode_body, handle
 
 REALM = "Lead Desk"
-_app = None
+_app: Optional[App] = None
 
 
-def database_url():
+def database_url() -> str:
     return os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
 
 
-def missing_settings():
+def missing_settings() -> list[str]:
     missing = [] if database_url() else ["DATABASE_URL (connect Neon under Storage)"]
     return missing + [k for k in ("LEADDESK_PASSWORD",) if not os.environ.get(k)]
 
 
-def password_ok(header, password):
+def password_ok(header: Optional[str], password: str) -> bool:
     """True when an ``Authorization: Basic ...`` header carries ``password``."""
     if not header or not header.startswith("Basic "):
         return False
@@ -55,17 +56,17 @@ password goes in Settings, Environment Variables.</p><ul>{items}</ul>
 class Headers:
     """``.get`` over a WSGI environ, the way ``handle`` reads headers."""
 
-    def __init__(self, environ):
+    def __init__(self, environ: dict) -> None:
         self.environ = environ
 
-    def get(self, name, default=None):
+    def get(self, name: str, default: Any = None) -> Any:
         key = name.upper().replace("-", "_")
         if key in ("CONTENT_TYPE", "CONTENT_LENGTH"):
             return self.environ.get(key, default)
         return self.environ.get("HTTP_" + key, default)
 
 
-def _respond(start_response, status, body, ctype, extra=()):
+def _respond(start_response: Any, status: int, body: Any, ctype: str, extra: Iterable = ()) -> list[bytes]:
     data = encode_body(body)
     reasons = {
         200: "OK",
@@ -90,14 +91,14 @@ def _respond(start_response, status, body, ctype, extra=()):
     return [data]
 
 
-def get_app():
+def get_app() -> App:
     global _app
     if _app is None:
         _app = App(database_url(), serverless=True)
     return _app
 
 
-def app(environ, start_response):
+def app(environ: dict, start_response: Any) -> list[bytes]:
     missing = missing_settings()
     if missing:
         items = "".join(f"<li><code>{k}</code></li>" for k in missing)

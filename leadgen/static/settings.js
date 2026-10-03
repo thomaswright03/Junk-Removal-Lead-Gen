@@ -15,8 +15,9 @@ function renderSettings() {
   const st = S.settings;
   $("#tab-settings").innerHTML = `
     <div class="card"><h2>Pause</h2>
-      <p class="hint">Stops everything that contacts other websites: the daily check, court case reads and all phone and email lookups (including paid Google lookups). Use it if the court asks you to stop or the Google bill rises. Your leads and notes stay as they are.${S.paused_by_env ? " <strong>LEADDESK_PAUSED is set on the server, so Lead Desk stays paused until it is removed there.</strong>" : ""}</p>
-      <label class="ch"><input type="checkbox" id="sPaused" ${st.paused ? "checked" : ""}> Pause Lead Desk</label>
+      <p class="hint">Stops everything that contacts other websites: the daily check, court case reads, owner and map lookups, City code case fetches, and all phone and email lookups (including paid Google lookups). Use it if the court asks you to stop or the Google bill rises. Your leads and notes stay as they are.${S.paused_by_env ? " <strong>LEADDESK_PAUSED is set on the server, so Lead Desk stays paused until it is removed there.</strong>" : ""}</p>
+      <label class="ch"><input type="checkbox" id="sPaused" ${st.paused ? "checked" : ""} aria-describedby="sPausedNow"> Pause Lead Desk</label>
+      <p class="hint" id="sPausedNow"><strong>Takes effect as soon as you tick or untick it</strong>; it doesn't wait for “Save settings”. Everything below this box is saved with the button at the bottom.</p>
     </div>
     <div class="card"><h2>Business</h2>
       <div class="grid4">
@@ -49,13 +50,17 @@ function renderSettings() {
       <label>Theme <select id="sTheme">${[["system", "Same as this computer"], ["light", "Light"], ["dark", "Dark"]].map(([v, t]) => `<option value="${v}" ${theme() === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
       <span class="hint">Saved in this browser.</span>
     </div>
-    <button class="btn primary" id="sSave">Save settings</button>`;
+    <button class="btn primary" id="sSave">Save settings</button> <span class="hint">Saves everything above except Pause (which applies at once) and Theme (saved in this browser).</span>`;
   $("#sTheme").onchange = e => setTheme(e.target.value);
   for (const id of ["sGoogleLimit", "sGoogleDaily"]) $("#" + id + "None").onchange = e => { $("#" + id).disabled = e.target.checked; };
   $("#sPaused").onchange = e => act(() => api("/api/settings", { paused: e.target.checked }),
     e.target.checked ? "Paused: nothing will be checked or looked up until you turn this off." : "Lead Desk is running again.", e.target);
   const gc = $("#sGoogleClear");
-  if (gc) gc.onclick = e => { if (confirm("Remove the saved Google key? Phone lookups will then use only OpenStreetMap and company websites until you add a key again.")) act(() => api("/api/settings", { clear_google_key: true }), "Google key removed", e.currentTarget); };
+  if (gc) gc.onclick = async e => {
+    const btn = e.currentTarget;
+    if (await confirmBox({ title: "Remove the saved Google key?", body: "Phone lookups will then use only OpenStreetMap and company websites until you add a key again.", ok: "Remove key", danger: true }))
+      act(() => api("/api/settings", { clear_google_key: true }), "Google key removed", btn);
+  };
   const lim = id => $("#" + id + "None").checked ? null : ($("#" + id).value === "" ? 0 : Number($("#" + id).value));
   $("#sSave").onclick = e => {
     const costs = {}, tracking = {}, templates = {};

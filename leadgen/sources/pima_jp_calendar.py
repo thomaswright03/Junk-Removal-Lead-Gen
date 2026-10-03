@@ -24,8 +24,9 @@ docs/DATA_SOURCES.md for how to fill in addresses.
 
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from typing import Any, Iterator, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -58,13 +59,13 @@ _HEADER_KEYS = {
 }
 
 
-def _iso(m):
+def _iso(m: re.Match) -> str:
     month, day, year = (int(x) for x in m.groups())
     return datetime(year, month, day).date().isoformat()
 
 
-def _header_map(cells):
-    mapping = {}
+def _header_map(cells: list[str]) -> dict[str, int]:
+    mapping: dict[str, int] = {}
     for i, text in enumerate(cells):
         up = text.upper()
         for key, needles in _HEADER_KEYS.items():
@@ -74,16 +75,16 @@ def _header_map(cells):
     return mapping
 
 
-def _clean(text):
+def _clean(text: Optional[str]) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def parse_calendar_html(html, assume_eviction=False):
+def parse_calendar_html(html: str, assume_eviction: bool = False) -> list[Lead]:
     """Return Leads for the eviction rows in a saved calendar results page."""
     soup = BeautifulSoup(html, "html.parser")
-    leads = {}
+    leads: dict[str, Lead] = {}
     for table in soup.find_all("table"):
-        header = {}
+        header: dict[str, int] = {}
         for tr in table.find_all("tr"):
             if tr.find_parent("table") is not table:
                 continue
@@ -102,14 +103,14 @@ def parse_calendar_html(html, assume_eviction=False):
             if not assume_eviction and not EVICTION_RE.search(row_text):
                 continue
 
-            def col(key, header=header, cells=cells):
+            def col(key: str, header: dict[str, int] = header, cells: list[str] = cells) -> Optional[str]:
                 i = header.get(key)
                 return cells[i] if i is not None and i < len(cells) else None
 
             plaintiff, defendant = col("plaintiff"), col("defendant")
             if not (plaintiff and defendant) and header.get("parties") is not None and header["parties"] < len(tds):
                 # Live calendar: one party per line, "NAME (Plaintiff)".
-                roles = {"P": [], "D": []}
+                roles: dict[str, list[str]] = {"P": [], "D": []}
                 for line in tds[header["parties"]].stripped_strings:
                     m = ROLE_RE.match(_clean(line))
                     if m:
@@ -141,7 +142,7 @@ def parse_calendar_html(html, assume_eviction=False):
                 plaintiff=plaintiff,
                 defendant=defendant,
                 description=_clean(col("event") or "Eviction Action hearing"),
-                url=urljoin(CASE_PAGE_BASE, link["href"]) if link else CALENDAR_URL,
+                url=urljoin(CASE_PAGE_BASE, str(link["href"])) if link else CALENDAR_URL,
                 raw={"cells": cells},
             )
     return list(leads.values())
@@ -151,7 +152,7 @@ RESULT_URL = CALENDAR_URL + "SearchResult.aspx"
 GRID = "ctl00$MainContent$searchResultDView"
 
 
-def _form_fields(html):
+def _form_fields(html: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     form = soup.find("form")
     if form is None:
@@ -163,7 +164,7 @@ def _form_fields(html):
     }
 
 
-def has_page_link(html, n):
+def has_page_link(html: str, n: int) -> bool:
     """True when the results pager links to page ``n``. ASP.NET writes the
     postback quotes as ``'`` or ``&#39;`` depending on the page."""
     return re.search(rf"Page\${n}(?:'|&#39;|&#039;|&quot;)", html) is not None
@@ -174,20 +175,20 @@ class CalendarClient:
     "Eviction Actions", Event Type "Eviction Action", a date range, then every
     results page (50 rows each)."""
 
-    def __init__(self, session=None, delay=1.5, max_pages=60):
+    def __init__(self, session: Any = None, delay: float = 1.5, max_pages: int = 60) -> None:
         self.session = session or requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT
         self.delay = delay
         self.max_pages = max_pages
         self.pages = 0
 
-    def _post(self, data):
+    def _post(self, data: dict) -> str:
         time.sleep(self.delay)
         resp = self.session.post(RESULT_URL, data=data, timeout=90)
         resp.raise_for_status()
         return resp.text
 
-    def search(self, start, end):
+    def search(self, start: date, end: date) -> Iterator[str]:
         """Yield the HTML of each results page for hearings from ``start`` to ``end`` (dates)."""
         page = self.session.get(CALENDAR_URL, timeout=30)
         page.raise_for_status()
@@ -222,7 +223,15 @@ class PimaJpCalendar(Source):
     name = "pima_jp_calendar"
     description = "Pima County Justice Court eviction hearings (live calendar search, or saved pages with --file)"
 
-    def fetch(self, since, until, paths=None, assume_eviction=False, client=None, **options):
+    def fetch(
+        self,
+        since: str,
+        until: str,
+        paths: Optional[list] = None,
+        assume_eviction: bool = False,
+        client: Any = None,
+        **options: Any,
+    ) -> Iterator[Lead]:
         """Saved pages when ``paths`` is given; otherwise the live calendar
         from ``since`` to ``until`` (hearing dates, ISO strings)."""
         if not paths:

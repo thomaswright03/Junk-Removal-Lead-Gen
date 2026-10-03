@@ -125,7 +125,7 @@ def test_enrich_landlords_fills_owner_and_property():
         db.upsert(conn, l)
     rows = [parcel("P1", "SAGUARO VISTA APARTMENTS LLC", "100 W SAGUARO VISTA")]
     counts = enrich_landlords(conn, FakeParcels(rows))
-    assert counts == {"found": 1, "with_property": 1, "not_found": 1}
+    assert counts == {"found": 1, "with_property": 1, "not_found": 1, "errors": 0}
     r = conn.execute("SELECT * FROM leads WHERE source_id = 'CV26-012345-EA'").fetchone()
     assert r["address"] == "100 W SAGUARO VISTA" and r["lat"] == 32.3
     assert r["owner_name"] == "SAGUARO VISTA APARTMENTS LLC" and r["enriched_at"]

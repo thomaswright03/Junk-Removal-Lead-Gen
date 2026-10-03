@@ -104,6 +104,23 @@ dt { color: var(--muted); font-size: 13px; } dd { margin: 0; overflow-wrap: anyw
 .tabs2 button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .mt8 { margin-top: 8px; } .mt16 { margin-top: 16px; } .mb12 { margin-bottom: 12px; }
 #print { display: none; }
+/* A button that reads as a link (Details, Clear, Other choices). */
+.linkbtn { background: none; border: 0; padding: 0 4px; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.warn-sign { color: var(--warn); font-weight: 700; cursor: help; }
+#subDetails { max-width: 900px; }
+.m-only { display: none; }
+.searchrow { display: flex; gap: 8px; flex: 1; min-width: 200px; }
+.searchrow input[type=search] { flex: 1; min-width: 0; }
+ol.guide { margin: 0 0 12px; padding-left: 20px; }
+/* The lead drawer is a dialog: the page behind it doesn't scroll. */
+body:has(.drawer.open) { overflow: hidden; }
+/* The confirm dialog (instead of the browser's OK / Cancel box). */
+dialog#confirmBox { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--fg); padding: 20px; max-width: min(440px, calc(100% - 32px)); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+dialog#confirmBox::backdrop { background: rgba(0,0,0,.4); }
+dialog#confirmBox h2 { font-size: 16px; margin: 0 0 8px; }
+dialog#confirmBox p { margin: 0 0 16px; color: var(--muted); }
+.row.end { justify-content: flex-end; }
+.btn.danger-fill { background: var(--bad); border-color: var(--bad); color: var(--panel); }
 
 /* Phones and narrow windows: the header scrolls away with the page, nothing
    is wider than the screen, lead tables become one card per lead, and every
@@ -121,6 +138,10 @@ dt { color: var(--muted); font-size: 13px; } dd { margin: 0; overflow-wrap: anyw
   .wide-pick { width: 100%; }
   .wide-pick select { flex: 1; min-width: 0; width: 100%; }
   .filters > * { flex: 1 1 100%; min-width: 0; }
+  .m-only { display: inline-flex; }
+  #leadTools:not(.open) { display: none; }
+  .filters:not(.open) > select { display: none; }
+  .linkbtn { min-height: 44px; }
   .filters input[type=search] { min-width: 0; }
   #cLinks { min-width: 0 !important; flex: 1 1 100%; }
   a[href^="tel:"], a[href^="mailto:"] { display: inline-flex; align-items: center; min-height: 44px; }

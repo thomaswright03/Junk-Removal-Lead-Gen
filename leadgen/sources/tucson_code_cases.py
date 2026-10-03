@@ -11,6 +11,7 @@ the other towns are not in this layer.
 """
 
 from datetime import datetime
+from typing import Any, Iterator, Optional
 
 import requests
 
@@ -64,21 +65,21 @@ KEYWORDS = (
 )
 
 
-def _epoch_ms_to_date(value):
+def _epoch_ms_to_date(value: Any) -> Optional[str]:
     if value in (None, ""):
         return None
     return datetime.fromtimestamp(value / 1000, tz=ARIZONA).date().isoformat()
 
 
-def violation_code(description):
+def violation_code(description: Optional[str]) -> Optional[str]:
     return code_of(description)
 
 
-def is_closed(attrs):
+def is_closed(attrs: dict) -> bool:
     return str(attrs.get("status") or "").upper().startswith("CLOSED")
 
 
-def matches_keywords(attrs):
+def matches_keywords(attrs: dict) -> bool:
     """True when the case looks like something Steve could haul away."""
     description = str(attrs.get("DESCRIPTION") or "").upper()
     if str(attrs.get("CaseType") or "").upper() in CLEANOUT_CASE_TYPES:
@@ -88,7 +89,7 @@ def matches_keywords(attrs):
     return any(k in description for k in KEYWORDS)
 
 
-def feature_to_lead(feature):
+def feature_to_lead(feature: dict) -> Lead:
     a = feature.get("attributes") or {}
     geom = feature.get("geometry") or {}
     lat = a.get("LAT") or geom.get("y")
@@ -115,11 +116,11 @@ class TucsonCodeCases(Source):
     name = "tucson_code_cases"
     description = "City of Tucson code-enforcement cases (junk/debris/vacant), last 60 days"
 
-    def __init__(self, session=None):
-        self.session = session or requests.Session()
+    def __init__(self, session: Any = None) -> None:
+        self.session: Any = session or requests.Session()
         self.session.headers["User-Agent"] = config.USER_AGENT
 
-    def _query(self, where, offset):
+    def _query(self, where: str, offset: int) -> dict:
         resp = self.session.get(
             f"{LAYER_URL}/query",
             params={
@@ -140,7 +141,9 @@ class TucsonCodeCases(Source):
             raise RuntimeError(f"ArcGIS error: {payload['error']}")
         return payload
 
-    def fetch(self, since, until, paths=None, all_cases=False, **options):
+    def fetch(
+        self, since: str, until: str, paths: Optional[list] = None, all_cases: bool = False, **options: Any
+    ) -> Iterator[Lead]:
         # Upper bound is applied client-side; not every ArcGIS server accepts
         # date arithmetic in the where clause.
         where = f"OPENEDDATE >= DATE '{since}'"

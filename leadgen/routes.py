@@ -8,6 +8,7 @@ import sys
 import traceback
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
 from .contacts import skiptrace_csv
@@ -18,7 +19,7 @@ STATIC_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; char
 _STATIC_NAME = re.compile(r"^/static/([a-z0-9_-]+\.(?:css|js))$")
 
 
-def static_file(path):
+def static_file(path: str) -> Optional[tuple[bytes, str]]:
     """(body, content type) of one of the page's own files, or None."""
     m = _STATIC_NAME.match(path)
     if not m or not (STATIC / m.group(1)).is_file():
@@ -27,7 +28,7 @@ def static_file(path):
     return (STATIC / name).read_bytes(), STATIC_TYPES[Path(name).suffix]
 
 
-def handle(app, method, path, query, headers, body):
+def handle(app: Any, method: str, path: str, query: str, headers: Any, body: bytes) -> tuple[int, Any, str]:
     """Answer one request. ``headers`` needs only ``.get``. Returns
     (status, body, content type); a body that isn't bytes or str is JSON."""
     q = parse_qs(query or "", keep_blank_values=True)
@@ -132,7 +133,7 @@ ACTIONS = {
 }
 
 
-def encode_body(body):
+def encode_body(body: Any) -> bytes:
     if isinstance(body, bytes):
         return body
     if isinstance(body, str):
@@ -141,12 +142,12 @@ def encode_body(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    app = None
+    app: Any = None
 
-    def log_message(self, fmt, *args):  # keep the terminal quiet
+    def log_message(self, format: str, *args: Any) -> None:  # keep the terminal quiet
         pass
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code: int, body: Any, ctype: str = "application/json") -> None:
         data = encode_body(body)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -155,17 +156,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _body(self):
+    def _body(self) -> bytes:
         n = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(n) if n else b""
 
-    def _handle(self, method):
+    def _handle(self, method: str) -> None:
         url = urlparse(self.path)
         body = self._body() if method == "POST" else b""
         self._send(*handle(self.app, method, url.path, url.query, self.headers, body))
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         self._handle("GET")
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         self._handle("POST")

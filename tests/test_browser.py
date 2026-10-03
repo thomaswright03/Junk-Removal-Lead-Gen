@@ -124,9 +124,87 @@ def test_open_a_lead_with_the_keyboard_and_close_it(server, page):
     page.keyboard.press("Enter")
     assert page.locator("#drawer.open").is_visible()
     assert page.evaluate("document.activeElement.id") == "dTitle"
+    # A dialog for assistive tech: Tab stays inside it, the page behind doesn't scroll.
+    assert page.get_attribute("#drawer", "role") == "dialog" and page.get_attribute("#drawer", "aria-modal") == "true"
+    assert page.evaluate("getComputedStyle(document.body).overflow") == "hidden"
+    for _ in range(60):
+        page.keyboard.press("Tab")
+        assert page.evaluate("document.getElementById('drawer').contains(document.activeElement)")
     page.keyboard.press("Escape")
-    assert not page.locator("#drawer.open").is_visible()
-    assert page.evaluate("document.activeElement.dataset.id") == str(row.get_attribute("data-id"))
+    page.wait_for_selector("#drawer.open", state="hidden")
+    page.wait_for_function(f"document.activeElement.dataset.id === '{row.get_attribute('data-id')}'")
+    assert page.evaluate("getComputedStyle(document.body).overflow") != "hidden"
+
+
+def test_leaving_unsaved_typing_asks_in_the_page(server, page):
+    url, app, _ = server
+    page.goto(url)
+    lead_row(page, "10 E Sample St").click()
+    page.fill("#dNotes", "call back Tuesday")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#confirmBox[open]")
+    assert page.inner_text("#confirmOk") == "Leave without saving"
+    page.keyboard.press("Escape")  # cancels the question, keeps the lead open
+    page.wait_for_selector("#confirmBox:not([open])", state="attached")
+    assert page.locator("#drawer.open").is_visible()
+    page.click("#dClose")
+    page.click("#confirmOk")
+    page.wait_for_selector("#drawer.open", state="hidden")
+
+
+def test_details_priority_and_header_are_readable(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    conn.execute(
+        "UPDATE leads SET description = 'Case open | Eviction notice filed | Eviction Action Oct 5, 2026 9:00 AM', "
+        "case_status = 'Open', next_court_date = '2026-10-05 09:00' WHERE source_id = 'CV26-000001-EA'"
+    )
+    db.put_settings(
+        conn,
+        {
+            "last_daily_run": "2026-10-03",
+            "last_daily_summary": {"finished_at": "2026-10-03T13:05:00+00:00", "owners": {"found": 1, "errors": 2}},
+        },
+    )
+    conn.commit()
+    page.goto(url)
+    # One short status line with a warning sign; the full summary under Details.
+    page.wait_for_selector("#sub .warn-sign")
+    assert "open leads" in page.inner_text("#sub") and "Last check" in page.inner_text("#sub")
+    assert page.is_hidden("#subDetails")
+    page.click("#subMore")
+    page.wait_for_selector("#subDetails >> text=2 owner lookups failed")
+    # Hovering the priority shows what it is made of.
+    chip = lead_row(page, "Example Homes").locator(".score")
+    assert chip.get_attribute("title").startswith("Priority ") and "Eviction 35" in chip.get_attribute("title")
+    # Details: readable lines, nothing the drawer already shows.
+    lead_row(page, "Example Homes").click()
+    page.wait_for_selector("#drawer.open")
+    assert "Eviction 35" in page.inner_text("#dWhy")
+    text = page.inner_text("#drawer dl")
+    assert " | " not in text and "Eviction Action" not in text
+    # An eviction with no address says how to find it.
+    assert "Find the address" in page.inner_text("#drawer") and "search “Doe, Pat”" in page.inner_text("#drawer")
+
+
+def test_empty_search_says_what_was_searched(server, page):
+    url, app, path = server
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.fill("#q", "zzzzqqq")
+    page.wait_for_selector("#leadTable >> text=No leads match “zzzzqqq”")
+    page.click("#fClear")
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    assert page.input_value("#q") == ""
+
+
+def test_code_case_coverage_and_counts_are_shown(server, page):
+    url, app, path = server
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    assert "1 of them code cases" in page.inner_text("#fView")
+    assert "City of Tucson only" in page.inner_text("#tab-leads")
+    assert "0 of 1 open eviction lead has a confirmed or typed property address" in page.inner_text("#addrShare")
 
 
 def test_notes_survive_a_status_change_and_a_refresh(server, page):
@@ -141,8 +219,8 @@ def test_notes_survive_a_status_change_and_a_refresh(server, page):
     lead_row(page, "10 E Sample St").click()
     assert page.input_value("#dNotes") == "Owner wants a quote Friday"
     assert page.input_value("#dQuote") == "350"
-    row = db.connect(path).execute("SELECT status, notes, quote_amount FROM leads WHERE source_id = 'CE-1'").fetchone()
-    assert tuple(row) == ("responded", "Owner wants a quote Friday", 350)
+    row = db.connect(path).execute("SELECT status, notes, quote_cents FROM leads WHERE source_id = 'CE-1'").fetchone()
+    assert tuple(row) == ("responded", "Owner wants a quote Friday", 35000)
 
     # Unsaved typing survives another action (logging a contact) and the background refresh.
     page.select_option("#dChannel", "door_hanger")
@@ -187,15 +265,30 @@ def test_import_a_csv_and_see_the_leads(server, page, tmp_path):
     assert lead_row(page, "77 W Sample Rd").is_visible()
 
 
-def test_split_leads_asks_first(server, page):
+def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     url, app, path = server
     page.goto(url)
     page.click("#nav [data-tab=outreach]")
-    page.uncheck(".aCh[value=door_hanger]")
-    page.once("dialog", lambda d: d.accept())
+    # Only methods the leads can all be worked by are ticked at first.
+    page.wait_for_selector("#aSplit >> text=1 lead")
+    assert page.is_checked(".aCh[value=door_hanger]") and not page.is_checked(".aCh[value=property_manager]")
+    # Ticking a method no lead fits says so before anything is pressed, and offers the fix.
+    page.check(".aCh[value=property_manager]")
+    page.wait_for_selector("#aSplit >> text=No unassigned lead")
+    assert page.is_disabled("#aGo")
+    page.click("#aDrop")
+    page.wait_for_selector("#aSplit >> text=1 lead")
+    # The page's own dialog, with the action on the button; Escape cancels.
     page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
+    assert page.inner_text("#confirmOk") == "Assign 1 lead"
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#confirmBox:not([open])", state="attached")
+    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 0
+    page.click("#aGo")
+    page.click("#confirmOk")
     page.wait_for_selector("text=Assigned:")
-    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] >= 1
+    assert db.connect(path).execute("SELECT COUNT(*) FROM leads WHERE channel IS NOT NULL").fetchone()[0] == 1
 
 
 def test_calls_queue_shows_a_script_for_each_kind_of_lead(server, page):
@@ -328,6 +421,9 @@ def test_works_on_a_phone(server, page):
         assert page.evaluate("document.documentElement.scrollWidth") == 375, tab
     page.goto(url)
     page.wait_for_selector("#leadTable tbody tr[data-id]")
+    # The first lead is on screen without scrolling.
+    first = page.locator("#leadTable tbody tr[data-id]").first.bounding_box()
+    assert first["y"] + 40 < 740, first
     page.mouse.wheel(0, 1500)
     page.wait_for_function("window.scrollY > 500")
     assert page.evaluate("Math.max(0, document.querySelector('header').getBoundingClientRect().bottom)") <= 110

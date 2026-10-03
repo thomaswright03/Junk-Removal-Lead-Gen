@@ -8,6 +8,7 @@ requests, leadlist.py builds the lead list, forms.py checks what the page
 sends and jobs.py runs the long jobs.
 """
 
+import logging
 import os
 import sys
 import threading
@@ -16,13 +17,15 @@ import webbrowser
 from datetime import timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Optional
 
 from . import daily, db, leadlist, outreach
 from .contacts import clean_email, clean_phone, import_contacts
-from .enrich import ParcelClient, enrich, enrich_lead, fix_inferred_addresses, owner_fields
+from .enrich import LANDLORD_SOURCE, ParcelClient, enrich, enrich_lead, fix_inferred_addresses, owner_fields
 from .forms import (
     DUPLICATE_TOUCH_SECONDS,
     EDITABLE,
+    MAX_CONTACT_CENTS,
     NOTES_LIMIT,
     UNRECOGNISED_FILE,
     NotFound,
@@ -39,11 +42,14 @@ from .geocode import CensusGeocoder
 from .jobs import Job, JobRunner, next_daily_run, start_github_check
 from .leadlist import LEAD_FIELDS, LEAD_VIEWS
 from .lookup import GoogleBudget
+from .models import Lead
 from .routes import ACTIONS, Handler, encode_body, handle
 from .sources.csv_import import read_csv_text
 from .sources.pima_jp_calendar import parse_calendar_html
 from .sources.pima_jp_case import is_case_page, parse_case_html
-from .util import az_today, decode_text, env_flag, is_paused, now_iso
+from .util import PAUSED_MESSAGE, Conn, az_today, decode_text, env_flag, is_paused, now_iso
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "ACTIONS",
@@ -63,16 +69,16 @@ __all__ = [
 class App(JobRunner):
     def __init__(
         self,
-        db_path,
-        stale_days=30,
-        parcel_client=None,
-        geocoder=None,
-        case_client=None,
-        calendar=None,
-        code_cases=None,
-        providers=None,
-        serverless=False,
-    ):
+        db_path: Any,
+        stale_days: int = 30,
+        parcel_client: Any = None,
+        geocoder: Any = None,
+        case_client: Any = None,
+        calendar: Any = None,
+        code_cases: Any = None,
+        providers: Optional[list] = None,
+        serverless: bool = False,
+    ) -> None:
         self.db_path = db_path
         # Online (Vercel): a request can't keep running after it answers, so
         # the daily check runs on GitHub Actions instead (see wsgi.py).
@@ -91,24 +97,28 @@ class App(JobRunner):
         self.job_lock = threading.Lock()
         with self.conn() as conn:
             outreach.retire_channels(conn)
+            if not db.get_settings(conn).get("followed_tagged"):
+                outreach.tag_followed_leads(conn)
+                db.put_settings(conn, {"followed_tagged": True})
+                conn.commit()
             fix_inferred_addresses(conn)
 
-    def conn(self):
+    def conn(self) -> Conn:
         return db.connect(self.db_path)
 
     # ---- reads -------------------------------------------------------------
 
-    def settings(self, conn):
+    def settings(self, conn: Conn) -> dict:
         return outreach.merged_settings(db.get_settings(conn))
 
-    def leads(self, conn, settings=None):
+    def leads(self, conn: Conn, settings: Optional[dict] = None) -> list[dict]:
         """Every lead in the chosen view, with its contact history (for
         Assign leads, the phone-lookup list and scripts; the page gets one
         page at a time, see state)."""
         settings = settings or self.settings(conn)
         return leadlist.attach_touches(conn, leadlist.lead_dicts(conn, settings), everything=True)
 
-    def status(self, conn=None, settings=None):
+    def status(self, conn: Conn = None, settings: Optional[dict] = None) -> dict:
         """What the page polls while a check or job runs: small and quick."""
         if conn is None:
             with self.conn() as c:
@@ -123,13 +133,17 @@ class App(JobRunner):
                 if settings.get("last_daily_summary")
                 else None,
                 "next_run": next_daily_run(settings, self.serverless),
+                # When the last check finished, and what went wrong in it (the
+                # header shows a warning sign when anything did).
+                "finished_at": (settings.get("last_daily_summary") or {}).get("finished_at"),
+                "problems": daily.problems(settings.get("last_daily_summary")),
             },
             "jobs": {name: job.public() for name, job in self.jobs.items()},
             "paused": is_paused(settings),
             "paused_by_env": env_flag("LEADDESK_PAUSED"),
         }
 
-    def state(self, params=None):
+    def state(self, params: Optional[dict] = None) -> dict:
         """Everything the page shows. Called with params (the page's
         request) it carries one page of leads (list) and the open lead
         (lead) instead of every lead, so its size doesn't grow with the
@@ -145,24 +159,13 @@ class App(JobRunner):
             budget = GoogleBudget(conn)
             public["google_used_this_month"] = budget.used()
             public["google_used_today"] = budget.used_today()
-            counts = conn.execute(
-                "SELECT COUNT(*) AS all_, "
-                "SUM(CASE WHEN lead_type = 'eviction' THEN 1 ELSE 0 END) AS evictions, "
-                f"SUM(CASE WHEN {LEAD_VIEWS['eviction_notice']} THEN 1 ELSE 0 END) AS eviction_notice, "
-                # Case pages not read yet: hidden from the default view until they are.
-                "SUM(CASE WHEN lead_type = 'eviction' AND case_checked_at IS NULL "
-                "AND url LIKE '%jcDisplayCase%' THEN 1 ELSE 0 END) AS unchecked "
-                "FROM leads WHERE duplicate_of IS NULL AND (in_pima = 1 OR in_pima IS NULL)"
-            ).fetchone()
             results = outreach.results(conn)
             out = {
                 **self.status(conn, settings),
-                "view_counts": {
-                    "all": counts["all_"] or 0,
-                    "evictions": counts["evictions"] or 0,
-                    "eviction_notice": counts["eviction_notice"] or 0,
-                    "unchecked": counts["unchecked"] or 0,
-                },
+                # Counted with the Leads tab's Status filter, so they match its list.
+                "view_counts": leadlist.view_counts(
+                    conn, params.get("status", "open") if params and params.get("list") == "leads" else "open"
+                ),
                 "counts": leadlist.counts(conn, settings),
                 "settings": public,
                 "channels": outreach.CHANNELS,
@@ -179,27 +182,37 @@ class App(JobRunner):
                 return out
             if params.get("list"):
                 out["list"] = leadlist.page(conn, settings, params)
-            lead_id = params.get("lead")
-            out["lead"] = leadlist.one_lead(conn, settings, int(lead_id)) if str(lead_id or "").isdigit() else None
+            if params.get("list") == "queue":  # the Outreach tab
+                out["split"] = self.split_preview(conn, settings)
+            lead_id = str(params.get("lead") or "")
+            out["lead"] = leadlist.one_lead(conn, settings, int(lead_id)) if lead_id.isdigit() else None
             return out
 
     # ---- writes ------------------------------------------------------------
 
-    def update_lead(self, body):
+    def update_lead(self, body: dict) -> dict:
         lead_id = _lead_id(body.get("id"))
         raw = body.get("fields") or {}
         if not isinstance(raw, dict):
             raise ValueError("Nothing to save: the request had no fields.")
         fields = {k: v for k, v in raw.items() if k in EDITABLE}
+        if not fields and not raw.get("confirm_address"):
+            raise ValueError("Nothing to save.")
         if "status" in fields and fields["status"] not in db.STATUSES:
             raise ValueError(f"Status must be one of: {', '.join(db.STATUSES)}.")
         if "channel" in fields and fields["channel"] not in (None, "", *outreach.CHANNELS):
             raise ValueError("That outreach method doesn't exist. Pick one from the list.")
         if fields.get("channel") == "":
             fields["channel"] = None
-        for name, label in (("quote_amount", "Quote"), ("job_revenue", "Job revenue")):
+        # Money is stored in whole cents; the old dollar columns are cleared
+        # so an amount from before can't come back.
+        for name, column, label in (
+            ("quote_amount", "quote_cents", "Quote"),
+            ("job_revenue", "revenue_cents", "Job revenue"),
+        ):
             if name in fields:
-                fields[name] = money_value(fields[name], label)
+                fields[column] = money_value(fields.pop(name), label)
+                fields[name] = None
         if "notes" in fields:
             fields["notes"] = notes_value(fields["notes"])
         if (
@@ -248,6 +261,7 @@ class App(JobRunner):
                 fields.pop("channel")
             if "channel" in fields:
                 fields["assign_round"] = None  # set by hand, not by an Assign leads round
+                fields["assigned_by"] = outreach.BY_HAND if fields["channel"] else None
                 if fields["channel"] and not row["assigned_at"]:
                     fields["assigned_at"] = now_iso()
             if fields:
@@ -258,10 +272,15 @@ class App(JobRunner):
                 message = self._locate(conn, lead_id)
         return {"ok": True, **({"message": message} if message else {})}
 
-    def _locate(self, conn, lead_id):
+    def _locate(self, conn: Conn, lead_id: int) -> str:
         """Map location, parcel and owner for an address Steve typed in.
         Network trouble leaves the lead for the next daily check to finish."""
         row = conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
+        if is_paused(self.settings(conn)):
+            return (
+                "Address saved. Lead Desk is paused, so it wasn't looked up on the map or at the county "
+                "assessor; the first check after the pause does that."
+            )
         notes = []
         try:
             result = (self.geocoder or CensusGeocoder()).geocode(row["address"], row["city"], row["zip"])
@@ -294,7 +313,7 @@ class App(JobRunner):
         saved = "Address saved" + (", found on the map" if result else "")
         return saved + ". " + " ".join(notes) if notes else saved + "."
 
-    def add_touches(self, body):
+    def add_touches(self, body: dict) -> dict:
         if body.get("lead_ids") is not None:
             ids = [_lead_id(i) for i in body["lead_ids"]]
         else:
@@ -302,7 +321,7 @@ class App(JobRunner):
         kind = body.get("kind")
         cost = body.get("cost")
         if cost is not None:
-            cost = money_value(cost, "Cost")
+            cost = money_value(cost, "Cost", MAX_CONTACT_CENTS)
         notes = notes_value(body.get("notes"))
         logged = duplicates = 0
         with self.conn() as conn:
@@ -333,15 +352,20 @@ class App(JobRunner):
                 if last and _seconds_between(last["created_at"], now) < DUPLICATE_TOUCH_SECONDS:
                     duplicates += 1
                     continue
-                this_cost = cost if cost is not None else money_value(settings["costs"].get(channel) or 0, "Cost")
+                this_cost = (
+                    cost
+                    if cost is not None
+                    else money_value(settings["costs"].get(channel) or 0, "Cost", MAX_CONTACT_CENTS)
+                )
                 conn.execute(
-                    "INSERT INTO touches (lead_id, channel, kind, cost, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO touches (lead_id, channel, kind, cost_cents, notes, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (lead_id, channel, kind, this_cost, notes, now),
                 )
                 logged += 1
-                updates = {}
+                updates: dict[str, Any] = {}
                 if not row["channel"]:
-                    updates.update(channel=channel, assigned_at=now)
+                    updates.update(channel=channel, assigned_at=now, assigned_by=outreach.BY_HAND)
                 if row["status"] == "new":
                     updates["status"] = "contacted"
                 if updates:
@@ -350,7 +374,7 @@ class App(JobRunner):
             conn.commit()
         return {"ok": True, "logged": logged, "duplicates": duplicates}
 
-    def delete_touch(self, body):
+    def delete_touch(self, body: dict) -> dict:
         touch_id = _lead_id(body.get("id"), "contact")
         with self.conn() as conn:
             if not conn.execute("SELECT id FROM touches WHERE id = ?", (touch_id,)).fetchone():
@@ -359,13 +383,17 @@ class App(JobRunner):
             conn.commit()
         return {"ok": True}
 
-    def assign(self, body):
+    def assign(self, body: dict) -> dict:
         count = count_value(body.get("count"))
         with self.conn() as conn:
-            leads = self.leads(conn)
+            leads = leadlist.lead_dicts(conn, self.settings(conn))
             return outreach.assign(conn, leads, count, body.get("channels") or list(outreach.CHANNELS))
 
-    def save_settings(self, body):
+    def split_preview(self, conn: Conn, settings: dict) -> dict:
+        """What Assign leads can hand out with each choice of methods."""
+        return outreach.split_preview(conn, leadlist.lead_dicts(conn, settings))
+
+    def save_settings(self, body: Any) -> dict:
         if not isinstance(body, dict):
             raise ValueError("Nothing to save.")
         values = validate_settings(body)
@@ -382,25 +410,30 @@ class App(JobRunner):
         self._ensure_base()
         return {"ok": True}
 
-    def _ensure_base(self):
+    def _ensure_base(self) -> None:
         with self.conn() as conn:
             s = self.settings(conn)
-            if s.get("base_lat") is not None:
+            if s.get("base_lat") is not None or is_paused(s):
                 return
             try:
                 r = (self.geocoder or CensusGeocoder()).geocode(s["base_address"])
-            except Exception:
+            except Exception as e:  # map service down: tried again on the next save or start
+                log.warning("base address lookup failed: %s", type(e).__name__)
                 return
             if r:
                 db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})
 
-    def run_enrich(self, body):
+    def run_enrich(self, body: dict) -> dict:
+        if self.paused():
+            return {"paused": True, "message": PAUSED_MESSAGE}
         with self.lock, self.conn() as conn:
             return enrich(
                 conn, self.parcel_client or ParcelClient(), limit=self._cap(150), refresh=bool(body.get("refresh"))
             )
 
-    def import_file(self, source, filename, data, lead_type="eviction"):
+    def import_file(
+        self, source: str, filename: Optional[str], data: Optional[bytes], lead_type: str = "eviction"
+    ) -> dict:
         """One uploaded file: a saved Justice Court case or calendar page, a
         CSV of leads, or (``source="contacts"``) a CSV of phones and emails.
         Leads imported here are marked as added by hand, so they show in the
@@ -440,6 +473,13 @@ class App(JobRunner):
             "odd_dates": odd,
         }
         with self.lock, self.conn() as conn:
+            if source == "csv_import" or Path(filename or "").suffix.lower() == ".csv":
+                # A records-request file: rows for court cases Lead Desk already
+                # has fill in their property address instead of adding a lead.
+                filled = fill_case_addresses(conn, leads)
+                counts["addresses_filled"] = len(filled)
+                leads = [l for l in leads if l.source_id not in filled]
+                counts["imported"] -= len(filled)
             for lead in leads:
                 counts[db.upsert(conn, lead)] += 1
                 conn.execute(
@@ -461,7 +501,11 @@ class App(JobRunner):
                     traceback.print_exc(file=sys.stderr)
         return counts
 
-    def owner_properties(self, name):
+    def owner_properties(self, name: str) -> list[dict]:
+        if self.paused():
+            raise ValueError(
+                "Lead Desk is paused, so the county assessor wasn't asked. Turn the pause off in Settings first."
+            )
         rows = (self.parcel_client or ParcelClient()).by_owner(name)
         return [
             {
@@ -474,7 +518,39 @@ class App(JobRunner):
         ]
 
 
-def serve(db_path, host="127.0.0.1", port=8765, stale_days=30, open_browser=True):
+def fill_case_addresses(conn: Conn, leads: list[Lead]) -> set[str]:
+    """Property addresses from an imported file (a Justice Court records
+    request) for eviction cases already in Lead Desk, matched on the case
+    number. An address typed or confirmed on the lead is kept; a guess from
+    the landlord's parcels is replaced. Returns the case numbers matched."""
+    matched = set()
+    for lead in leads:
+        if not (lead.source_id and lead.address):
+            continue
+        row = conn.execute(
+            "SELECT id, address, address_source FROM leads WHERE source_id = ? AND lead_type = 'eviction' "
+            "AND source <> 'csv_import' AND duplicate_of IS NULL",
+            (lead.source_id.strip().upper(),),
+        ).fetchone()
+        if not row:
+            continue
+        matched.add(lead.source_id)
+        if row["address"] and row["address_source"] not in (None, LANDLORD_SOURCE):
+            continue  # typed or confirmed by Steve: his wins
+        if row["address"] and row["address_source"] is None:
+            continue  # already had one from the court
+        fields = _address_fields(lead.address.strip(), None)
+        fields["address_source"] = "import"
+        if lead.zip:
+            fields["zip"] = lead.zip
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), row["id"]])
+    return matched
+
+
+def serve(
+    db_path: Any, host: str = "127.0.0.1", port: int = 8765, stale_days: int = 30, open_browser: bool = True
+) -> None:
     app = App(db_path, stale_days)
     app._ensure_base()
     app.scheduler()

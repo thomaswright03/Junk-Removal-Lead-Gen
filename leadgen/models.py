@@ -35,5 +35,5 @@ class Lead:
     writ_date: Optional[str] = None
     raw: dict = field(default_factory=dict)
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return asdict(self)

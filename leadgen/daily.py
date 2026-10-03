@@ -21,6 +21,7 @@ installs a daily job on this computer so it runs even when Lead Desk isn't.
 """
 
 import json
+import logging
 import sys
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Iterable, Optional, TextIO
@@ -35,6 +36,8 @@ from .sources import SOURCES
 from .sources.pima_jp_calendar import CalendarClient
 from .sources.pima_jp_case import update_cases
 from .util import Conn, Log, StopCheck, az_now, az_today, is_paused, now_iso
+
+log_ = logging.getLogger(__name__)
 
 CALENDAR_DAYS_AHEAD = 30
 CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait for tomorrow
@@ -70,15 +73,17 @@ def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
 
 def geocode_new(conn: Conn, geocoder: Any = None, limit: int = 100, should_stop: StopCheck = None) -> dict:
     geocoder = geocoder or CensusGeocoder()
-    counts = {"geocoded": 0, "not_found": 0}
+    counts: dict[str, Any] = {"geocoded": 0, "not_found": 0}
     for row in db.needs_geocode(conn, limit=limit):
         if should_stop and should_stop():
             counts["stopped_early"] = True
             break
         try:
             result = geocoder.geocode(row["address"], row["city"], row["zip"])
-        except Exception:
-            continue  # network trouble: try again next run
+        except Exception as e:  # network trouble: try again next run
+            log_.warning("map lookup failed for lead %s: %s", row["id"], type(e).__name__)
+            counts["errors"] = counts.get("errors", 0) + 1
+            continue
         db.save_geocode(conn, row["id"], result)
         counts["geocoded" if result else "not_found"] += 1
         conn.commit()
@@ -200,6 +205,10 @@ def describe(summary: dict) -> str:
         cause = (summary.get("contacts") or {}).get("error_cause")
         hint = "; check the Google key in Settings" if cause == "google_key" else ""
         parts[2] += f", {lookups} failed (will retry tomorrow{hint})"
+    for step, what in (("owners", "owner"), ("geocode", "map")):
+        failed = n(step, "errors")
+        if failed:
+            parts.append(f"{failed} {what} lookup{'' if failed == 1 else 's'} failed (will retry tomorrow)")
     errors = [k for k, v in summary.items() if isinstance(v, dict) and "error" in v]
     if errors:
         parts.append("failed: " + ", ".join(errors))
@@ -207,6 +216,30 @@ def describe(summary: dict) -> str:
         label = STEP_LABELS.get(summary["paused_during"], summary["paused_during"])
         parts.append(f"stopped at {label} because Lead Desk was paused")
     return ", ".join(parts)
+
+
+# What one failed item of a step is called, for ``problems``.
+_FAILED_ITEM = {
+    "owners": "owner lookup",
+    "geocode": "map lookup",
+    "contacts": "phone lookup",
+    "cases": "court case read",
+}
+
+
+def problems(summary: Optional[dict]) -> list[str]:
+    """What went wrong in a daily check, in a few words each (the Lead Desk
+    header shows a warning when there is any)."""
+    out = []
+    for k, v in (summary or {}).items():
+        if not isinstance(v, dict):
+            continue
+        n = v.get("errors") or v.get("failed") or 0
+        if "error" in v:
+            out.append(f"{STEP_LABELS.get(k, k)} failed")
+        elif n and k in _FAILED_ITEM:
+            out.append(f"{n} {_FAILED_ITEM[k]}{'' if n == 1 else 's'} failed")
+    return out
 
 
 def counts_only(summary: dict) -> dict:

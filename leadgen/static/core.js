@@ -32,6 +32,24 @@ function toast(msg, ms = 3200, undo) {
   if (undo) $("#toastUndo").onclick = () => { t.style.display = "none"; undo(); };
   clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", undo ? Math.max(ms, 8000) : ms);
 }
+// Ask before an action, in the page's own dialog: the buttons name the
+// action ("Assign 40 leads", "Remove key"). Resolves true for the action,
+// false for Cancel, Escape or a click outside.
+function confirmBox({ title: head, body, ok, danger }) {
+  const dlg = $("#confirmBox");
+  $("#confirmTitle").textContent = head;
+  $("#confirmBody").textContent = body || "";
+  const okBtn = $("#confirmOk");
+  okBtn.textContent = ok; okBtn.classList.toggle("danger-fill", !!danger); okBtn.classList.toggle("primary", !danger);
+  const back = document.activeElement;
+  return new Promise(resolve => {
+    dlg.returnValue = "cancel";
+    dlg.onclose = () => { resolve(dlg.returnValue === "ok"); if (back && back.focus && document.contains(back)) back.focus(); };
+    dlg.onclick = e => { if (e.target === dlg) dlg.close("cancel"); };
+    dlg.showModal();
+    okBtn.focus();
+  });
+}
 // What the page asks the server for: one page of the lead list for the tab
 // that's showing (filtered, sorted and paged on the server) and the open lead.
 const QUEUE_LIMIT = 500;
@@ -78,9 +96,13 @@ async function act(fn, okMsg, btn, undo) {
 // ---------- helpers ---------------------------------------------------------
 const chName = c => S.channels[c] || "Unassigned";
 const chDot = c => c ? `<span class="ch"><span class="dot" style="background:var(--c-${c})"></span>${esc(chName(c))}</span>` : `<span class="muted">–</span>`;
-function scoreChip(s) {
-  const cls = s >= 60 ? "good" : s >= 40 ? "acc" : s >= 25 ? "warn" : "";
-  return `<span class="score chip ${cls}">${s}</span>`;
+// The priority number, with what it is made of on hover (and read out by
+// screen readers): "Eviction 35 · owner lives elsewhere 20 · filed 3 days ago 15".
+const scoreParts = l => (l.score_parts || []).map(([t, p]) => `${t} ${p}`).join(" · ");
+function scoreChip(l) {
+  const s = l.score, cls = s >= 60 ? "good" : s >= 40 ? "acc" : s >= 25 ? "warn" : "";
+  const why = scoreParts(l);
+  return `<span class="score chip ${cls}" title="Priority ${s}: ${esc(why)}" aria-label="Priority ${s}: ${esc(why)}">${s}</span>`;
 }
 const STATUS_LABEL = { new: "New", contacted: "Contacted", responded: "Responded", quoted: "Quoted", won: "Won", lost: "Lost", skip: "Skip", stale: "Old" };
 function statusChip(s) {
@@ -136,6 +158,7 @@ function fill(channel, l) {
 }
 // Where the eviction case is: notice filed, judgment, writ (lockout), etc.
 function noticeChip(l) {
+  if (l.lead_type === "code_violation") return ` <span class="chip acc" title="Open City of Tucson code-enforcement case (code cases cover the City of Tucson only)">city code case</span>`;
   if (l.lead_type !== "eviction") return "";
   const stage = l.case_stage;
   if (stage === "writ") return ` <span class="chip bad" title="Writ of restitution: the tenant is being locked out, so the unit needs clearing now">writ issued${l.writ_date ? " " + esc(fmtDate(l.writ_date)) : ""}</span>`;
@@ -172,7 +195,9 @@ function dateCell(l) {
   return d ? `<span class="small-line">${esc(label)}</span><br>${esc(fmtDate(d))}` : '<span class="muted">–</span>';
 }
 const fmtDateTime = v => { if (!v) return ""; const d = new Date(v); return isNaN(d) ? fmtDate(v) : d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Phoenix" }); };
-const VIEW_LABEL = { eviction_notice: "Evictions with a notice, judgment or writ", evictions: "All evictions", all: "All leads (code cases too)" };
+const VIEW_LABEL = { eviction_notice: "Evictions with a notice, judgment or writ", evictions: "All evictions", all: "All leads (City code cases too)" };
+// Where City code cases come from: say it wherever they are offered.
+const CODE_COVERAGE = "City code cases cover the City of Tucson only; unincorporated Pima County, Marana, Oro Valley, Sahuarita and South Tucson aren't included.";
 const SOURCE_LABEL = { manual: "entered by hand", import: "imported file", osm: "OpenStreetMap", google: "Google Places",
   "osm+website": "OpenStreetMap + company website", "google+website": "Google Places + company website", website: "company website" };
 function phoneCell(l) {
@@ -228,12 +253,27 @@ function renderHeader() {
   const d = S.daily || {};
   const unchecked = (S.view_counts || {}).unchecked || 0;
   const msg = d.message || "starting the daily check";
-  const daily = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
-    : d.last_run ? `Last check ${fmtDate(d.last_run)}: ${d.summary}` : "Not checked yet today";
-  $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson junk cases`;
-  $("#sub").textContent = `${c.active || 0} open leads · ${c.assigned || 0} in outreach` + (c.owners_pending ? ` · ${c.owners_pending} owners not looked up yet` : "")
-    + (unchecked ? ` · ${unchecked} court case${unchecked > 1 ? "s" : ""} still to check (${d.running ? "checking now" : "next check " + (d.next_run || "tomorrow 6:00 AM")})` : "")
-    + ` · ${daily}`;
+  const problems = d.problems || [];
+  $("#purpose").textContent = `· clean-out job leads for ${S.settings.business_name || "your junk-removal business"}: Pima County evictions and City of Tucson code cases`;
+  // One short line: open leads, when the last check ran, a warning sign if
+  // anything failed. The rest is under Details.
+  const when = d.running ? `${msg[0].toUpperCase() + msg.slice(1)}…`
+    : d.last_run ? `Last check ${d.finished_at ? fmtDateTime(d.finished_at) : fmtDate(d.last_run)}` : "Not checked yet";
+  const warn = problems.length && !d.running ? ` <span class="warn-sign" role="img" aria-label="Something failed in the last check" title="${esc(problems.join("; "))}">⚠</span>` : "";
+  const open = !!ui.headerDetails;
+  $("#sub").innerHTML = `<span role="status" aria-live="polite">${c.active || 0} open leads · ${esc(when)}</span>${warn}
+    <button class="linkbtn" id="subMore" aria-expanded="${open}" aria-controls="subDetails">${open ? "Hide details" : "Details"}</button>`;
+  const details = [
+    `${c.assigned || 0} in outreach`,
+    c.owners_pending ? `${c.owners_pending} owners not looked up yet` : "",
+    unchecked ? `${unchecked} court case${unchecked > 1 ? "s" : ""} still to check (${d.running ? "checking now" : "next check " + (d.next_run || "tomorrow 6:00 AM")})` : "",
+    d.last_run && d.summary ? `Last check ${fmtDate(d.last_run)}: ${d.summary}` : "",
+    problems.length ? `Problems: ${problems.join("; ")} (tried again on the next check)` : "",
+  ].filter(Boolean);
+  const box = $("#subDetails");
+  box.hidden = !open;
+  box.innerHTML = details.map(t => `<div>${esc(t)}</div>`).join("");
+  $("#subMore").onclick = () => { ui.headerDetails = !ui.headerDetails; renderHeader(); $("#subMore").focus(); };
   $("#jobs").innerHTML = runningJobs().map(jobLine).join(" · ");
   $("#jobs").querySelectorAll("[data-cancel]").forEach(b => b.onclick = () =>
     act(() => api("/api/job/cancel", { name: b.dataset.cancel }), r => r.message, b));

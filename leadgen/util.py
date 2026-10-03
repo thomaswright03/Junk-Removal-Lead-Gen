@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 # Arizona keeps Mountain Standard Time all year (no daylight saving time), so
 # a fixed offset is exact. Business days (today's leads, the Google daily
@@ -32,7 +32,7 @@ def az_today(now: datetime | None = None) -> date:
     return az_now(now).date()
 
 
-def pick(row: dict, keys) -> str | None:
+def pick(row: dict, keys: Iterable[str]) -> str | None:
     """The first non-blank value among ``keys`` in a CSV row, matching column
     names case-insensitively and ignoring surrounding spaces."""
     lowered = {(k or "").strip().lower(): v for k, v in row.items() if k}

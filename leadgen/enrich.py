@@ -10,6 +10,7 @@ Leads with a parcel number are looked up by parcel; leads with only an
 address are matched on the parcel's site address.
 """
 
+import logging
 import re
 from typing import Any, Iterable, Optional
 
@@ -18,6 +19,8 @@ import requests
 from . import config, db
 from .normalize import normalize_address
 from .util import Conn, LeadRow, StopCheck, is_dwelling_use, is_residential, now_iso
+
+log = logging.getLogger(__name__)
 
 PARCEL_LAYER = "https://mapdata.tucsonaz.gov/arcgis/rest/services/PublicMaps/PropertyHousing/MapServer/17"
 FIELDS = (
@@ -154,7 +157,7 @@ def landlord_property(client: Any, plaintiff: Optional[str]) -> tuple[Optional[d
         for r in rows
         if is_residential(r.get("USE_DESC") or r.get("PPT_DESC")) and (r.get("SITE_ADDRESS") or "").strip()
     ]
-    sites = {normalize_address(r["SITE_ADDRESS"]).split(" UNIT ")[0] for r in homes}
+    sites = {(normalize_address(r["SITE_ADDRESS"]) or "").split(" UNIT ")[0] for r in homes}
     return rows[0], (homes[0] if len(sites) == 1 else None)
 
 
@@ -178,15 +181,17 @@ def enrich_landlords(
     if limit:
         sql += f" LIMIT {int(limit)}"
     now = now_iso()
-    counts = {"found": 0, "with_property": 0, "not_found": 0}
+    counts: dict[str, Any] = {"found": 0, "with_property": 0, "not_found": 0, "errors": 0}
     for r in conn.execute(sql).fetchall():
         if should_stop and should_stop():
             counts["stopped_early"] = True
             break
         try:
             owner, site = landlord_property(client, r["plaintiff"])
-        except Exception:
-            continue  # assessor unreachable: try again next run
+        except Exception as e:  # assessor unreachable: left for the next run
+            log.warning("landlord lookup failed for lead %s: %s", r["id"], type(e).__name__)
+            counts["errors"] += 1
+            continue
         fields = {}
         if owner:
             fields = owner_fields(owner)
@@ -213,14 +218,20 @@ def enrich_landlords(
     return counts
 
 
-def enrich_lead(conn: Conn, client: Any, row: LeadRow, attrs: Optional[dict] = None, now: Optional[str] = None) -> bool:
+def enrich_lead(
+    conn: Conn, client: Any, row: LeadRow, attrs: Optional[dict] = None, now: Optional[str] = None
+) -> Optional[bool]:
     """Owner columns for one lead (``row`` has id, parcel, address) from its
-    parcel record, or by matching its address. Returns True when found."""
+    parcel record, or by matching its address. Returns True when found,
+    False when the county has no match (the lead is marked as looked up),
+    and None when the lookup failed (service down): the lead is left to be
+    looked up again on the next run."""
     if attrs is None and row["address"]:
         try:
             attrs = client.by_site_address(row["address"])
-        except Exception:
-            attrs = None
+        except Exception as e:
+            log.warning("owner lookup failed for lead %s: %s", row["id"], type(e).__name__)
+            return None
     now = now or now_iso()
     if not attrs:
         conn.execute("UPDATE leads SET enriched_at = ? WHERE id = ?", (now, row["id"]))
@@ -282,20 +293,38 @@ def enrich(
         sql += f" LIMIT {int(limit)}"
     rows = conn.execute(sql).fetchall()
     now = now_iso()
-    counts = {
+    counts: dict[str, Any] = {
         "found": landlords["found"],
         "not_found": landlords["not_found"],
         "landlord_property": landlords["with_property"],
     }
+    # Lookups that failed (the county service down) are counted apart from
+    # "no match", and those leads are tried again on the next run.
+    errors = landlords["errors"]
     if should_stop and should_stop():
         counts["stopped_early"] = True
-        return counts
-    by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
+        return _with_errors(counts, errors)
+    try:
+        by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
+    except Exception as e:
+        log.warning("owner lookup by parcel failed for %d leads: %s", len(rows), type(e).__name__)
+        errors += sum(1 for r in rows if r["parcel"])
+        rows = [r for r in rows if not r["parcel"]]
+        by_parcel = {}
     for r in rows:
         if should_stop and should_stop():
             counts["stopped_early"] = True
             break
         found = enrich_lead(conn, client, r, by_parcel.get(r["parcel"]) if r["parcel"] else None, now)
-        counts["found" if found else "not_found"] += 1
+        if found is None:
+            errors += 1
+        else:
+            counts["found" if found else "not_found"] += 1
     conn.commit()
+    return _with_errors(counts, errors)
+
+
+def _with_errors(counts: dict, errors: int) -> dict:
+    if errors:
+        counts["errors"] = errors
     return counts

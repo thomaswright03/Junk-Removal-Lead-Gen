@@ -1,3 +1,8 @@
+from typing import Any, Iterator, Optional
+
+from ..models import Lead
+
+
 class Source:
     """A place leads come from.
 
@@ -9,5 +14,5 @@ class Source:
     name = ""
     description = ""
 
-    def fetch(self, since, until, paths=None, **options):
+    def fetch(self, since: str, until: str, paths: Optional[list] = None, **options: Any) -> Iterator[Lead]:
         raise NotImplementedError
