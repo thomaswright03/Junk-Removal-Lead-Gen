@@ -93,7 +93,35 @@ function roundSummary(r) {
     ${nLeft ? `<p class="hint">${nLeft} left out: ${esc(why)}.${fix}</p>${leads ? `<p class="hint">Left out${nLeft > (r.left_out_leads || []).length ? " (the first few)" : ""}: ${leads}</p>` : ""}` : ""}
   </div>`;
 }
+// Until a lead can be contacted (a phone, an email or an address a door
+// hanger can go to) and nothing has been handed out yet, the Outreach and
+// Results tabs show one explanation and the action that unlocks them,
+// instead of a form that can't do anything and tables of zeros.
+const contactedAny = () => (S.results || []).some(r => r.touched || r.assigned);
+const outreachLocked = () => !((S.counts || {}).reachable || (S.counts || {}).assigned || contactedAny());
+function lockedCard(id, heading, body) {
+  return `<div class="card locked" id="${id}"><h2>${heading}</h2><p class="hint">${body}</p>
+    <div class="row"><button class="btn primary" data-unlock>Find phone numbers for your leads</button>
+    <button class="btn" data-unlock-help>How to get more phones and addresses</button></div></div>`;
+}
+function bindUnlock(root) {
+  root.querySelectorAll("[data-unlock]").forEach(b => b.onclick = async () => {
+    Object.assign(ui, { tab: "leads", type: "unreachable", offset: 0 }); syncUrl(true); await reloadList();
+    const f = document.querySelector("#leadTable [data-findphone]"); if (f) f.focus();
+  });
+  root.querySelectorAll("[data-unlock-help]").forEach(b => b.onclick = async () => {
+    Object.assign(ui, { tab: "leads", showSetup: true, type: "", offset: 0 }); syncUrl(true); await reloadList();
+    const g = $("#setupTitle"); if (g) { g.scrollIntoView(); g.focus(); }
+  });
+}
 function renderOutreach() {
+  if (outreachLocked()) {
+    $("#tab-outreach").innerHTML = lockedCard("outreachLocked", "Outreach opens once a lead can be contacted",
+      "Here leads are handed out to three ways of reaching people (a door hanger at the property, a phone call, a pitch to the landlord) and each gets a work list. "
+      + "None of your open leads has a phone number, an email or an address a door hanger can go to yet. Find a number for one with <b>Find phone</b> on the Leads tab and this tab opens.");
+    bindUnlock($("#tab-outreach"));
+    return;
+  }
   const c = S.counts || {}, per = c.channels || {};
   const unassignedCount = c.unassigned || 0;
   const t = ui.outreachTab;
@@ -239,7 +267,7 @@ function noPhoneNote(q, what) {
 }
 function bindNoPhoneNote(el) {
   el.querySelectorAll("[data-setup]").forEach(b => b.onclick = async () => {
-    Object.assign(ui, { tab: "leads", showSetup: true, setupOpen: true, type: "", offset: 0 }); syncUrl(true); await reloadList();
+    Object.assign(ui, { tab: "leads", showSetup: true, type: "", offset: 0 }); syncUrl(true); await reloadList();
     const g = $("#setupTitle"); if (g) { g.scrollIntoView(); g.focus(); }
   });
   el.querySelectorAll("[data-findphones]").forEach(b => b.onclick = () => findContacts(b));
@@ -291,5 +319,5 @@ function renderManagers(el, leads) {
       return r; }, r => r.logged ? "Logged: " + b.textContent : "Already logged a moment ago", b);
   });
 }
-const emptyQueue = () => `<div class="card empty">Nothing in this queue. Assign leads above, or set a channel on a lead.</div>`;
+const emptyQueue = () => `<div class="card empty">Nothing in this queue. Assign leads above, or set an outreach method on a lead.</div>`;
 

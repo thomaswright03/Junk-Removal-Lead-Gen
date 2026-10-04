@@ -2,8 +2,15 @@
 columns the page gets for each, and the server-side filtering, sorting and
 paging that keep every response small however many leads there are."""
 
+import copy
+import json
+import math
+import sqlite3
+import threading
+import uuid
+from collections import OrderedDict
 from datetime import date, timedelta
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import db, outreach
 from .sources.pima_jp_case import ENDED_SQL
@@ -80,8 +87,6 @@ LEAD_VIEWS = {
 DEFAULT_VIEW = "eviction_notice"
 # A property address that isn't a guess from the landlord's parcels.
 KNOWN_ADDRESS = "(address IS NOT NULL AND COALESCE(address_source, '') <> 'landlord')"
-# A phone number or email for the owner or landlord.
-HAS_CONTACT = "(owner_phone IS NOT NULL OR owner_email IS NOT NULL)"
 # Statuses the "Open" filter hides, and those "active" (work lists) hides.
 CLOSED = ("stale", "skip", "lost", "won")
 INACTIVE = ("stale", "skip")
@@ -101,6 +106,47 @@ SEARCHED = (
     "owner_email",
     "contact_name",
 )
+
+
+# ---- remembered numbers -----------------------------------------------------
+# Counts over every lead (the header, the view menu, Results...) are kept in
+# memory and used again until a lead or a logged contact changes (the
+# database's data version, see db._version_counters), so a search or a new
+# page doesn't count the whole table again.
+_MEMO: "OrderedDict[tuple, Any]" = OrderedDict()
+_MEMO_LOCK = threading.Lock()
+MEMO_SIZE = 64
+
+
+def data_version(conn: Conn) -> Optional[tuple]:
+    """``(database token, data version)``, or None when the database has none."""
+    found = {
+        r["key"]: r["n"]
+        for r in conn.execute("SELECT key, n FROM counters WHERE key IN ('db_token', 'data_version')").fetchall()
+    }
+    if "db_token" not in found or "data_version" not in found:
+        return None
+    return (found["db_token"], found["data_version"])
+
+
+def memo(conn: Conn, key: Any, work: Callable[[], Any]) -> Any:
+    """``work()``, or what it returned before for the same ``key`` when no
+    lead or contact has changed since. ``key`` must name everything else the
+    answer depends on (settings, today...)."""
+    version = data_version(conn)
+    if version is None:
+        return work()
+    full = (version, json.dumps(key, sort_keys=True, default=str))
+    with _MEMO_LOCK:
+        if full in _MEMO:
+            _MEMO.move_to_end(full)
+            return copy.deepcopy(_MEMO[full])
+    value = work()
+    with _MEMO_LOCK:
+        _MEMO[full] = copy.deepcopy(value)
+        while len(_MEMO) > MEMO_SIZE:
+            _MEMO.popitem(last=False)
+    return value
 
 
 def status_condition(status: str) -> tuple[str, list]:
@@ -229,47 +275,6 @@ def one_lead(conn: Conn, settings: dict, lead_id: int) -> Optional[dict]:
     return attach_touches(conn, [lead_dict(r, settings, owner_counts)])[0]
 
 
-def _keep(l: dict, p: dict, touched: set) -> bool:
-    status = p.get("status", "open")
-    if status == "open" and l["status"] in CLOSED:
-        return False
-    if status == "active" and l["status"] in INACTIVE:
-        return False
-    if status not in ("", "open", "active") and l["status"] != status:
-        return False
-    kind = p.get("type") or ""
-    tests = {
-        "eviction": l["lead_type"] == "eviction",
-        "code_violation": l["lead_type"] == "code_violation",
-        "absentee": bool(l["owner_absentee"]),
-        "entity": bool(l["owner_entity"]),
-        "has_phone": bool(l["owner_phone"]),
-        "no_phone": not l["owner_phone"],
-        "no_address": not l["address"],
-        "guessed_address": l["address_source"] == "landlord",
-        # The address work queue: evictions with no address, or only a
-        # guess from the landlord's parcels.
-        "address_work": l["lead_type"] == "eviction" and l["door_hanger_problem"] is not None,
-        # Can be called, emailed or visited now; or not yet (no phone, email
-        # or known address).
-        "reachable": l["reach"] != "none",
-        "unreachable": l["reach"] == "none",
-    }
-    if kind in tests and not tests[kind]:
-        return False
-    channel = p.get("channel") or ""
-    if channel == "none" and l["channel"]:
-        return False
-    if channel and channel != "none" and l["channel"] != channel:
-        return False
-    if p.get("untouched") and l["id"] in touched:
-        return False
-    q = (p.get("q") or "").strip().lower()
-    if q and q not in " ".join(str(l[k] or "") for k in SEARCHED).lower():
-        return False
-    return True
-
-
 def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
     """Highest priority first (writ cases, then judgments, then the rest, each
     by priority; see ``outreach.rank_key``); or newest first by the latest real event
@@ -299,29 +304,319 @@ def _int(value: Any, default: int, low: int, high: int) -> int:
     return max(low, min(high, n))
 
 
-def page(conn: Conn, settings: dict, params: dict) -> dict:
+# ---- ranking, filtering and paging in the database -------------------------
+#
+# The list is filtered, ranked and paged in SQL, so a request costs about the
+# same however many leads have built up: priority (``outreach.score_parts``)
+# and the rest of a lead's page fields are worked out in Python only for the
+# page shown. For that, each lead keeps its rank in columns (see
+# db.RANK_COLUMNS): its stage (writ, judgment, the rest), its priority in the
+# chosen view, its latest real event, and a few things easier to work out in
+# Python than in SQL (a code case's violation code, whether its parcel has
+# several homes, the company a phone lookup would search for).
+#
+# A database trigger empties ``derived_src`` whenever a column the rank comes
+# from changes (db.RANK_INPUTS), and every new row starts empty, so
+# ``refresh_ranking`` only works out those rows again; priorities are worked
+# out again for the whole view when any row changed (an owner's lead count is
+# shared between leads), when the view changes, and once a day (recency).
+# tests/test_lead_list.py checks the stored rank against the Python rules.
+
+# How long SQLite waits on another connection's write by default (sqlite3's 5 s).
+SQLITE_BUSY_MS = 5000
+
+
+def _truthy(col: str) -> str:
+    return f"COALESCE({col}, 0) <> 0"
+
+
+def _filled(col: str) -> str:
+    return f"COALESCE({col}, '') <> ''"
+
+
+def _iso_or_null(col: str, today_iso: str) -> str:
+    """The column's date when it is an ISO date on or before today, else NULL."""
+    return f"CASE WHEN {col} LIKE '____-__-__%' AND SUBSTR({col}, 1, 10) <= '{today_iso}' THEN SUBSTR({col}, 1, 10) END"
+
+
+def _later(a: str, b: str) -> str:
+    """The later of two ISO dates either of which may be NULL."""
+    return f"CASE WHEN {b} IS NULL OR {a} >= {b} THEN COALESCE({a}, {b}) ELSE {b} END"
+
+
+def _rank_sets(today: date) -> str:
+    """SET clauses for a row's stage rank, its points that don't depend on
+    other rows or the day (kind of lead, stage, absentee and company owner;
+    see ``outreach.score_parts``) and its latest real event on or before
+    today (``outreach.latest_event``; '' when none)."""
+    t = today.isoformat()
+    hearing = "(lead_type IN ('eviction', 'civil') AND source = 'pima_jp_calendar' AND case_checked_at IS NULL)"
+    filed = f"CASE WHEN {hearing} THEN NULL ELSE {_iso_or_null('event_date', t)} END"
+    latest = _later(_later(filed, _iso_or_null("judgment_date", t)), _iso_or_null("writ_date", t))
+    points = " ".join(f"WHEN '{code}' THEN {n}" for code, n in outreach._TYPE_POINTS.items())
+    return (
+        "stage_rank = CASE WHEN lead_type = 'eviction' AND case_stage = 'writ' THEN 2 "
+        "WHEN lead_type = 'eviction' AND case_stage = 'judgment' THEN 1 ELSE 0 END, "
+        "base_points = (CASE WHEN lead_type = 'eviction' THEN 35 + CASE case_stage WHEN 'writ' THEN 25 "
+        f"WHEN 'judgment' THEN 15 ELSE 0 END ELSE CASE rank_code {points} ELSE 20 END END"
+        f" + CASE WHEN {_truthy('owner_absentee')} AND lead_type <> 'eviction' THEN 20 ELSE 0 END"
+        f" + CASE WHEN {_truthy('owner_entity')} THEN 10 ELSE 0 END), "
+        f"rank_latest = COALESCE({latest}, '')"
+    )
+
+
+def _case_of(column: str, rows: list[tuple], kind: str) -> tuple[str, list]:
+    """``CAST(CASE id WHEN ? THEN ? ... END AS kind)`` for ``[(id, value)]``."""
+    sql = " ".join("WHEN ? THEN ?" for _ in rows)
+    return f"{column} = CAST(CASE id {sql} END AS {kind})", [x for pair in rows for x in pair]
+
+
+def _view_name(settings: Optional[dict]) -> str:
+    view = str((settings or {}).get("lead_view"))
+    return view if view in LEAD_VIEWS else DEFAULT_VIEW
+
+
+# Postgres errors that mean another writer got there first (deadlock,
+# serialization failure, lock not available): the next request catches up.
+_PG_BUSY = ("40P01", "40001", "55P03")
+
+
+def _busy(e: Exception) -> bool:
+    if isinstance(e, sqlite3.OperationalError):
+        return "locked" in str(e) or "busy" in str(e)
+    return getattr(e, "sqlstate", None) in _PG_BUSY
+
+
+def refresh_ranking(conn: Conn, settings: dict, today: Optional[date] = None) -> bool:
+    """Bring the stored rank up to date (see the notes above): rows a change
+    emptied, then every priority when anything changed, the view changed or
+    a day passed. Returns True when anything was worked out again.
+
+    On SQLite another connection may be writing (the daily check): rather
+    than wait on it, this request uses the rank as stored and a later one
+    catches up."""
+    from .lookup import lookup_targets
+
+    today = today or az_today()
+    lite = isinstance(conn, sqlite3.Connection)
+    if lite:
+        conn.execute("PRAGMA busy_timeout = 200")
+    try:
+        stored = db.get_settings(conn)
+        view, day = _view_name(settings), today.isoformat()
+        last_day = stored.get("rank_day")
+        changed = last_day != day or stored.get("rank_view") != view
+        if last_day and last_day != day:
+            # An event dated after the day ranks were worked out may now be in the past.
+            conn.execute(
+                "UPDATE leads SET derived_src = NULL WHERE derived_src IS NOT NULL AND ("
+                + " OR ".join(f"SUBSTR({c}, 1, 10) > ?" for c in ("event_date", "judgment_date", "writ_date"))
+                + ")",
+                [last_day] * 3,
+            )
+        # Claim the rows to work out with a token: a row changed while this
+        # runs is emptied again by the trigger, so it isn't marked done here.
+        token = f"pending {uuid.uuid4().hex}"
+        claimed = conn.execute(
+            # (Written so the index on derived_src finds them: no scan when none.)
+            "UPDATE leads SET derived_src = ? WHERE derived_src IS NULL OR derived_src < ? OR derived_src > ?",
+            (token, db.RANK_VERSION, db.RANK_VERSION),
+        ).rowcount
+        if claimed:
+            changed = True
+            # Rows per statement: 7 parameters each, under SQLite's limit
+            # (999 before SQLite 3.32, 32,766 since).
+            step = 100 if lite and sqlite3.sqlite_version_info < (3, 32) else 1000
+            rows = conn.execute(
+                "SELECT id, description, property_use, plaintiff, owner_name, address FROM leads WHERE derived_src = ?",
+                (token,),
+            ).fetchall()
+            for i in range(0, len(rows), step):
+                chunk = rows[i : i + step]
+                codes, multis, names = [], [], []
+                for r in chunk:
+                    desc = r["description"] or ""
+                    codes.append((r["id"], "VACANT" if "VACANT/NUISANCE" in desc.upper() else code_of(desc)))
+                    multis.append((r["id"], int(is_multifamily(r["property_use"]))))
+                    found, _site = lookup_targets(r)
+                    names.append((r["id"], found[0].upper() if found else None))
+                parts = [
+                    _case_of("rank_code", codes, "TEXT"),
+                    _case_of("multi_home", multis, "INTEGER"),
+                    _case_of("lookup_name", names, "TEXT"),
+                ]
+                ids = [r["id"] for r in chunk]
+                conn.execute(
+                    f"UPDATE leads SET {', '.join(sql for sql, _ in parts)} "
+                    f"WHERE derived_src = ? AND id IN ({','.join('?' * len(ids))})",
+                    [x for _, args in parts for x in args] + [token, *ids],
+                )
+            conn.execute(
+                f"UPDATE leads SET {_rank_sets(today)}, derived_src = ? WHERE derived_src = ?", (db.RANK_VERSION, token)
+            )
+        if changed:
+            # Priority in the view: add a repeat owner's points and recency.
+            c7, c14 = (today - timedelta(days=7)).isoformat(), (today - timedelta(days=14)).isoformat()
+            repeat = (
+                f"SELECT owner_name FROM leads o WHERE {in_view(settings)} AND COALESCE(owner_name, '') <> '' "
+                "GROUP BY owner_name HAVING COUNT(*) > 1"
+            )
+            score = (
+                f"(COALESCE(base_points, 0) + CASE WHEN rank_latest >= '{c7}' THEN 15 "
+                f"WHEN rank_latest >= '{c14}' THEN 8 ELSE 0 END "
+                f"+ CASE WHEN owner_name IN ({repeat}) THEN 10 ELSE 0 END)"
+            )
+            conn.execute(f"UPDATE leads SET rank_score = {score} WHERE COALESCE(rank_score, -1) <> {score}")
+            db.put_settings(conn, {"rank_day": day, "rank_view": view})
+        conn.commit()
+        return changed
+    except Exception as e:
+        if not _busy(e):
+            raise
+        if lite:
+            conn.rollback()
+        return False
+    finally:
+        if lite:
+            conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_MS}")
+
+
+# A door hanger can go to the address (outreach.door_hanger_problem is None).
+DOOR_HANGER_OK = (
+    f"({_filled('address')} AND ({_filled('unit')} OR COALESCE(address_source, '') = 'confirmed' "
+    f"OR (COALESCE(address_source, '') <> 'landlord' AND COALESCE(multi_home, 0) = 0)))"
+)
+# A phone number or email for the owner or landlord (outreach.has_contact).
+HAS_CONTACT = f"({_filled('owner_phone')} OR {_filled('owner_email')})"
+# Can be called, emailed or visited now (``reach`` is not "none").
+REACHABLE = f"({HAS_CONTACT} OR {DOOR_HANGER_OK})"
+_TYPE_FILTERS = {
+    "eviction": "lead_type = 'eviction'",
+    "code_violation": "lead_type = 'code_violation'",
+    "absentee": _truthy("owner_absentee"),
+    "entity": _truthy("owner_entity"),
+    "has_phone": _filled("owner_phone"),
+    "no_phone": f"NOT {_filled('owner_phone')}",
+    "no_address": f"NOT {_filled('address')}",
+    "guessed_address": "address_source = 'landlord'",
+    # The address work queue: evictions with no address a door hanger can go to.
+    "address_work": f"lead_type = 'eviction' AND NOT {DOOR_HANGER_OK}",
+    "reachable": REACHABLE,
+    "unreachable": f"NOT {REACHABLE}",
+}
+
+
+def _order_sql(key: str, settings: dict) -> str:
+    """ORDER BY for ``sort_leads``'s orders, on the stored rank."""
+    newest = "rank_latest DESC, id DESC"
+    best = f"stage_rank DESC, rank_score DESC, {newest}"
+    if key == "contact":
+        return (
+            f"CASE WHEN {_filled('owner_phone')} THEN 0 ELSE 1 END, "
+            f"CASE WHEN {_filled('owner_email')} THEN 0 ELSE 1 END, {best}"
+        )
+    if key == "date":
+        return newest
+    if key == "miles":
+        lat, lon = outreach._num(settings.get("base_lat")), outreach._num(settings.get("base_lon"))
+        if lat is None or lon is None:
+            return "id DESC"
+        # Straight-line distance on a flat map: the same order as the
+        # great-circle miles shown, at the scale of one county.
+        k = math.cos(math.radians(lat))
+        dist = f"((lat - {lat!r}) * (lat - {lat!r}) + (lon - {lon!r}) * {k!r} * (lon - {lon!r}) * {k!r})"
+        return f"CASE WHEN lat IS NULL OR lon IS NULL THEN 1 ELSE 0 END, {dist}, id DESC"
+    return best
+
+
+def _where_sql(params: dict) -> tuple[str, list]:
+    """The page's filters (Status, kind, outreach method, untouched, search) as SQL."""
+    cond, args = status_condition(params.get("status", "open"))
+    where = [cond]
+    kind = params.get("type") or ""
+    if kind in _TYPE_FILTERS:
+        where.append(_TYPE_FILTERS[kind])
+    channel = params.get("channel") or ""
+    if channel == "none":
+        where.append(f"NOT {_filled('channel')}")
+    elif channel:
+        where.append("channel = ?")
+        args.append(channel)
+    if params.get("untouched"):
+        where.append("NOT EXISTS (SELECT 1 FROM touches t WHERE t.lead_id = leads.id)")
+    q = (params.get("q") or "").strip().lower()
+    if q:
+        text = " || ' ' || ".join(f"COALESCE({k}, '')" for k in SEARCHED)
+        like = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append(f"LOWER({text}) LIKE ? ESCAPE '\\'")
+        args.append(f"%{like}%")
+    return " AND ".join(f"({w})" for w in where), args
+
+
+def owner_counts_for(conn: Conn, settings: dict, names: list) -> dict:
+    """How many leads in the view each of these owners has."""
+    names = sorted({n for n in names if n})
+    out: dict[str, int] = {}
+    for i in range(0, len(names), 500):
+        chunk = names[i : i + 500]
+        for r in conn.execute(
+            f"SELECT owner_name, COUNT(*) AS n FROM leads WHERE {in_view(settings)} "
+            f"AND owner_name IN ({','.join('?' * len(chunk))}) GROUP BY owner_name",
+            chunk,
+        ).fetchall():
+            out[r["owner_name"]] = int(r["n"])
+    return out
+
+
+def page(
+    conn: Conn,
+    settings: dict,
+    params: dict,
+    today: Optional[date] = None,
+    view: Optional[str] = None,
+    refresh: bool = True,
+) -> dict:
     """One page of the filtered, sorted lead list: ``{"leads", "total",
     "offset", "limit"}``. ``params`` are the page's filters (status, type,
-    channel, q, sort, untouched) and ``offset`` / ``limit``."""
-    leads = lead_dicts(conn, settings)
-    touched = set()
-    if params.get("untouched"):
-        touched = {r["lead_id"] for r in conn.execute("SELECT DISTINCT lead_id FROM touches").fetchall()}
-    rows = sort_leads([l for l in leads if _keep(l, params, touched)], params.get("sort") or "score")
+    channel, q, sort, untouched) and ``offset`` / ``limit``. Filtering,
+    ranking and paging happen in the database; only the page's leads are
+    built in Python. ``view`` lists another view's leads (ranked as in the
+    chosen one). ``refresh=False`` when the caller has just brought the
+    rank up to date (``refresh_ranking``)."""
+    today = today or az_today()
+    if refresh:
+        refresh_ranking(conn, settings, today)
+    where, args = _where_sql(params)
+    shown_view = in_view({"lead_view": view}) if view else in_view(settings)
+    base = f"FROM leads WHERE {shown_view} AND {where}"
+    total = memo(
+        conn, ("total", base, args), lambda: int(conn.execute(f"SELECT COUNT(*) AS n {base}", args).fetchone()["n"])
+    )
     limit = _int(params.get("limit"), PAGE_SIZE, 1, MAX_PAGE)
     # Past the end (the list shrank since the page was drawn): the last page.
-    last_page = (max(0, len(rows) - 1) // limit) * limit
+    last_page = (max(0, total - 1) // limit) * limit
     offset = _int(params.get("offset"), 0, 0, last_page)
-    shown = attach_touches(conn, rows[offset : offset + limit])
-    return {"leads": shown, "total": len(rows), "offset": offset, "limit": limit}
+    rows = conn.execute(
+        f"SELECT * {base} ORDER BY {_order_sql(params.get('sort') or 'score', settings)} LIMIT ? OFFSET ?",
+        [*args, limit, offset],
+    ).fetchall()
+    owners = owner_counts_for(conn, settings, [r["owner_name"] for r in rows])
+    shown = attach_touches(conn, [lead_dict(r, settings, owners, today) for r in rows])
+    return {"leads": shown, "total": total, "offset": offset, "limit": limit}
 
 
-def counts(conn: Conn, settings: dict) -> dict:
+def counts(conn: Conn, settings: dict, refresh: bool = True) -> dict:
     """The numbers the header and the Outreach tab show, counted in the database."""
+    if refresh:
+        refresh_ranking(conn, settings)
     inactive = ", ".join(f"'{s}'" for s in INACTIVE)
+    closed = ", ".join(f"'{s}'" for s in CLOSED)
     untouched = "NOT EXISTS (SELECT 1 FROM touches t WHERE t.lead_id = leads.id)"
     r = conn.execute(
         "SELECT COUNT(*) AS total, "
+        # Open leads that can be called, emailed or visited now: until there is
+        # one, the Outreach and Results tabs say what unlocks them.
+        f"SUM(CASE WHEN status NOT IN ({closed}) AND {REACHABLE} THEN 1 ELSE 0 END) AS reachable, "
         f"SUM(CASE WHEN status NOT IN ({inactive}) THEN 1 ELSE 0 END) AS active, "
         f"SUM(CASE WHEN status NOT IN ({inactive}) AND channel IS NOT NULL THEN 1 ELSE 0 END) AS assigned, "
         "SUM(CASE WHEN enriched_at IS NULL THEN 1 ELSE 0 END) AS owners_pending, "
@@ -331,10 +626,11 @@ def counts(conn: Conn, settings: dict) -> dict:
         f"FROM leads WHERE {in_view(settings)}"
     ).fetchone()
     out: dict[str, Any] = {
-        k: int(r[k] or 0) for k in ("total", "active", "assigned", "owners_pending", "with_phone", "with_email")
+        k: int(r[k] or 0)
+        for k in ("total", "reachable", "active", "assigned", "owners_pending", "with_phone", "with_email")
     }
     out["unassigned"] = int(r["unassigned"] or 0)
-    out.update(eviction_reach(conn, settings))
+    out.update(eviction_reach(conn, settings, refresh=False))
     out["channels"] = {c: {"active": 0, "to_do": 0} for c in outreach.CHANNELS}
     for row in conn.execute(
         "SELECT channel, COUNT(*) AS n, "
@@ -347,7 +643,7 @@ def counts(conn: Conn, settings: dict) -> dict:
     return out
 
 
-def eviction_reach(conn: Conn, settings: dict) -> dict:
+def eviction_reach(conn: Conn, settings: dict, refresh: bool = True) -> dict:
     """How many open eviction leads can be reached now, by the same rules
     the Outreach split uses (``reach``): ``evictions_open``,
     ``evictions_with_address`` (an address a door hanger can go to: typed,
@@ -361,46 +657,29 @@ def eviction_reach(conn: Conn, settings: dict) -> dict:
     can only find companies) and how many companies that is
     (``lookup_companies``); ``records_leads`` (leads with no usable address,
     which a court records request can fill)."""
-    from .lookup import lookup_targets
-
+    if refresh:
+        refresh_ranking(conn, settings)
     closed = ", ".join(f"'{s}'" for s in CLOSED)
-    rows = conn.execute(
-        "SELECT address, address_source, unit, property_use, owner_phone, owner_email, plaintiff, owner_name, "
-        f"contact_checked_at FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' "
-        f"AND status NOT IN ({closed})"
-    ).fetchall()
-    out = dict.fromkeys(
-        (
-            "evictions_open",
-            "evictions_with_address",
-            "evictions_with_contact",
-            "evictions_reachable",
-            "lookup_leads",
-            "records_leads",
-        ),
-        0,
-    )
-    companies = set()
-    for r in rows:
-        how = reach(r)
-        out["evictions_open"] += 1
-        out["evictions_with_address"] += how in ("address", "both")
-        out["evictions_with_contact"] += how in ("contact", "both")
-        out["evictions_reachable"] += how != "none"
-        out["records_leads"] += how not in ("address", "both")
-        if how not in ("contact", "both") and not r["contact_checked_at"]:
-            names, _site = lookup_targets(r)
-            if names:
-                out["lookup_leads"] += 1
-                companies.add(names[0].upper())
-    out["lookup_companies"] = len(companies)
-    return out
+    lookup = f"NOT {HAS_CONTACT} AND contact_checked_at IS NULL AND lookup_name IS NOT NULL"
+    r = conn.execute(
+        "SELECT COUNT(*) AS evictions_open, "
+        f"SUM(CASE WHEN {DOOR_HANGER_OK} THEN 1 ELSE 0 END) AS evictions_with_address, "
+        f"SUM(CASE WHEN {HAS_CONTACT} THEN 1 ELSE 0 END) AS evictions_with_contact, "
+        f"SUM(CASE WHEN {REACHABLE} THEN 1 ELSE 0 END) AS evictions_reachable, "
+        f"SUM(CASE WHEN NOT {DOOR_HANGER_OK} THEN 1 ELSE 0 END) AS records_leads, "
+        f"SUM(CASE WHEN {lookup} THEN 1 ELSE 0 END) AS lookup_leads, "
+        f"COUNT(DISTINCT CASE WHEN {lookup} THEN lookup_name END) AS lookup_companies "
+        f"FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' AND status NOT IN ({closed})"
+    ).fetchone()
+    return {k: int(r[k] or 0) for k in r.keys()}
 
 
 # ---- addresses: progress and the court records request ----------------------
 
 # How often to ask the court for a records request of new filings.
 RECORDS_REQUEST_DAYS = 14
+# How far back the first records request asks.
+BACKFILL_DAYS = 30
 ADDRESS_HISTORY_DAYS = 60
 
 
@@ -439,8 +718,11 @@ def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -
             f"SELECT MIN(event_date) AS d FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' "
             f"AND NOT {KNOWN_ADDRESS} AND status NOT IN ({', '.join(repr(s) for s in CLOSED)})"
         ).fetchone()
-        start = str(row["d"])[:10] if row and row["d"] else (today - timedelta(days=30)).isoformat()
-        start = min(start, today.isoformat())
+        # The first request reaches back a month at least: the court
+        # calendar lists only upcoming hearings, so the judgments and writs
+        # of the last weeks (the units to clear now) only come in this way.
+        backfill = (today - timedelta(days=BACKFILL_DAYS)).isoformat()
+        start = min(str(row["d"])[:10] if row and row["d"] else backfill, backfill)
     due_on = (date.fromisoformat(latest) + timedelta(days=RECORDS_REQUEST_DAYS)).isoformat() if latest else None
     return {
         "week_ago": {"date": max(older), "with_address": then[0], "open": then[1]} if then else None,
@@ -455,14 +737,19 @@ def address_progress(conn: Conn, settings: dict, today: Optional[date] = None) -
             "due_on": due_on,
             "due": not due_on or due_on <= today.isoformat(),
             "every_days": RECORDS_REQUEST_DAYS,
+            # No request sent or file imported yet: the first one is the backfill.
+            "first": not latest,
         },
     }
 
 
 def samples(conn: Conn, settings: dict) -> dict:
-    """The best open lead of each kind in the view, for previews of the
-    message templates: ``{"eviction": lead, "code_violation": lead}``."""
-    out: dict[str, dict] = {}
-    for l in sort_leads([l for l in lead_dicts(conn, settings) if l["status"] not in CLOSED]):
-        out.setdefault(str(l["lead_type"]), l)
-    return {k: out[k] for k in ("eviction", "code_violation") if k in out}
+    """The best open lead of each kind, from any view, for previews of the
+    message templates: ``{"eviction": lead, "code_violation": lead}``,
+    leaving out a kind there is no lead of."""
+    out = {}
+    for kind in ("eviction", "code_violation"):
+        found = page(conn, settings, {"type": kind, "limit": 1}, view="all")["leads"]
+        if found:
+            out[kind] = found[0]
+    return out

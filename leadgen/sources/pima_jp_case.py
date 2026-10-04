@@ -221,7 +221,9 @@ def case_stage(
     for d, _order, _i, kind in sorted(found):
         day = "" if d == "9999" else d
         if kind == "judgment":
-            judgment = judgment if judgment is not None and not ended else day
+            # The latest judgment in force counts (an amended judgment
+            # replaces the first); an undated one never replaces a dated one.
+            judgment = day or (judgment if judgment is not None and not ended else day)
             ended = None
         elif kind == "writ":
             writ = writ if writ is not None and not ended else day
@@ -521,7 +523,7 @@ def cases_due(conn: Conn, now: Optional[datetime] = None, limit: Optional[int] =
 
 # Version of the stage rules above. When it changes, cases already stored
 # are re-read from their saved papers at startup (``rederive_stages``).
-STAGE_RULES_VERSION = 2
+STAGE_RULES_VERSION = 3
 # Old (version 1) rule, only to tell whether a stored judgment came from
 # the papers or from the parties table, which older rows didn't keep.
 _V1_JUDGMENT_RE = re.compile(r"\bJUDGMENT\b(?![^|]{0,40}\b(?:DEFENDANT|DENIED|VACATED|SET ASIDE)\b)", re.I)

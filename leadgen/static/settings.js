@@ -1,12 +1,20 @@
 // Settings tab.
 "use strict";
 const TEMPLATE_LABEL = { door_hanger: "Door hanger", phone: "Phone call: owner of a code-case property", phone_eviction: "Phone call: landlord on an eviction", property_manager: "Landlord / property manager pitch" };
-// Which lead a template's preview uses: a code case for the code-case call,
-// an eviction for the rest (falling back to whatever lead there is).
+// Which lead a template's preview uses: only a lead of the kind the template
+// is for (a code case for the code-case call, an eviction for the landlord
+// call), from any view; door hangers and the landlord pitch go to either.
 const previewChannel = c => c === "phone_eviction" ? "phone" : c;
+const PREVIEW_KIND = { phone: "code_violation", phone_eviction: "eviction" };
+const PREVIEW_NONE = { code_violation: "No code case to preview yet", eviction: "No eviction to preview yet" };
 function previewLead(c) {
-  const sm = S.samples || {};
-  return c === "phone" ? sm.code_violation || sm.eviction : sm.eviction || sm.code_violation;
+  const sm = S.samples || {}, kind = PREVIEW_KIND[c];
+  return kind ? sm[kind] || null : sm.eviction || sm.code_violation || null;
+}
+function previewLabel(c) {
+  const l = previewLead(c);
+  if (l) return `Preview for ${esc(title(l.owner_name || l.plaintiff || l.source_id))}:`;
+  return `${PREVIEW_NONE[PREVIEW_KIND[c]] || "No lead to preview yet"}; the preview shows the template's fields filled in with blanks:`;
 }
 function theme() { try { return localStorage.getItem("leaddesk.theme") || "system"; } catch (e) { return "system"; } }
 function setTheme(t) {
@@ -59,7 +67,7 @@ function renderSettings() {
       <p class="hint" id="baseFound">${st.base_lat != null ? "Base address found on the map: miles and the door-hanger route start from it." : "Base address not found on the map yet. It's looked up when you save; if this stays, check the address (street, city and “AZ”). Miles and the route start from it once found."}</p>
     </div>
     <div class="card"><h2>Phone and email lookup</h2>
-      <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>
+      <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free, which finds a number for some apartment complexes and management companies; most landlord companies aren't on OpenStreetMap. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers, and <b>Find phone</b> on a lead's row finds one by hand. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>
       <label class="ch"><input type="checkbox" id="sGoogleOn" ${st.google_enabled !== false ? "checked" : ""}> Use Google lookups</label>
       <div class="row" style="margin-top:8px"><input id="sGoogle" type="password" aria-label="Google Places API key" placeholder="${st.google_key_set ? "Key saved. Paste a new one to replace it" : "Google Places API key"}" style="flex:1;min-width:260px" autocomplete="off">
       ${st.google_key_from_env ? `<span class="chip good">key set on the server</span>` : st.google_key_set ? `<span class="chip good">key saved</span> <button class="btn small danger" id="sGoogleClear">Remove key</button>` : `<span class="chip">no key</span>`}${fieldError("sGoogle")}</div>
@@ -77,7 +85,7 @@ function renderSettings() {
     <div class="card"><h2>Messages</h2><p class="hint">What each outreach method says. Click a field button to put it where the cursor is; the preview shows the message for one of your leads.</p>
       ${Object.keys(st.templates).map(c => `<h3><label for="tpl-${c}">${esc(TEMPLATE_LABEL[c] || c)}</label></h3><textarea id="tpl-${c}" data-tpl="${c}">${esc(st.templates[c] || "")}</textarea>${fieldError("tpl-" + c)}
         <div class="row fields"><span class="small-line">Insert:</span>${TEMPLATE_FIELDS.map(([f, label, tip]) => `<button class="btn small" data-field="${esc(f)}" data-for="tpl-${c}" title="${esc(tip)}">+ ${esc(label)}</button>`).join("")}</div>
-        <p class="small-line">Preview${previewLead(c) ? ` for ${esc(title(previewLead(c).owner_name || previewLead(c).plaintiff || previewLead(c).source_id))}` : " (no lead of this kind yet)"}:</p>
+        <p class="small-line" id="pvl-${c}">${previewLabel(c)}</p>
         <div class="script" id="pv-${c}" aria-live="polite"></div>`).join("")}
     </div>
     <div class="card"><h2>Appearance</h2>
@@ -87,7 +95,7 @@ function renderSettings() {
     <button class="btn primary" id="sSave">Save settings</button> <span class="hint">Saves everything above except Pause (which applies at once) and Theme (saved in this browser).</span>`;
   $("#sTheme").onchange = e => setTheme(e.target.value);
   // Live preview, and field buttons that insert at the cursor.
-  const preview = box => { const c = box.dataset.tpl; $("#pv-" + c).textContent = fillText(box.value, previewChannel(c), previewLead(c) || {}); };
+  const preview = box => { const c = box.dataset.tpl; $("#pv-" + c).textContent = fillText(box.value, previewChannel(c), previewLead(c) || { lead_type: PREVIEW_KIND[c] }); };
   document.querySelectorAll("[data-tpl]").forEach(box => { preview(box); box.addEventListener("input", () => preview(box)); });
   document.querySelectorAll("[data-field]").forEach(b => b.onclick = () => {
     const box = $("#" + b.dataset.for), at = box.selectionStart ?? box.value.length, end = box.selectionEnd ?? at;

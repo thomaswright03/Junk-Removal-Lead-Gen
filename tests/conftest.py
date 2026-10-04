@@ -19,6 +19,18 @@ def no_waiting_between_lookup_retries(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_web_requests(monkeypatch):
+    """Tests never reach the court, the City, the county or a lookup
+    service: a real request fails as if offline (tests pass stand-ins)."""
+    import requests
+
+    def offline(self, method, url, *args, **kwargs):
+        raise requests.ConnectionError(f"tests don't go online ({url})")
+
+    monkeypatch.setattr(requests.Session, "request", offline)
+
+
+@pytest.fixture(autouse=True)
 def postgres_instead_of_sqlite(monkeypatch):
     if not PG_URL:
         yield

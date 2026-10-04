@@ -130,6 +130,17 @@ def test_latest_paper_decides_in_either_order():
     assert case_stage([], [], "Open", True, [{"for": "Defendant", "date": "2026-09-30"}], TODAY)[0] == "dismissed"
 
 
+def test_a_later_judgment_moves_the_judgment_date():
+    """An amended judgment replaces the first: freshness and the 30-day
+    Old rule count from the judgment still in force."""
+    first = {"Document SubType": "CIV - JUDGMENT - EVICTION", "FILE DATE": "9/01/2026"}
+    amended = {"Document SubType": "CIV - AMENDED JUDGMENT - EVICTION", "FILE DATE": "9/20/2026"}
+    for papers in ([first, amended], [amended, first]):
+        assert case_stage(papers, [], "Open", True, today=TODAY)[:2] == ("judgment", "2026-09-20")
+    # The parties table's undated "Judgment For" doesn't replace a dated judgment.
+    assert case_stage([amended], [], "Open", True, [{"for": "Plaintiff", "date": ""}], TODAY)[1] == "2026-09-20"
+
+
 def _add(conn, name, page_id, today=TODAY):
     html = (CASES / f"{name}.html").read_text()
     lead = parse_case_html(html, url=URL.format(page_id), today=today)

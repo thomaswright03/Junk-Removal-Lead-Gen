@@ -187,25 +187,23 @@ class App(JobRunner):
             budget = GoogleBudget(conn)
             public["google_used_this_month"] = budget.used()
             public["google_used_today"] = budget.used_today()
-            results = outreach.results(conn)
+            # The lead list's stored rank, brought up to date once for this request.
+            leadlist.refresh_ranking(conn, settings)
+            today = az_today()
+            status = params.get("status", "open") if params and params.get("list") == "leads" else "open"
+            # Counted over every lead: worked out again only when a lead,
+            # a contact or a setting changed (leadlist.memo).
+            numbers = leadlist.memo(
+                conn,
+                ("state", settings, status, today),
+                lambda: self._numbers(conn, settings, status),
+            )
             out = {
                 **self.status(conn, settings),
-                # Counted with the Leads tab's Status filter, so they match its list.
-                "view_counts": leadlist.view_counts(
-                    conn, params.get("status", "open") if params and params.get("list") == "leads" else "open"
-                ),
-                "counts": leadlist.counts(conn, settings),
-                "addresses": leadlist.address_progress(conn, settings),
+                **numbers,
                 "settings": public,
                 "channels": outreach.CHANNELS,
                 "touch_kinds": outreach.TOUCH_KINDS,
-                "results": results,
-                "comparison": outreach.comparison(results),
-                # The same, within one kind of lead at a time (the Results tab's default).
-                "results_by_kind": {
-                    kind: {"results": r, "comparison": outreach.comparison(r)}
-                    for kind, r in ((k, outreach.results(conn, lead_type=k)) for k in outreach.LEAD_KINDS)
-                },
                 "lead_kinds": outreach.LEAD_KINDS,
                 "comparison_basis": outreach.COMPARISON_BASIS,
                 "pitches": outreach.PITCHES,
@@ -218,7 +216,7 @@ class App(JobRunner):
                 out["leads"] = self.leads(conn, settings)
                 return out
             if params.get("list"):
-                out["list"] = leadlist.page(conn, settings, params)
+                out["list"] = leadlist.page(conn, settings, params, refresh=False)
             if params.get("samples"):  # the Settings tab's message previews
                 out["samples"] = leadlist.samples(conn, settings)
             if params.get("list") == "queue":  # the Outreach tab
@@ -226,6 +224,23 @@ class App(JobRunner):
             lead_id = str(params.get("lead") or "")
             out["lead"] = leadlist.one_lead(conn, settings, int(lead_id)) if lead_id.isdigit() else None
             return out
+
+    def _numbers(self, conn: Conn, settings: dict, status: str) -> dict:
+        """The counts and Results numbers the page shows (see state)."""
+        results = outreach.results(conn)
+        return {
+            # Counted with the Leads tab's Status filter, so they match its list.
+            "view_counts": leadlist.view_counts(conn, status),
+            "counts": leadlist.counts(conn, settings, refresh=False),
+            "addresses": leadlist.address_progress(conn, settings),
+            "results": results,
+            "comparison": outreach.comparison(results),
+            # The same, within one kind of lead at a time (the Results tab's default).
+            "results_by_kind": {
+                kind: {"results": r, "comparison": outreach.comparison(r)}
+                for kind, r in ((k, outreach.results(conn, lead_type=k)) for k in outreach.LEAD_KINDS)
+            },
+        }
 
     # ---- writes ------------------------------------------------------------
 
@@ -298,6 +313,21 @@ class App(JobRunner):
                 raise NotFound("That lead no longer exists. Reload the page.")
             if fields.get("address_source") == "confirmed" and not row["address"]:
                 raise ValueError("Add the property address first, then confirm it.")
+            revenue = fields.get("revenue_cents")
+            if revenue and revenue != row["revenue_cents"] and "status" not in fields:
+                # Job revenue means the job was done: the lead is Won, from
+                # the page, the command line or any other caller alike. A lead
+                # marked Lost or Skip only moves when the caller says so.
+                if row["status"] in ("lost", "skip"):
+                    was = "Lost" if row["status"] == "lost" else "Skip"
+                    raise FieldError(
+                        f"This lead is marked {was}. Job revenue usually means the job was done: mark it Won, "
+                        f"or keep it {was} and save the amount with its status.",
+                        "job_revenue",
+                    )
+                if row["status"] != "won":
+                    fields["status"] = "won"
+                    fields.setdefault("responded_at", now_iso())
             if fields.get("responded_at") and row["responded_at"]:
                 fields.pop("responded_at")  # keep the first response time
             if "channel" in fields and fields["channel"] == row["channel"]:
@@ -311,9 +341,37 @@ class App(JobRunner):
                 sets = ", ".join(f"{k} = ?" for k in fields)
                 conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*fields.values(), lead_id])
                 conn.commit()
+            also = 0
+            if body.get("same_landlord") is True and fields.get("owner_phone"):
+                also = self._same_landlord_phone(conn, row, fields["owner_phone"])
             if address:
                 message = self._locate(conn, lead_id)
-        return {"ok": True, **({"message": message} if message else {})}
+        return {"ok": True, **({"message": message} if message else {}), **({"also": also} if also else {})}
+
+    def _same_landlord_phone(self, conn: Conn, row: Any, phone: str) -> int:
+        """A number Steve found for a landlord, on that landlord's other open
+        leads that have no number yet (entered by hand, like this one).
+        Returns how many leads it was added to."""
+        key = outreach.landlord_key(row)
+        if key.startswith("lead:"):
+            return 0
+        closed = ", ".join(f"'{s}'" for s in leadlist.CLOSED)
+        others = conn.execute(
+            "SELECT id, plaintiff, owner_name FROM leads WHERE id <> ? AND duplicate_of IS NULL "
+            f"AND COALESCE(owner_phone, '') = '' AND status NOT IN ({closed}) "
+            "AND (plaintiff IS NOT NULL OR owner_name IS NOT NULL)",
+            (row["id"],),
+        ).fetchall()
+        ids = [r["id"] for r in others if outreach.landlord_key(r) == key]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i : i + 500]
+            marks = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE leads SET owner_phone = ?, contact_source = 'manual' WHERE id IN ({marks})",
+                [phone, *chunk],
+            )
+        conn.commit()
+        return len(ids)
 
     def _locate(self, conn: Conn, lead_id: int) -> str:
         """Map location, parcel and owner for an address Steve typed in.
@@ -417,14 +475,61 @@ class App(JobRunner):
             conn.commit()
         return {"ok": True, "logged": logged, "duplicates": duplicates}
 
+    # What a removed contact keeps, so Undo can put the same entry back.
+    _TOUCH_COLUMNS = ("lead_id", "channel", "kind", "cost", "cost_cents", "notes", "created_at")
+
     def delete_touch(self, body: dict) -> dict:
+        """Remove one logged contact. The answer carries the entry as it was
+        (``removed``), which ``restore_touch`` puts back for Undo."""
         touch_id = _lead_id(body.get("id"), "contact")
         with self.conn() as conn:
-            if not conn.execute("SELECT id FROM touches WHERE id = ?", (touch_id,)).fetchone():
+            row = conn.execute("SELECT * FROM touches WHERE id = ?", (touch_id,)).fetchone()
+            if not row:
                 raise NotFound("That contact was already removed. Reload the page.")
             conn.execute("DELETE FROM touches WHERE id = ?", (touch_id,))
             conn.commit()
-        return {"ok": True}
+        return {"ok": True, "removed": {"id": row["id"], **{k: row[k] for k in self._TOUCH_COLUMNS}}}
+
+    def restore_touch(self, body: dict) -> dict:
+        """Undo a removal: the same entry (its id, time, method, kind, cost
+        and notes) back in the lead's history."""
+        entry = body.get("removed")
+        if not isinstance(entry, dict):
+            raise ValueError("Nothing to put back. Reload the page.")
+        touch_id = _lead_id(entry.get("id"), "contact")
+        lead_id = _lead_id(entry.get("lead_id"))
+        if entry.get("channel") not in outreach.CHANNELS or entry.get("kind") not in dict(
+            outreach.TOUCH_KINDS[entry["channel"]]
+        ):
+            raise ValueError("That contact can't be put back. Log it again from the lead.")
+        cents = entry.get("cost_cents")
+        whole = isinstance(cents, int) and not isinstance(cents, bool)
+        if cents is not None and not (whole and 0 <= cents <= MAX_CONTACT_CENTS):
+            raise ValueError("That contact can't be put back. Log it again from the lead.")
+        if not isinstance(entry.get("created_at"), str) or len(entry["created_at"]) > 40:
+            raise ValueError("That contact can't be put back. Log it again from the lead.")
+        notes = notes_value(entry.get("notes"))
+        with self.conn() as conn:
+            if not conn.execute("SELECT id FROM leads WHERE id = ?", (lead_id,)).fetchone():
+                raise NotFound("That lead no longer exists. Reload the page.")
+            if conn.execute("SELECT id FROM touches WHERE id = ?", (touch_id,)).fetchone():
+                return {"ok": True, "restored": False}  # already back (Undo pressed twice)
+            conn.execute(
+                "INSERT INTO touches (id, lead_id, channel, kind, cost, cost_cents, notes, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    touch_id,
+                    lead_id,
+                    entry["channel"],
+                    entry["kind"],
+                    cents / 100 if cents is not None else 0,  # the old dollar column, from the checked cents
+                    cents,
+                    notes,
+                    entry["created_at"],
+                ),
+            )
+            conn.commit()
+        return {"ok": True, "restored": True}
 
     def assign(self, body: dict) -> dict:
         with field("count"):

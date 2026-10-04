@@ -410,7 +410,10 @@ def miles_between(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> Optional[float]
 
 
 # Channels that were tried and dropped. Leads still sitting in one go back to
-# the unassigned pool; their contact history is kept.
+# the unassigned pool; their contact history is kept. Kept on purpose, run at
+# every start: postcards were dropped for good (docs/DECISIONS.md), and a
+# database restored from before then, or written by an older copy of Lead
+# Desk, must not bring a postcard queue back.
 RETIRED_CHANNELS = ("postcard",)
 
 
@@ -779,12 +782,17 @@ def results(conn: Conn, today: Optional[date] = None, lead_type: Optional[str] =
         """,
         args,
     ).fetchall()
+    # Repeat owners, counted for the owners of these leads only.
     owner_counts = {}
-    for r in conn.execute(
-        "SELECT owner_name, COUNT(*) AS n FROM leads WHERE owner_name IS NOT NULL "
-        "AND duplicate_of IS NULL GROUP BY owner_name"
-    ).fetchall():
-        owner_counts[r["owner_name"]] = r["n"]
+    names = sorted({r["owner_name"] for r in rows if r["owner_name"]})
+    for i in range(0, len(names), 500):
+        chunk = names[i : i + 500]
+        for r in conn.execute(
+            f"SELECT owner_name, COUNT(*) AS n FROM leads WHERE owner_name IN ({','.join('?' * len(chunk))}) "
+            "AND duplicate_of IS NULL GROUP BY owner_name",
+            chunk,
+        ).fetchall():
+            owner_counts[r["owner_name"]] = r["n"]
     by: dict[str, list] = {}
     for r in rows:
         d = dict(r)

@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 import requests
 
-from leadgen import daily, db, outreach
+from leadgen import daily, db, leadlist, outreach
+from leadgen.forms import FieldError
 from leadgen.models import Lead
 from leadgen.sources.pima_jp_case import case_id, cases_due, parse_case_html
 from leadgen.util import az_today
@@ -738,3 +739,129 @@ def test_fetching_past_calendar_dates_explains_the_limit(tmp_path, monkeypatch, 
     assert "only lists upcoming hearings" in out
     assert "records request" in out and "Add cases" in out
     assert "0 new" not in out
+
+
+# ---- review 7: revenue means Won, Undo a removed contact, same landlord ------
+
+
+def test_job_revenue_marks_the_lead_won_from_any_caller(desk):
+    app, lead_id, conn = desk
+    app.update_lead({"id": lead_id, "fields": {"job_revenue": "250"}})
+    row = conn.execute("SELECT status, revenue_cents, responded_at FROM leads WHERE id = ?", (lead_id,)).fetchone()
+    assert row["status"] == "won" and row["revenue_cents"] == 25000 and row["responded_at"]
+
+
+def test_revenue_on_a_lost_lead_asks_first_and_an_explicit_status_is_kept(desk):
+    app, lead_id, conn = desk
+    app.update_lead({"id": lead_id, "fields": {"status": "lost"}})
+    with pytest.raises(FieldError) as err:
+        app.update_lead({"id": lead_id, "fields": {"job_revenue": "90"}})
+    assert err.value.field == "job_revenue" and "marked Lost" in str(err.value)
+    assert conn.execute("SELECT revenue_cents FROM leads").fetchone()[0] is None
+    # "Keep it lost": the page sends the status with the amount.
+    app.update_lead({"id": lead_id, "fields": {"job_revenue": "90", "status": "lost"}})
+    row = conn.execute("SELECT status, revenue_cents FROM leads").fetchone()
+    assert (row["status"], row["revenue_cents"]) == ("lost", 9000)
+
+
+def test_a_removed_contact_can_be_put_back(desk):
+    app, lead_id, conn = desk
+    app.update_lead({"id": lead_id, "fields": {"channel": "door_hanger"}})
+    app.add_touches({"lead_id": lead_id, "kind": "visited", "notes": "left at the gate"})
+    touch_id = app.state()["leads"][0]["touches"][0]["id"]
+    removed = app.delete_touch({"id": touch_id})["removed"]
+    assert app.state()["leads"][0]["touches"] == []
+    status, body, _ = post(app, "/api/touch/restore", {"removed": removed})
+    assert status == 200 and body["restored"] is True
+    touches = app.state()["leads"][0]["touches"]
+    assert [(t["id"], t["notes"]) for t in touches] == [(touch_id, "left at the gate")]
+    assert {r["channel"]: r for r in app.state()["results"]}["door_hanger"]["touched"] == 1
+    # Undo pressed twice puts it back once.
+    assert app.restore_touch({"removed": removed})["restored"] is False
+    # A later contact still gets a fresh id.
+    assert app.add_touches({"lead_id": lead_id, "kind": "talked", "notes": "again"})["logged"] == 1
+    assert len(app.state()["leads"][0]["touches"]) == 2
+    bad = dict(removed, channel="carrier_pigeon")
+    status, body, _ = post(app, "/api/touch/restore", {"removed": bad})
+    assert status == 400 and "can't be put back" in body["error"]
+
+
+def test_a_number_found_for_a_landlord_fills_its_other_leads(tmp_path):
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    for sid, plaintiff in (
+        ("CV26-050001-EA", "SAMPLE PROPERTIES LLC"),
+        ("CV26-050002-EA", "Sample Properties, LLC"),
+        ("CV26-050003-EA", "OTHER EXAMPLE LLC"),
+        ("CV26-050004-EA", "SAMPLE PROPERTIES LLC"),
+    ):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_calendar",
+                sid,
+                "eviction",
+                "2026-09-28",
+                None,
+                plaintiff=plaintiff,
+                defendant="ROE, SAM",
+                in_pima=True,
+                eviction_notice=True,
+            ),
+        )
+    conn.commit()
+    ids = {r["source_id"]: r["id"] for r in conn.execute("SELECT id, source_id FROM leads").fetchall()}
+    conn.execute("UPDATE leads SET status = 'lost' WHERE id = ?", (ids["CV26-050004-EA"],))
+    conn.commit()
+    app = App(path)
+    r = app.update_lead({"id": ids["CV26-050001-EA"], "fields": {"owner_phone": "520-555-0123"}, "same_landlord": True})
+    assert r["also"] == 1
+    phones = {
+        r["source_id"]: (r["owner_phone"], r["contact_source"])
+        for r in conn.execute("SELECT source_id, owner_phone, contact_source FROM leads").fetchall()
+    }
+    assert phones["CV26-050002-EA"] == (phones["CV26-050001-EA"][0], "manual")
+    assert phones["CV26-050003-EA"][0] is None and phones["CV26-050004-EA"][0] is None  # other landlord; closed
+    # Without the box ticked only this lead changes.
+    app.update_lead({"id": ids["CV26-050003-EA"], "fields": {"owner_phone": "520-555-0124"}})
+    assert conn.execute("SELECT owner_phone FROM leads WHERE id = ?", (ids["CV26-050004-EA"],)).fetchone()[0] is None
+
+
+def test_records_request_csv_with_judgments_and_writs_shows_in_the_default_view(tmp_path):
+    app = App(tmp_path / "l.db", parcel_client=NoParcels())
+    data = (
+        b"Case Number,Plaintiff,Defendant,Filed,Judgment Date,Writ Date,Disposition\n"
+        b'CV26-060001-EA,SAMPLE PROPERTIES LLC,"ROE, SAM",2026-09-01,2026-09-20,,Judgment for plaintiff\n'
+        b'CV26-060002-EA,EXAMPLE HOMES LLC,"ROE, JO",2026-09-02,2026-09-21,2026-09-28,\n'
+        b'CV26-060003-EA,EXAMPLE HOMES LLC,"ROE, AL",2026-09-03,,,Dismissed\n'
+    )
+    assert app.import_file("csv_import", "records.csv", data)["new"] == 3
+    conn = db.connect(tmp_path / "l.db")
+    stages = dict(conn.execute("SELECT source_id, case_stage FROM leads").fetchall())
+    assert stages == {"CV26-060001-EA": "judgment", "CV26-060002-EA": "writ", "CV26-060003-EA": "dismissed"}
+    assert app.settings(conn).get("lead_view", "eviction_notice") == "eviction_notice"
+    shown = [l["source_id"] for l in app.state()["leads"]]
+    assert shown[:2] == ["CV26-060002-EA", "CV26-060001-EA"] and "CV26-060003-EA" not in shown
+
+
+def test_message_previews_come_from_any_view(desk):
+    app, lead_id, conn = desk
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-070001-EA",
+            "eviction",
+            "2026-09-28",
+            None,
+            plaintiff="SAMPLE PROPERTIES LLC",
+            defendant="ROE, SAM",
+            in_pima=True,
+        ),
+    )
+    db.put_settings(conn, {"lead_view": "eviction_notice"})
+    conn.commit()
+    with app.conn() as c:
+        found = leadlist.samples(c, app.settings(c))
+    assert found["code_violation"]["id"] == lead_id
+    assert found["eviction"]["plaintiff"]

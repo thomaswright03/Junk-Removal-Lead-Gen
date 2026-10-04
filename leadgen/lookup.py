@@ -7,10 +7,16 @@ Steve or a skip-tracing file (see contacts.py), not from this module.
 
 Providers, tried in order:
 
-``osm``      OpenStreetMap (Overpass API). Free, no key. Finds businesses
-             mapped at or right next to the property (an apartment complex's
-             leasing office, for example) with a phone, email or website tag.
-             Data is ODbL: "(c) OpenStreetMap contributors".
+``osm``      OpenStreetMap. Free, no key. Finds businesses mapped at or
+             right next to the property (an apartment complex's leasing
+             office, for example) with a phone, email or website tag
+             (Overpass API), and, for a lead with no mapped property (most
+             evictions), a business of the same name in the Tucson area
+             (OpenStreetMap's own search, Nominatim, at most one search a
+             second as its usage policy asks). Few landlord companies are on
+             OpenStreetMap, so this finds some apartment complexes and
+             management offices, not most landlords. Data is ODbL:
+             "(c) OpenStreetMap contributors".
 ``google``   Google Places Text Search. Needs a Google Maps Platform API key
              (GOOGLE_PLACES_API_KEY, or the Lead Desk settings). Searches the
              owner's name around Tucson, and "apartments at <address>" for
@@ -47,6 +53,10 @@ OVERPASS_URLS = (
     "https://overpass.private.coffee/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 )
+# OpenStreetMap's search by name, and the area it searches (Tucson and the
+# rest of eastern Pima County: west, south, east, north).
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+TUCSON_AREA = (-111.6, 31.8, -110.5, 32.6)
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 GOOGLE_MAX_AGE_DAYS = 30
 # Google's free monthly allowance for Text Search Enterprise, the search tier
@@ -219,10 +229,64 @@ class OsmProvider:
         self.timeout = timeout
         self.strikes: dict[str, int] = {}
         self.urls = list(OVERPASS_URLS)
+        self.search_strikes = 0  # name searches failed in a row
 
     def find(self, lead: LeadRow, business_name: Optional[str]) -> Optional[Contact]:
-        if lead["lat"] is None or lead["lon"] is None:
-            return None
+        """A business at the property (when it is on the map), else one
+        with the company's name in the Tucson area."""
+        found = None
+        if lead["lat"] is not None and lead["lon"] is not None:
+            found = self._nearby(lead, business_name)
+        if found is None and business_name:
+            found = self._by_name(business_name)
+        return found
+
+    def _by_name(self, business_name: str) -> Optional[Contact]:
+        words = [w for w in re.findall(r"[A-Z0-9']+", business_name.upper()) if w not in _NAME_NOISE]
+        if len(" ".join(words)) < 4:
+            return None  # nothing distinctive to search for
+        if self.search_strikes >= self.max_failures:
+            raise ProviderUnavailable("OpenStreetMap search not responding; skipped for this run")
+        west, south, east, north = TUCSON_AREA
+        try:
+            params: dict[str, Any] = {
+                "q": " ".join(words),
+                "format": "jsonv2",
+                "extratags": 1,
+                "limit": 5,
+                "viewbox": f"{west},{north},{east},{south}",
+                "bounded": 1,
+            }
+            resp = self.session.get(
+                NOMINATIM_URL, params=params, timeout=self.timeout, headers={"Accept": "application/json"}
+            )
+            resp.raise_for_status()
+        except requests.RequestException:
+            self.search_strikes += 1
+            raise
+        self.search_strikes = 0
+        time.sleep(self.delay)
+        best: Optional[Contact] = None
+        wanted = name_tokens(business_name)
+        for place in resp.json() or []:
+            name = place.get("name") or ""
+            tags = place.get("extratags") or {}
+            # Nothing ties a place found by name to the lead but the name,
+            # so every word of the landlord's name must be in it.
+            if not wanted or not wanted <= name_tokens(name):
+                continue
+            c = Contact(
+                phone=clean_phone(tags.get("phone") or tags.get("contact:phone")),
+                email=clean_email(tags.get("email") or tags.get("contact:email")),
+                website=tags.get("website") or tags.get("contact:website") or tags.get("url"),
+                source="osm",
+                matched_name=name,
+            )
+            if not c.empty() and (best is None or _reach(c) > _reach(best)):
+                best = c
+        return best
+
+    def _nearby(self, lead: LeadRow, business_name: Optional[str]) -> Optional[Contact]:
         if not self.urls:
             raise ProviderUnavailable("Overpass servers not responding; skipped for this run")
         q = f"""
