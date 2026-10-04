@@ -88,6 +88,13 @@ def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
         log_.debug("%s failed", label, exc_info=True)
 
 
+def _case_progress(progress: Optional[Callable[[str], Any]]) -> Optional[Callable[[int, int], Any]]:
+    """update_cases' ``progress(done, total)`` as the header's message."""
+    if progress is None:
+        return None
+    return lambda done, total: progress(f"reading court cases: {done} of {total}")
+
+
 def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
     counts = {"new": 0, "updated": 0}
     for lead in leads:
@@ -187,7 +194,7 @@ def run_daily(
                 scheduled=True,
                 log=log,
                 should_stop=stop,
-                progress=(lambda done, total: progress(f"reading court cases: {done} of {total}")) if progress else None,
+                progress=_case_progress(progress),
             ),
         ),
         ("owners", lambda: enrich(conn, parcel_client or ParcelClient(), should_stop=stop)),

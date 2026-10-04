@@ -1184,7 +1184,10 @@ def test_first_phones_pass_reaches_the_top_leads_from_the_status_line(server, pa
     page.wait_for_selector("text=Number saved for")
     page.wait_for_function("document.querySelector('#passProgress').innerText.includes('1 of 2 landlords')")
     assert page.evaluate("document.activeElement.id") == "pp-0"  # on to the next landlord without a number
-    phones = [r[0] for r in db.connect(path).execute("SELECT owner_phone FROM leads WHERE plaintiff = 'SAMPLE PROPERTIES LLC'")]
+    phones = [
+        r[0]
+        for r in db.connect(path).execute("SELECT owner_phone FROM leads WHERE plaintiff = 'SAMPLE PROPERTIES LLC'")
+    ]
     assert phones == ["(520) 555-0188", "(520) 555-0188"]
     assert "2 of 3 open eviction leads can be reached now" in page.inner_text("#reachLine")
     # A landlord with no number to be found is skipped, and can be brought back.

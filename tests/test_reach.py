@@ -175,7 +175,9 @@ def test_ten_numbers_reach_the_top_ten_leads(tmp_path):
     assert P["landlords"][0]["name"] == best["plaintiff"].split(";")[0] and P["landlords"][0]["stage"] == "writ"
     # One number per landlord, saved on all its open leads.
     for n, g in enumerate(P["landlords"]):
-        out = app.update_lead({"id": g["lead_id"], "fields": {"owner_phone": f"(520) 555-01{n:02d}"}, "same_landlord": True})
+        out = app.update_lead(
+            {"id": g["lead_id"], "fields": {"owner_phone": f"(520) 555-01{n:02d}"}, "same_landlord": True}
+        )
         assert out.get("also", 0) == g["leads"] - 1
     state = app.state({"list": "leads", "pass": "0"})
     assert state["top_reach"] == {"leads": 10, "reached": 10}
@@ -207,7 +209,9 @@ def test_a_landlord_with_no_number_to_find_can_be_skipped(tmp_path):
 def test_a_number_on_one_lead_of_a_landlord_is_offered_for_the_rest(tmp_path):
     app, conn = first_run(tmp_path)
     g = app.state({"list": "leads", "pass": "0"})["phone_pass"]["landlords"][0]
-    some = conn.execute("SELECT id FROM leads WHERE plaintiff LIKE ? ORDER BY id LIMIT 1", (g["name"] + "%",)).fetchone()
+    some = conn.execute(
+        "SELECT id FROM leads WHERE plaintiff LIKE ? ORDER BY id LIMIT 1", (g["name"] + "%",)
+    ).fetchone()
     conn.execute("UPDATE leads SET owner_phone = '(520) 555-0199' WHERE id = ?", (some["id"],))
     conn.commit()
     g = app.state({"list": "leads", "pass": "0"})["phone_pass"]["landlords"][0]
@@ -223,7 +227,11 @@ def test_the_automatic_lookup_yield_is_counted(tmp_path):
         "UPDATE leads SET contact_checked_at = '2026-10-01T00:00:00', lookup_name = UPPER(SUBSTR(plaintiff, 1, 18)) "
         "WHERE plaintiff LIKE 'SAMPLE 1 %' OR plaintiff LIKE 'SAMPLE 2 %' OR plaintiff LIKE 'SAMPLE 3 %'"
     )
-    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0101', contact_source = 'osm' WHERE plaintiff LIKE 'SAMPLE 1 %'")
-    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0102', contact_source = 'manual' WHERE plaintiff LIKE 'SAMPLE 2 %'")
+    conn.execute(
+        "UPDATE leads SET owner_phone = '(520) 555-0101', contact_source = 'osm' WHERE plaintiff LIKE 'SAMPLE 1 %'"
+    )
+    conn.execute(
+        "UPDATE leads SET owner_phone = '(520) 555-0102', contact_source = 'manual' WHERE plaintiff LIKE 'SAMPLE 2 %'"
+    )
     conn.commit()
     assert app.state()["auto_yield"] == {"looked_up": 3, "found": 1}

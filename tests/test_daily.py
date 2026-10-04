@@ -2,8 +2,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from leadgen import daily, db, schedule
+from leadgen.business import Contact
 from leadgen.enrich import enrich_landlords, landlord_name, landlord_property
-from leadgen.lookup import Contact
 from leadgen.sources.pima_jp_calendar import (
     CalendarClient,
     PimaJpCalendar,
@@ -354,9 +354,8 @@ def test_status_has_no_progress_message_after_the_check(tmp_path):
 def test_the_check_says_how_long_it_takes_and_the_readme_agrees(tmp_path):
     """Starting the check says it takes about 15 minutes (it reads up to 400
     case pages at a polite pace), and so does the README."""
-    from leadgen.web import App
-
     from leadgen.jobs import STARTED_MESSAGE
+    from leadgen.web import App
 
     app = App(
         tmp_path / "l.db",

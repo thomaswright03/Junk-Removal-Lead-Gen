@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from leadgen import db, leadlist, outreach
+from leadgen import db, dealing, leadlist, outreach, results
 from leadgen.enrich import enrich, is_entity, owner_fields
 from leadgen.models import Lead
 from leadgen.util import az_today
@@ -582,10 +582,10 @@ def test_a_lead_only_some_methods_can_work_is_offered_not_silently_dropped(tmp_p
     out = app.assign({"count": 10, "channels": three, "fit": True})
     assert out["fitted"] == {"phone": 1} and out["kinds"] == {"eviction": 1}
     row = conn.execute("SELECT channel, assigned_by FROM leads").fetchone()
-    assert (row["channel"], row["assigned_by"]) == ("phone", outreach.BY_FIT)
+    assert (row["channel"], row["assigned_by"]) == ("phone", dealing.BY_FIT)
     phone = {r["channel"]: r for r in app.state()["results"]}["phone"]
     assert phone["assigned"] == 1 and phone["mix"]["leads"] == 0 and phone["mix"]["fitted"] == 1
-    assert any("outside the balanced split" in n for n in outreach.comparison(app.state()["results"])["notes"])
+    assert any("outside the balanced split" in n for n in results.comparison(app.state()["results"])["notes"])
 
 
 def test_fit_leads_fill_the_round_after_the_balanced_split(tmp_path):
@@ -605,7 +605,9 @@ def test_fit_leads_fill_the_round_after_the_balanced_split(tmp_path):
     # three here), so 3 of the 4 places left are filled.
     assert out["fitted"] == {"phone": 3}
     dealt = conn.execute("SELECT plaintiff, channel FROM leads WHERE channel IS NOT NULL").fetchall()
-    assert len(dealt) == 7 and len({(r["plaintiff"], r["channel"]) for r in dealt}) == len({r["plaintiff"] for r in dealt})
+    assert len(dealt) == 7 and len({(r["plaintiff"], r["channel"]) for r in dealt}) == len(
+        {r["plaintiff"] for r in dealt}
+    )
 
 
 def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):
@@ -874,10 +876,10 @@ def test_small_rounds_are_split_evenly_across_the_methods(tmp_path):
     app = App(path)
     for seed in range(25):
         for n in (2, 3, 5):
-            out = outreach.assign(conn, app.leads(conn), n, ["phone", "property_manager"], seed=seed, preview=True)
+            out = dealing.assign(conn, app.leads(conn), n, ["phone", "property_manager"], seed=seed, preview=True)
             got = sorted(out["assigned"].values())
             assert got == [n // 2, n - n // 2], (seed, n, out["assigned"])
-        out = outreach.assign(conn, app.leads(conn), 5, list(outreach.CHANNELS), seed=seed, preview=True)
+        out = dealing.assign(conn, app.leads(conn), 5, list(outreach.CHANNELS), seed=seed, preview=True)
         # Only two have an address, so a round with door hangers deals those two, one each.
         assert sorted(out["assigned"].values()) == [0, 1, 1]
 

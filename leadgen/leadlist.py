@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Optional
 
 from . import db, outreach
+from .business import lookup_targets
 from .sources.pima_jp_case import ENDED_SQL
 from .tucson_codes import CODE_LABELS, code_of
 from .util import Conn, LeadRow, az_today, is_multifamily
@@ -404,8 +405,6 @@ def refresh_ranking(conn: Conn, settings: dict, today: Optional[date] = None) ->
     On SQLite another connection may be writing (the daily check): rather
     than wait on it, this request uses the rank as stored and a later one
     catches up."""
-    from .lookup import lookup_targets
-
     today = today or az_today()
     lite = isinstance(conn, sqlite3.Connection)
     if lite:

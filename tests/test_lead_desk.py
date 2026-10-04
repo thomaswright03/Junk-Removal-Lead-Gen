@@ -364,7 +364,7 @@ def test_update_court_cases_runs_in_the_background_with_progress(tmp_path):
 
 
 def test_find_phones_runs_in_the_background(tmp_path):
-    from leadgen.lookup import Contact
+    from leadgen.business import Contact
 
     class Phones:
         name = "fake"
