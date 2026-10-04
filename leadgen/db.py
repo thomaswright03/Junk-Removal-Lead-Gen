@@ -352,6 +352,7 @@ def connect(path: Any) -> Conn:
             _version_counters(conn)
             _money_to_cents(conn)
             _upgrade_case_stages(conn)
+            _upgrade_owner_lines(conn)
             _READY.add(str(path))
         return conn
     path = Path(path)
@@ -389,6 +390,7 @@ def _migrate(conn: Conn) -> None:
     _version_counters(conn)
     _money_to_cents(conn)
     _upgrade_case_stages(conn)
+    _upgrade_owner_lines(conn)
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
         for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
@@ -457,6 +459,18 @@ def write_lock(conn: Conn, lead_ids: Sequence[int] = ()) -> Iterator[None]:
     except BaseException:
         conn.rollback()
         raise
+    conn.commit()
+
+
+def _upgrade_owner_lines(conn: Conn) -> None:
+    """Once per database: owners saved with the first street line of their
+    mailing address on the name line (see enrich.split_owner_line) split."""
+    if conn.execute("SELECT 1 FROM settings WHERE key = 'owner_lines_split'").fetchone():
+        return
+    from .enrich import split_stored_owner_lines
+
+    split_stored_owner_lines(conn)
+    put_settings(conn, {"owner_lines_split": 1})
     conn.commit()
 
 

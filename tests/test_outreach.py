@@ -111,6 +111,45 @@ def test_owner_fields_absentee_and_entity():
     assert is_entity("DOE JANE TR") and not is_entity("DOE JANE")
 
 
+def test_owner_name_and_mailing_address_are_split_where_they_belong(tmp_path):
+    """A mailing address with two street lines comes from the county with the
+    first one on the name line: the owner shows the name alone and the
+    mailing address every street line in order (made-up owner)."""
+    rec = owner("P9", "SAMPLE VIEW TUCSON LLC 12112 N EXAMPLE VISTA BLVD", "STE 150 PMB 430", "1 W SITE ST")
+    f = owner_fields(rec)
+    assert f["owner_name"] == "SAMPLE VIEW TUCSON LLC"
+    assert f["owner_address"] == "12112 N EXAMPLE VISTA BLVD, STE 150 PMB 430"
+    assert f["owner_entity"] == 1 and f["owner_absentee"] == 1
+    # A box on the name line, and names that only look like they hold a number, are left alone.
+    assert owner_fields(owner("x", "EXAMPLE APARTMENTS LP PO BOX 4417", "ATTN OFFICE", "1 W SITE ST"))[
+        "owner_address"
+    ] == ("PO BOX 4417, ATTN OFFICE")
+    for name in ("1ST CHOICE HOMES LLC", "DOE JOHN 1999 TRUST", "TUCSON 22ND ST LLC", "FRC HOLDINGS OF TUCSON LLC"):
+        assert owner_fields(owner("x", name, "10 E OWNER LN", "1 W SITE ST"))["owner_name"] == name
+    # The same street on both lines isn't repeated.
+    assert owner_fields(owner("x", "ROE RIVER 10 E OWNER LN", "10 E OWNER LN", "10 E OWNER LN"))["owner_address"] == (
+        "10 E OWNER LN"
+    )
+    # Owners saved before the split are fixed once when the database opens.
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    db.upsert(conn, Lead("tucson_code_cases", "CE-9", "code_violation", "2026-09-01", "1 W SITE ST"))
+    conn.execute(
+        "UPDATE leads SET owner_name = 'SAMPLE VIEW TUCSON LLC 12112 N EXAMPLE VISTA BLVD', "
+        "owner_address = 'STE 150 PMB 430'"
+    )
+    conn.execute("DELETE FROM settings WHERE key = 'owner_lines_split'")
+    conn.commit()
+    conn.close()
+    db.forget_ready()
+    conn = db.connect(path)
+    r = conn.execute("SELECT owner_name, owner_address FROM leads").fetchone()
+    assert (r["owner_name"], r["owner_address"]) == (
+        "SAMPLE VIEW TUCSON LLC",
+        "12112 N EXAMPLE VISTA BLVD, STE 150 PMB 430",
+    )
+
+
 def test_enrich_fills_owner_columns():
     conn = db.connect(":memory:")
     parcels = seed(conn)

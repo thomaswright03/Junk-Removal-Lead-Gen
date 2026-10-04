@@ -61,14 +61,63 @@ def _sql_str(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+# A street line at the end of an owner name: when the owner's mailing
+# address has two street lines (a street and a suite or box), the county
+# record carries the first one on the name line ("EXAMPLE LLC 100 N MAIN
+# BLVD") and only the second as the address ("STE 150").
+_STREET_TAIL = re.compile(
+    r"^(?P<name>.*?\D)\s+(?P<street>(?:\d+[A-Z]?\s+(?:[NSEW]\s+)?(?:[A-Z0-9'-]+\s+){0,5}?"
+    r"(?:ST|STREET|AVE?|AVENUE|RD|ROAD|DR|DRIVE|BLVD|LN|LANE|WAY|PL|PLACE|CT|COURT|CIR|CIRCLE|PKWY|"
+    r"PARKWAY|HWY|HIGHWAY|TRL|TRAIL|LOOP|TER|TERRACE|PLZ|PLAZA|SQ|CTR|CENTER|RUN|PASS|PATH|ROW|XING|ALY)"
+    r"(?:\s+[NSEW])?(?:\s+(?:STE|SUITE|UNIT|APT|#)\s*[A-Z0-9-]+)?|P\s*O\s+BOX\s+\d+))$"
+)
+
+
+def split_owner_line(name: Optional[str], mail: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """``(owner name, mailing street lines)`` with a street line moved off the
+    end of the name (see ``_STREET_TAIL``) to the front of the mailing
+    address, the lines in order: "100 N MAIN BLVD, STE 150"."""
+    name = re.sub(r"\s+", " ", name or "").strip() or None
+    mail = re.sub(r"\s+", " ", mail or "").strip() or None
+    m = _STREET_TAIL.match(name.upper()) if name else None
+    if not m or not name:
+        return name, mail
+    head, street = name[: len(m.group("name"))].strip(), name[len(m.group("name")) :].strip()
+    if not head or not re.search(r"[A-Z]{2}", head.upper()):
+        return name, mail
+    if mail and normalize_address(mail) == normalize_address(street):
+        return head, mail
+    return head, ", ".join(x for x in (street, mail) if x)
+
+
+def split_stored_owner_lines(conn: Conn) -> int:
+    """Owners saved before ``split_owner_line``: the street moved off the
+    name line onto the mailing address. Returns how many leads changed."""
+    changed = 0
+    rows = conn.execute(
+        "SELECT id, owner_name, owner_address FROM leads WHERE owner_name IS NOT NULL AND owner_name LIKE '% %'"
+    ).fetchall()
+    for r in rows:
+        name, mail = split_owner_line(r["owner_name"], r["owner_address"])
+        if name != r["owner_name"]:
+            conn.execute(
+                "UPDATE leads SET owner_name = ?, owner_address = ?, owner_entity = ? WHERE id = ?",
+                (name, mail, int(is_entity(name)), r["id"]),
+            )
+            changed += 1
+    return changed
+
+
 def owner_fields(attrs: dict) -> dict:
     """Map one parcel record to the lead's owner_* columns."""
-    name = (attrs.get("ADDRESSEE") or attrs.get("MAIL1") or "").strip() or None
-    mail = (attrs.get("ADDRESS") or attrs.get("MAIL2") or "").strip() or None
+    name, mail = split_owner_line(
+        attrs.get("ADDRESSEE") or attrs.get("MAIL1"), attrs.get("ADDRESS") or attrs.get("MAIL2")
+    )
     site = (attrs.get("SITE_ADDRESS") or "").strip() or None
     absentee = None
     if mail and site:
-        absentee = int(normalize_address(mail) != normalize_address(site))
+        # The street line: a suite or box after it doesn't make the owner absent.
+        absentee = int(normalize_address(mail.split(", ")[0]) != normalize_address(site))
     return {
         "owner_name": name,
         "owner_address": mail,
