@@ -71,6 +71,7 @@ function stateQuery() {
   if (ui.tab === "leads") {
     p.set("list", "leads");
     for (const k of ["q", "type", "status", "channel", "sort", "offset"]) p.set(k, ui[k]);
+    if (ui.passOpen) p.set("pass", ui.passOffset || 0);  // the first-phones pass, when it's open
   } else if (ui.tab === "settings") {
     p.set("samples", "1");  // a lead of each kind, for the message previews
   } else if (ui.tab === "outreach") {
@@ -407,6 +408,7 @@ function renderHeader() {
   const details = [
     `${c.assigned || 0} in outreach`,
     c.evictions_open ? `${c.evictions_reachable || 0} of ${c.evictions_open} open eviction leads can be reached (phone, email or known address)` : "",
+    (S.auto_yield || {}).looked_up ? `Automatic phone lookup: a number found for ${S.auto_yield.found} of ${S.auto_yield.looked_up} landlords looked up` : "",
     c.owners_pending ? `${c.owners_pending} owners not looked up yet` : "",
     unchecked ? `${unchecked} court case${unchecked > 1 ? "s" : ""} still to check (${d.running ? "checking now" : "next check " + (d.next_run || "tomorrow 6:00 AM")})` : "",
     d.last_run && d.summary ? `Last check ${fmtDate(d.last_run)}: ${d.summary}` : "",

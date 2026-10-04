@@ -108,6 +108,7 @@ def _handle(app: Any, method: str, path: str, query: str, headers: Any, body: by
             "/api/cases/add": app.add_cases,
             "/api/cases/update": app.update_cases,
             "/api/job/cancel": app.cancel_job,
+            "/api/phone-pass/skip": app.skip_landlord,
         }
         if path not in routes:
             return 404, {"error": "That page doesn't exist."}, "application/json"
@@ -151,6 +152,7 @@ ACTIONS = {
     "/api/cases/add": "add those cases",
     "/api/cases/update": "update the court cases",
     "/api/job/cancel": "cancel that",
+    "/api/phone-pass/skip": "skip that landlord",
 }
 
 

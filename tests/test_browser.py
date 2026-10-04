@@ -1129,3 +1129,54 @@ def test_box_hints_are_whole_on_a_computer(server, page, width):
         })"""
     )
     assert cut == []
+
+
+def test_first_phones_pass_reaches_the_top_leads_from_the_status_line(server, page):
+    """A fresh list with no numbers: the status line offers the first-phones
+    pass; it says what Lead Desk fills in by itself and what it can't, lists
+    the landlords best first, and a saved number makes their leads reachable."""
+    url, app, path = server
+    add_unreachable_eviction(path)
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000005-EA",
+            "eviction",
+            "2026-09-27",
+            None,
+            plaintiff="SAMPLE PROPERTIES LLC",
+            defendant="ROE, JO",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute("UPDATE leads SET owner_phone = NULL")
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.click("#passShow")
+    page.wait_for_selector("#phonePass")
+    assert page.evaluate("document.activeElement.id") == "passTitle"
+    text = page.inner_text("#phonePass")
+    assert "What Lead Desk fills in by itself" in text and "What it can't" in text
+    assert "0 of 2 landlords below have a number" in text
+    rows = page.locator("#phonePass li.passrow")
+    assert rows.count() == 2
+    assert "1. Example Homes LLC · 1 open lead" in rows.first.inner_text()  # the best lead's landlord first
+    sample = page.locator("#phonePass li.passrow", has_text="Sample Properties LLC")
+    assert "2 open leads" in sample.inner_text()
+    sample.locator("input").fill("(520) 555-0188")
+    sample.locator("[data-passsave]").click()
+    page.wait_for_selector("text=Number saved for")
+    page.wait_for_function("document.querySelector('#passProgress').innerText.includes('1 of 2 landlords')")
+    assert page.evaluate("document.activeElement.id") == "pp-0"  # on to the next landlord without a number
+    phones = [r[0] for r in db.connect(path).execute("SELECT owner_phone FROM leads WHERE plaintiff = 'SAMPLE PROPERTIES LLC'")]
+    assert phones == ["(520) 555-0188", "(520) 555-0188"]
+    assert "2 of 3 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    # A landlord with no number to be found is skipped, and can be brought back.
+    page.click("[data-passskip='0']")
+    page.wait_for_selector("#passUnskip")
+    page.click("#passHide")
+    assert page.locator("#phonePass").count() == 0

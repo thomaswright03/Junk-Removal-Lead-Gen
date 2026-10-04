@@ -20,7 +20,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
-from . import daily, db, leadlist, outreach
+from . import daily, db, leadlist, outreach, phonepass
 from .contacts import clean_email, clean_phone, import_contacts
 from .enrich import LANDLORD_SOURCE, ParcelClient, enrich, enrich_lead, fix_inferred_addresses, owner_fields
 from .forms import (
@@ -221,6 +221,8 @@ class App(JobRunner):
                 out["samples"] = leadlist.samples(conn, settings)
             if params.get("list") == "queue":  # the Outreach tab
                 out["split"] = self.split_preview(conn, settings)
+            if str(params.get("pass", "")).isdigit():  # the Leads tab's first-phones pass
+                out["phone_pass"] = phonepass.landlords(conn, settings, int(params["pass"]))
             lead_id = str(params.get("lead") or "")
             out["lead"] = leadlist.one_lead(conn, settings, int(lead_id)) if lead_id.isdigit() else None
             return out
@@ -233,6 +235,9 @@ class App(JobRunner):
             "view_counts": leadlist.view_counts(conn, status),
             "counts": leadlist.counts(conn, settings, refresh=False),
             "addresses": leadlist.address_progress(conn, settings),
+            # What the automatic phone lookup has found so far (the Leads tab says so plainly).
+            "auto_yield": phonepass.auto_yield(conn, settings),
+            "top_reach": phonepass.top_reach(conn, settings),
             "results": results,
             "comparison": outreach.comparison(results),
             # The same, within one kind of lead at a time (the Results tab's default).
@@ -413,6 +418,11 @@ class App(JobRunner):
         conn.commit()
         saved = "Address saved" + (", found on the map" if result else "")
         return saved + ". " + " ".join(notes) if notes else saved + "."
+
+    def skip_landlord(self, body: dict) -> dict:
+        """The first-phones pass: skip a landlord with no number to be found, or bring it back."""
+        with self.conn() as conn:
+            return phonepass.set_skipped(conn, body.get("key"), body.get("skip") is not False)
 
     def add_touches(self, body: dict) -> dict:
         if body.get("lead_ids") is not None:

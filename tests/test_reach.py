@@ -131,3 +131,99 @@ def test_reach_of_a_lead_row():
     assert leadlist.reach({**row, "address": "1 W A ST", "address_source": "import"}) == "address"
     assert leadlist.reach({**row, "address": "1 W A ST", "address_source": "landlord"}) == "none"
     assert leadlist.reach({**row, "owner_email": "a@example.com"}) == "contact"
+
+
+# ---- first phones: the landlords of the best leads, ten at a time ------------
+
+
+def first_run(tmp_path):
+    """A fresh database after a first check: 24 eviction leads of 14
+    landlords, none with a phone, two of them recent writs."""
+    path = tmp_path / "first.db"
+    conn = db.connect(path)
+    today = az_today()
+    for i in range(24):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                f"CV26-{i:06d}-EA",
+                "eviction",
+                (today - timedelta(days=i % 20)).isoformat(),
+                plaintiff=f"SAMPLE {i % 14} RENTALS LLC; OTHER PARTY",
+                defendant="DOE, PAT",
+                in_pima=True,
+                eviction_notice=True,
+                case_stage="writ" if i in (5, 17) else "notice",
+                writ_date=(today - timedelta(days=3)).isoformat() if i in (5, 17) else None,
+            ),
+        )
+    conn.commit()
+    return App(path, parcel_client=NoParcels(), providers=[]), conn
+
+
+def test_ten_numbers_reach_the_top_ten_leads(tmp_path):
+    app, conn = first_run(tmp_path)
+    state = app.state({"list": "leads", "pass": "0"})
+    assert state["counts"]["evictions_reachable"] == 0
+    assert state["top_reach"] == {"leads": 10, "reached": 0}
+    P = state["phone_pass"]
+    names = [g["name"] for g in P["landlords"]]
+    assert len(names) == 10 and len(set(names)) == 10 and P["more"] is True
+    # The landlord of the best lead (a recent writ) comes first.
+    best = state["list"]["leads"][0]
+    assert P["landlords"][0]["name"] == best["plaintiff"].split(";")[0] and P["landlords"][0]["stage"] == "writ"
+    # One number per landlord, saved on all its open leads.
+    for n, g in enumerate(P["landlords"]):
+        out = app.update_lead({"id": g["lead_id"], "fields": {"owner_phone": f"(520) 555-01{n:02d}"}, "same_landlord": True})
+        assert out.get("also", 0) == g["leads"] - 1
+    state = app.state({"list": "leads", "pass": "0"})
+    assert state["top_reach"] == {"leads": 10, "reached": 10}
+    assert state["phone_pass"]["done"] == 10
+    # Every one of the top ten leads in the list can be called now.
+    assert all(l["reach"] != "none" for l in state["list"]["leads"][:10])
+    assert state["counts"]["evictions_reachable"] == sum(g["leads"] for g in P["landlords"])
+    # The next pass has the remaining landlords.
+    rest = app.state({"list": "leads", "pass": "10"})["phone_pass"]
+    assert len(rest["landlords"]) == 4 and not rest["more"] and rest["done"] == 0
+
+
+def test_a_landlord_with_no_number_to_find_can_be_skipped(tmp_path):
+    app, conn = first_run(tmp_path)
+    first = app.state({"list": "leads", "pass": "0"})["phone_pass"]["landlords"]
+    from test_lead_list import post
+
+    status, body, _ = post(app, "/api/phone-pass/skip", {"key": first[0]["key"]})
+    assert status == 200 and body["skipped"] == 1
+    P = app.state({"list": "leads", "pass": "0"})["phone_pass"]
+    assert [g["key"] for g in P["landlords"]][:9] == [g["key"] for g in first][1:]
+    assert P["skipped"] == 1
+    post(app, "/api/phone-pass/skip", {"key": "*", "skip": False})
+    assert app.state({"list": "leads", "pass": "0"})["phone_pass"]["landlords"][0]["key"] == first[0]["key"]
+    status, body, _ = post(app, "/api/phone-pass/skip", {"key": ""})
+    assert status == 400
+
+
+def test_a_number_on_one_lead_of_a_landlord_is_offered_for_the_rest(tmp_path):
+    app, conn = first_run(tmp_path)
+    g = app.state({"list": "leads", "pass": "0"})["phone_pass"]["landlords"][0]
+    some = conn.execute("SELECT id FROM leads WHERE plaintiff LIKE ? ORDER BY id LIMIT 1", (g["name"] + "%",)).fetchone()
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0199' WHERE id = ?", (some["id"],))
+    conn.commit()
+    g = app.state({"list": "leads", "pass": "0"})["phone_pass"]["landlords"][0]
+    assert g["reached"] is False and g["phone"] == "(520) 555-0199" and g["lead_id"] != some["id"]
+
+
+def test_the_automatic_lookup_yield_is_counted(tmp_path):
+    """What the automatic lookup found, by landlord: a number typed by hand
+    after a lookup found nothing doesn't count as found."""
+    app, conn = first_run(tmp_path)
+    assert app.state()["auto_yield"] == {"looked_up": 0, "found": 0}
+    conn.execute(
+        "UPDATE leads SET contact_checked_at = '2026-10-01T00:00:00', lookup_name = UPPER(SUBSTR(plaintiff, 1, 18)) "
+        "WHERE plaintiff LIKE 'SAMPLE 1 %' OR plaintiff LIKE 'SAMPLE 2 %' OR plaintiff LIKE 'SAMPLE 3 %'"
+    )
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0101', contact_source = 'osm' WHERE plaintiff LIKE 'SAMPLE 1 %'")
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0102', contact_source = 'manual' WHERE plaintiff LIKE 'SAMPLE 2 %'")
+    conn.commit()
+    assert app.state()["auto_yield"] == {"looked_up": 3, "found": 1}
