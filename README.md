@@ -24,7 +24,13 @@ What it doesn't do, by the owner's decision ([docs/DECISIONS.md](docs/DECISIONS.
 - **No phone numbers from the court.** Lead Desk looks up company landlords
   by itself (OpenStreetMap, and Google Places with a key); the rest you find
   by hand with the first-phones pass, about 15 minutes for the top 10.
-- **English only.** Spanish waits until the client asks for it.
+- **English only.** Every page and message is in English, with no language
+  switch; Spanish waits until the client asks for it.
+- **Merging isn't blocked by CI yet.** Requiring the `test` check before a
+  merge to `main` is a GitHub setting only the repository owner can turn on
+  (steps in [docs/DECISIONS.md](docs/DECISIONS.md)).
+- **The Outreach and Results tabs wait on the owner.** They weren't in the
+  brief; whether they stay is the owner's call.
 
 ## Quick start
 
@@ -37,12 +43,17 @@ pip install -e ".[dev]"
 leadgen serve                    # opens Lead Desk at http://127.0.0.1:8765
 ```
 
-Press **Check for new evictions**. The first check takes about 15 minutes:
+Type your business name and base address in the card at the top (messages
+use the name; miles start from the address). Then press **Check for new
+evictions**. The first check takes about 15 minutes:
 it reads each court case page (up to 400 a day) with a polite pause between
 them, and the header counts them as it goes ("Reading court cases: 120 of
-400"). Then the list has this month's evictions. Each lead with no number has **Find phone** on its row: search
-for the landlord, paste the number, and it is saved on every lead of that
-landlord.
+400"). Then the list has this month's evictions, and the line above it
+says how many of the top ten can be reached and what the free phone lookup
+found for them. **Find phones for the top 10** is the next step: search for
+each landlord, paste the number, and it is saved on every lead of that
+landlord (about 15 minutes). Each lead with no number also has **Find phone**
+on its row.
 
 To have the check run every morning, use `leadgen schedule install`. To run
 Lead Desk online, see [docs/VERCEL.md](docs/VERCEL.md).
