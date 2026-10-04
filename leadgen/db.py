@@ -127,7 +127,156 @@ _ADDED_COLUMNS = {
     # Unit / apartment number, and "manual" when Steve typed the address in.
     "unit": "TEXT",
     "address_source": "TEXT",
+    # The lead's rank, kept so the lead list can filter, rank and page in
+    # SQL (see leadlist.refresh_ranking): the code case's violation code,
+    # more than one home on the parcel, the company a phone lookup would
+    # search for, the stage (2 writ, 1 judgment, 0 the rest), the priority
+    # points that depend on the lead alone, its latest real event and its
+    # priority in the chosen view. derived_src is RANK_VERSION when these
+    # are up to date; a trigger empties it when a column in RANK_INPUTS changes.
+    "rank_code": "TEXT",
+    "multi_home": "INTEGER",
+    "lookup_name": "TEXT",
+    "stage_rank": "INTEGER",
+    "base_points": "INTEGER",
+    "rank_latest": "TEXT",
+    "rank_score": "INTEGER",
+    "derived_src": "TEXT",
 }
+
+# The columns a lead's rank is worked out from (and those that decide which
+# view it is in, as an owner's lead count is counted within the view). When
+# one changes, the trigger below marks the rank out of date. Raising
+# RANK_VERSION works every rank out again.
+RANK_VERSION = "rank 1"
+RANK_INPUTS = (
+    "lead_type",
+    "source",
+    "event_date",
+    "description",
+    "property_use",
+    "plaintiff",
+    "owner_name",
+    "owner_absentee",
+    "owner_entity",
+    "case_checked_at",
+    "case_stage",
+    "judgment_date",
+    "writ_date",
+    "eviction_notice",
+    "added_by_hand",
+    "case_status",
+    "duplicate_of",
+    "in_pima",
+)
+_RANK_TRIGGER = "leads_rank_dirty_1"  # renamed when RANK_INPUTS changes
+_SQLITE_RANK_SQL = f"""
+CREATE TRIGGER IF NOT EXISTS {_RANK_TRIGGER} AFTER UPDATE ON leads
+WHEN NEW.derived_src IS NOT NULL AND ({" OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in RANK_INPUTS)})
+BEGIN UPDATE leads SET derived_src = NULL WHERE id = NEW.id; END;
+CREATE INDEX IF NOT EXISTS leads_rank ON leads(stage_rank DESC, rank_score DESC, rank_latest DESC, id DESC);
+CREATE INDEX IF NOT EXISTS leads_latest ON leads(rank_latest DESC, id DESC);
+CREATE INDEX IF NOT EXISTS leads_owner_name ON leads(owner_name);
+CREATE INDEX IF NOT EXISTS leads_derived_src ON leads(derived_src);
+"""
+_PG_RANK_FUNCTION = f"""
+CREATE OR REPLACE FUNCTION {_RANK_TRIGGER}() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF ({", ".join(f"NEW.{c}" for c in RANK_INPUTS)}) IS DISTINCT FROM ({", ".join(f"OLD.{c}" for c in RANK_INPUTS)}) THEN
+    NEW.derived_src := NULL;
+  END IF;
+  RETURN NEW;
+END $$
+"""
+_PG_RANK_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS leads_rank ON leads(stage_rank DESC, rank_score DESC, rank_latest DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS leads_latest ON leads(rank_latest DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS leads_owner_name ON leads(owner_name)",
+    "CREATE INDEX IF NOT EXISTS leads_derived_src ON leads(derived_src)",
+)
+
+
+# A number that changes whenever a lead or a logged contact is added,
+# changed or removed (counters 'data_version', kept by triggers), and a
+# random number for this database ('db_token'): together they say when
+# numbers worked out from the leads earlier are still right (leadlist.memo).
+_VERSION_EVENTS = ("INSERT", "UPDATE", "DELETE")
+_SQLITE_VERSION_SQL = "".join(
+    f"CREATE TRIGGER IF NOT EXISTS {table}_version_{event.lower()} AFTER {event} ON {table} "
+    "BEGIN UPDATE counters SET n = n + 1 WHERE key = 'data_version'; END;\n"
+    for table in ("leads", "touches")
+    for event in _VERSION_EVENTS
+)
+_PG_VERSION_FUNCTION = """
+CREATE OR REPLACE FUNCTION leads_data_version_1() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM changed) THEN
+    UPDATE counters SET n = n + 1 WHERE key = 'data_version';
+  END IF;
+  RETURN NULL;
+END $$
+"""
+
+
+def _version_counters(conn: Conn) -> None:
+    import secrets
+
+    for key in ("data_version", "db_token"):
+        conn.execute(
+            "INSERT INTO counters (key, n) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+            (key, secrets.randbelow(2**31)),
+        )
+
+
+def _pg_create(conn: Conn, sql: str) -> None:
+    """Run one CREATE. Two Lead Desk instances starting at the same moment
+    (Vercel starts several) may both find a trigger missing: the one that
+    loses finds it made, which is what it wanted."""
+    try:
+        conn.execute(sql)
+    except Exception as e:
+        # duplicate_object, unique_violation (pg_class / pg_proc), "tuple concurrently updated"
+        state = getattr(e, "sqlstate", None)
+        if state not in ("42710", "23505", "42P07") and not (state == "XX000" and "concurrently" in str(e)):
+            raise
+
+
+def _pg_version_triggers(conn: Conn) -> None:
+    """One trigger per table and kind of change, run once per statement that
+    changed a row (not once per row)."""
+    have = {
+        r["tgname"]
+        for r in conn.execute(
+            "SELECT tgname FROM pg_trigger WHERE tgrelid IN ('leads'::regclass, 'touches'::regclass)"
+        ).fetchall()
+    }
+    wanted = [(t, e) for t in ("leads", "touches") for e in _VERSION_EVENTS if f"{t}_version_{e.lower()}" not in have]
+    if wanted:
+        _pg_create(conn, _PG_VERSION_FUNCTION)
+    for table, event in wanted:
+        side = "OLD" if event == "DELETE" else "NEW"
+        _pg_create(
+            conn,
+            f"CREATE TRIGGER {table}_version_{event.lower()} AFTER {event} ON {table} "
+            f"REFERENCING {side} TABLE AS changed FOR EACH STATEMENT EXECUTE FUNCTION leads_data_version_1()",
+        )
+
+
+def _pg_rank_trigger(conn: Conn) -> None:
+    """The rank trigger and indexes on Postgres, made once (a running
+    database isn't locked again on every start)."""
+    found = conn.execute(
+        "SELECT 1 FROM pg_trigger WHERE tgname = ? AND tgrelid = 'leads'::regclass", (_RANK_TRIGGER,)
+    ).fetchone()
+    if not found:
+        _pg_create(conn, _PG_RANK_FUNCTION)
+        _pg_create(
+            conn,
+            f"CREATE TRIGGER {_RANK_TRIGGER} BEFORE UPDATE ON leads FOR EACH ROW EXECUTE FUNCTION {_RANK_TRIGGER}()",
+        )
+    for sql in _PG_RANK_INDEXES:
+        _pg_create(conn, sql)
+
 
 # Columns added to touches after the first release. ``cost`` (dollars) is
 # kept for older rows; ``cost_cents`` is what's written and read.
@@ -197,6 +346,9 @@ def connect(path: Any) -> Conn:
                 conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             for col, kind in _ADDED_TOUCH_COLUMNS.items():
                 conn.execute(f"ALTER TABLE touches ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
+            _pg_rank_trigger(conn)
+            _pg_version_triggers(conn)
+            _version_counters(conn)
             _money_to_cents(conn)
             _upgrade_case_stages(conn)
             _READY.add(str(path))
@@ -232,6 +384,8 @@ def _migrate(conn: Conn) -> None:
     for col, kind in _ADDED_TOUCH_COLUMNS.items():
         if col not in have_touch:
             conn.execute(f"ALTER TABLE touches ADD COLUMN {col} {kind}")
+    conn.executescript(_SQLITE_RANK_SQL + _SQLITE_VERSION_SQL)
+    _version_counters(conn)
     _money_to_cents(conn)
     _upgrade_case_stages(conn)
     if "parcel" in added:
