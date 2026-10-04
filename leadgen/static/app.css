@@ -150,11 +150,17 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
 
 /* Wide screens: the header is one row, the main action at the right. The
    title line (kept short) wraps rather than being cut. */
-/* A computer: the lead table's column names stay in view under the page
-   header while the list scrolls (the wrapper doesn't clip, so they can). */
+/* A computer or tablet: the lead table's column names stay in view while
+   the list scrolls. When the table is wider than the window (a tablet, a
+   small laptop) it scrolls inside its own box, sideways and down, with the
+   column names at the top of the box: the page itself never scrolls
+   sideways. When it fits (leads.js sets "fits"), the box doesn't clip and
+   the column names stay under the page header instead. */
 @media (min-width: 721px) {
-  .tablewrap.sticky-head { overflow: visible; }
-  .sticky-head thead th { position: sticky; top: var(--header-h, 0px); z-index: 2; box-shadow: 0 1px 0 var(--line); }
+  .tablewrap.sticky-head { overflow: auto; max-height: calc(100vh - var(--header-h, 0px) - 16px); }
+  .sticky-head thead th { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 var(--line); }
+  .tablewrap.sticky-head.fits { overflow: visible; max-height: none; }
+  .sticky-head.fits thead th { top: var(--header-h, 0px); }
 }
 @media (min-width: 1200px) {
   header { flex-wrap: nowrap; }

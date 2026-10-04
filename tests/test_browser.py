@@ -1087,3 +1087,26 @@ def test_theme_colour_and_column_names_stay_in_view(server, page):
     top = page.evaluate("getComputedStyle(document.querySelector('#leadTable thead th')).top")
     header = page.evaluate("document.querySelector('header').offsetHeight")
     assert top == f"{header}px"
+
+
+@pytest.mark.parametrize("width", [721, 768, 1024, 1280, 1440])
+def test_the_page_never_scrolls_sideways_on_a_tablet_or_laptop(server, page, width):
+    """From 721 px (the card layout ends) up, the page is never wider than
+    the window: a table too wide for it scrolls in its own box, with its
+    column names in view, and the Phone column can be scrolled to."""
+    url, app, path = server
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.wait_for_function("document.documentElement.scrollWidth === window.innerWidth")
+    phone = page.locator("#leadTable thead th", has_text="Phone")
+    phone.scroll_into_view_if_needed()
+    box = phone.bounding_box()
+    assert 0 <= box["x"] and box["x"] + box["width"] <= width, box
+    assert page.evaluate("document.documentElement.scrollWidth") == width
+    assert page.evaluate("getComputedStyle(document.querySelector('#leadTable thead th')).position") == "sticky"
+    # Back to another tab and back: still measured right.
+    page.click("#nav [data-tab=settings]")
+    page.click("#nav [data-tab=leads]")
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    assert page.evaluate("document.documentElement.scrollWidth") == width

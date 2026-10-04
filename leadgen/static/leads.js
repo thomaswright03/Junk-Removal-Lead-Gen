@@ -214,11 +214,30 @@ function renderLeads() {
   markFields($("#tab-leads"));
   stickyHeadOffset();
 }
-// The lead table's column names stay in view under the page header while
-// the list scrolls (on a computer; a phone shows one card per lead).
+// The lead table's column names stay in view while the list scrolls (on a
+// computer; a phone shows one card per lead): under the page header when the
+// table fits the window, else at the top of the table's own scrolling box,
+// so the page never scrolls sideways (see .sticky-head in app.css).
 function stickyHeadOffset() {
   const h = document.querySelector("header");
   document.documentElement.style.setProperty("--header-h", (h && getComputedStyle(h).position === "sticky" ? h.offsetHeight : 0) + "px");
+  fitTable();
+}
+function fitTable() {
+  const wrap = document.querySelector(".tablewrap.sticky-head"), table = wrap && wrap.querySelector("table");
+  if (!table) return;
+  wrap.classList.remove("fits");
+  // Not on screen (another tab is open): measured when the Leads tab shows.
+  if (wrap.clientWidth) wrap.classList.toggle("fits", table.scrollWidth <= wrap.clientWidth);
+}
+// The tab's width changes when it is shown, the window is resized or the
+// drawer opens: measure again (only for a change of width, so this can't loop).
+if (window.ResizeObserver) {
+  let lastWidth = -1;
+  new ResizeObserver(entries => {
+    const w = Math.round(entries[0].contentRect.width);
+    if (w !== lastWidth) { lastWidth = w; fitTable(); }
+  }).observe(document.getElementById("tab-leads"));
 }
 window.addEventListener("resize", () => stickyHeadOffset());
 async function page(step) {
