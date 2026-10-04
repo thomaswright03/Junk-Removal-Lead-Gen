@@ -39,6 +39,19 @@ def test_parse_case_page():
     assert lead.url == CASE_URL  # from the saved page's form action
 
 
+def test_a_party_listed_twice_is_named_once():
+    """The court lists a party again for a second address or attorney: each
+    name appears once per role, in the order first listed."""
+    jane = "<tr><td>Defendant</td><td>DOE, JANE A</td>" + "<td>&nbsp;</td>" * 7 + "</tr>"
+    landlord = "<tr><td>Plaintiff</td><td>SAGUARO VISTA APARTMENTS LLC</td>" + "<td>&nbsp;</td>" * 7 + "</tr>"
+    head, rest = CASE_HTML.split('<table id="gvParty">', 1)
+    html = head + '<table id="gvParty">' + rest.replace("</table>", jane + landlord + "</table>", 1)
+    assert html.count("DOE, JANE A") == 2
+    lead = parse_case_html(html)
+    assert lead.defendant == "DOE, JANE A; DOE, JOHN"
+    assert lead.plaintiff == "SAGUARO VISTA APARTMENTS LLC"
+
+
 def test_case_without_notice():
     lead = parse_case_html(NO_NOTICE_HTML)
     assert lead.lead_type == "eviction"

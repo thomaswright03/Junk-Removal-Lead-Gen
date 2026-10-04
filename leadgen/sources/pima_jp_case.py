@@ -310,10 +310,14 @@ def parse_case_html(html: str, url: Optional[str] = None, today: Optional[date] 
                     entry = {"for": won_by, "date": _iso(r.get("JUDGMENT DATE")) or ""}
                     if entry not in party_judgments:
                         party_judgments.append(entry)
+                # A party listed twice (the court repeats one per address or
+                # attorney) is named once, in the order first listed.
                 if "PLAINTIFF" in role or "PETITIONER" in role:
-                    plaintiffs.append(name)
+                    if name not in plaintiffs:
+                        plaintiffs.append(name)
                 elif "DEFENDANT" in role or "RESPONDENT" in role:
-                    defendants.append(name)
+                    if name not in defendants:
+                        defendants.append(name)
         elif "EVENT" in headers and "DATE" in headers:
             events.extend(rows)
         elif any("DOCUMENT" in h for h in headers):
