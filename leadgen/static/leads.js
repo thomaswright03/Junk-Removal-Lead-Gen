@@ -115,7 +115,7 @@ function renderLeads() {
     ui.status && ui.status !== "open" ? esc(STATUS_LABEL[ui.status] || ui.status) : ""].filter(Boolean);
   const emptyMsg = active.length ? `No leads match ${active.join(", ")}${view !== "all" ? ` in “${esc(VIEW_LABEL[view])}”` : ""}. <button class="btn small" id="fClear">Clear search and filters</button>`
     : view === "all" ? "No leads match. Try “Any status”, or press Check for new evictions."
-    : (S.daily || {}).running ? "Checking the court calendar for evictions. New cases show up here when the check finishes."
+    : (S.daily || {}).running ? `Checking for new evictions (${esc((S.daily || {}).message || "starting")}). A first check takes about 15 minutes: each court case page is read with a pause between them, and cases show up here when the check finishes.`
     : `No ${view === "eviction_notice" ? "eviction cases with a notice, judgment or writ" : "eviction cases"} yet. Press <b>Check for new evictions</b>
        to search the court calendar now (it also runs by itself every morning), or paste case links above.` +
       (vc.unchecked ? ` ${vc.unchecked} eviction cases haven't been checked yet; they appear here once their case page shows a notice (next check ${esc((S.daily || {}).next_run || "tomorrow 6:00 AM")}).` : "");

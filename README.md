@@ -26,8 +26,10 @@ pip install -e ".[dev]"
 leadgen serve                    # opens Lead Desk at http://127.0.0.1:8765
 ```
 
-Press **Check for new evictions**. A minute later the list has this month's
-evictions. Each lead with no number has **Find phone** on its row: search
+Press **Check for new evictions**. The first check takes about 15 minutes:
+it reads each court case page (up to 400 a day) with a polite pause between
+them, and the header counts them as it goes ("Reading court cases: 120 of
+400"). Then the list has this month's evictions. Each lead with no number has **Find phone** on its row: search
 for the landlord, paste the number, and it is saved on every lead of that
 landlord.
 

@@ -166,6 +166,7 @@ class NoGeocode:
 
 def test_run_daily_end_to_end():
     conn = db.connect(":memory:")
+    heard = []
     cases = FakeCases()
     # The calendar needs a client; give it the fake court.
     cal = PimaJpCalendar()
@@ -181,7 +182,14 @@ def test_run_daily_end_to_end():
         geocoder=NoGeocode(),
         providers=[FakePhones()],
         log=lambda m: None,
+        progress=heard.append,
     )
+    # The header counts the case pages as they're read.
+    assert [m for m in heard if m.startswith("reading court cases")] == [
+        "reading court cases: 1 of 3",
+        "reading court cases: 2 of 3",
+        "reading court cases: 3 of 3",
+    ]
     assert summary["evictions"] == {"new": 3, "updated": 0}
     assert summary["cases"]["checked"] == 3 and summary["cases"]["with_notice"] == 3
     assert summary["contacts"]["found"] >= 1
@@ -341,6 +349,34 @@ def test_status_has_no_progress_message_after_the_check(tmp_path):
     app.refresh({})
     status = app.status()["daily"]
     assert status["running"] is False and status["message"] is None and status["retry"] is None
+
+
+def test_the_check_says_how_long_it_takes_and_the_readme_agrees(tmp_path):
+    """Starting the check says it takes about 15 minutes (it reads up to 400
+    case pages at a polite pace), and so does the README."""
+    from leadgen.web import App
+
+    from leadgen.jobs import STARTED_MESSAGE
+
+    app = App(
+        tmp_path / "l.db",
+        calendar=NoCodeCases(),
+        code_cases=NoCodeCases(),
+        case_client=FakeCases(),
+        parcel_client=FakeParcels([]),
+        geocoder=NoGeocode(),
+        providers=[],
+    )
+    started = app.start_daily()
+    assert started["started"] is True and started["message"] == STARTED_MESSAGE
+    assert daily.CHECK_MINUTES in STARTED_MESSAGE and "header counts" in STARTED_MESSAGE
+    import threading
+
+    for t in threading.enumerate():  # let the check finish
+        if t.name == "daily":
+            t.join(10)
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    assert "a minute later" not in readme.lower() and daily.CHECK_MINUTES in readme
 
 
 def test_scheduled_daily_does_nothing_once_today_has_run(tmp_path, capsys):
