@@ -548,6 +548,66 @@ def test_a_round_names_the_leads_it_left_out(tmp_path):
     assert set(left) == {"id", "label", "reason"} and left["reason"] in ("needs_address", "needs_unit")
 
 
+def test_a_lead_only_some_methods_can_work_is_offered_not_silently_dropped(tmp_path):
+    """The review's case: a phone saved on a lead whose address is a guess.
+    A three-method round can't deal it (door hangers need a confirmed
+    address) and says why; with ``fit`` it goes to a method it can use,
+    outside the balanced split, and Results keeps it apart."""
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000777-EA",
+            "eviction",
+            "2026-09-30",
+            "77 W GUESS ST",
+            plaintiff="SAMPLE GUESS LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute("UPDATE leads SET address_source = 'landlord', owner_phone = '(520) 555-0177'")
+    conn.commit()
+    app = App(path)
+    three = list(outreach.CHANNELS)
+    out = app.assign({"count": 10, "channels": three, "preview": True})
+    assert sum(out["assigned"].values()) == 0 and out["left_out"]["needs_confirm"] == 1
+    assert out["left_out_leads"][0]["reason"] == "needs_confirm"
+    # The split numbers let the page count it as fitting some methods: phone and landlord pitch, not door hangers.
+    combos = app.state({"list": "queue"})["split"]["combos"]
+    assert combos["phone"] == 1 and combos["property_manager"] == 1 and combos["door_hanger"] == 0
+    assert combos["door_hanger+phone+property_manager"] == 0
+    out = app.assign({"count": 10, "channels": three, "fit": True})
+    assert out["fitted"] == {"phone": 1} and out["kinds"] == {"eviction": 1}
+    row = conn.execute("SELECT channel, assigned_by FROM leads").fetchone()
+    assert (row["channel"], row["assigned_by"]) == ("phone", outreach.BY_FIT)
+    phone = {r["channel"]: r for r in app.state()["results"]}["phone"]
+    assert phone["assigned"] == 1 and phone["mix"]["leads"] == 0 and phone["mix"]["fitted"] == 1
+    assert any("outside the balanced split" in n for n in outreach.comparison(app.state()["results"])["notes"])
+
+
+def test_fit_leads_fill_the_round_after_the_balanced_split(tmp_path):
+    """Leads every ticked method can work are split evenly first; leads only
+    some can work fill the room left, each landlord to one method."""
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn, with_address=4, without=6)
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")
+    conn.commit()
+    app = App(path)
+    plain = app.assign({"count": 8, "channels": ["door_hanger", "phone"], "preview": True})
+    assert sum(plain["assigned"].values()) == 4 and not plain["fitted"]
+    out = app.assign({"count": 8, "channels": ["door_hanger", "phone"], "fit": True})
+    assert sum(out["assigned"].values()) == 4  # the balanced split is as before
+    # No address: only a call can work them. Landlords stay whole (groups of
+    # three here), so 3 of the 4 places left are filled.
+    assert out["fitted"] == {"phone": 3}
+    dealt = conn.execute("SELECT plaintiff, channel FROM leads WHERE channel IS NOT NULL").fetchall()
+    assert len(dealt) == 7 and len({(r["plaintiff"], r["channel"]) for r in dealt}) == len({r["plaintiff"] for r in dealt})
+
+
 def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):
     path = tmp_path / "leads.db"
     conn = db.connect(path)

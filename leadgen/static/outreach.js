@@ -25,9 +25,30 @@ function noContactExtra(chans, kind) {
   const key = comboKey(chans);
   return (splitFor(kind, true).combos[key] || 0) - (splitFor(kind, false).combos[key] || 0);
 }
+// Leads that some, but not all, of the ticked methods can work (a phone but
+// no confirmed address, say): counted from the split's numbers (how many
+// leads each set of methods can all work) by inclusion and exclusion.
+function fitCount(chans, kind) {
+  if (chans.length < 2) return 0;
+  const combos = splitFor(kind).combos || {};
+  let any = 0;
+  for (let mask = 1; mask < 1 << chans.length; mask++) {
+    const set = chans.filter((_, i) => mask >> i & 1);
+    any += (set.length % 2 ? 1 : -1) * (combos[comboKey(set)] || 0);
+  }
+  return Math.max(0, any - (combos[comboKey(chans)] || 0));
+}
+function fitNote(chans, kind) {
+  const f = fitCount(chans, kind);
+  if (!f) return "";
+  return ` <span id="aFitNote">${f} more ${kindWord(kind, f)} can be worked by some of the ticked methods but not all (for example a phone number but no confirmed address for a door hanger).
+    <label class="ch"><input type="checkbox" id="aFit" ${ui.aFit ? "checked" : ""}>Also deal ${f === 1 ? "it" : "them"} to a method ${f === 1 ? "it" : "they"} can use</label>
+    ${ui.aFit ? "They go outside the balanced split, so Results keeps them apart." : ""}</span>`;
+}
 function splitLine(chans, kind) {
   const sp = splitFor(kind);
   const n = chans.length ? sp.combos[comboKey(chans)] || 0 : 0;
+  const fit = ui.aFit ? fitCount(chans, kind) : 0;
   const extra = noContactExtra(chans, kind);
   const extraNote = extra && !ui.aAll ? ` ${extra} more ${kindWord(kind, extra)} ${extra === 1 ? "has" : "have"} no phone or email yet, so ${chans.filter(c => c !== "door_hanger").map(chName).join(" and ")} can't take them: find their numbers on the Leads tab, or tick “Include leads with no phone or email”.`
     : extra ? ` ${extra} of them have no phone or email yet: you look those numbers up yourself.` : "";
@@ -38,15 +59,16 @@ function splitLine(chans, kind) {
   // In a round of both kinds, how many of them are evictions.
   const ev = !kind && sp.evictions ? sp.evictions[comboKey(chans)] || 0 : null;
   const mix = ev != null ? ` (${ev} eviction${ev === 1 ? "" : "s"}, ${n - ev} code case${n - ev === 1 ? "" : "s"})` : "";
-  if (n) return { n, extra, html: `<strong>${n} ${kindWord(kind, n)}</strong>${mix} can be split between ${esc(methodList(chans))}.${esc(extraNote)}${followed}${idleNote}` };
+  if (n) return { n, fit, extra, html: `<strong>${n} ${kindWord(kind, n)}</strong>${mix} can be split between ${esc(methodList(chans))}.${esc(extraNote)}${followed}${idleNote}${fitNote(chans, kind)}` };
   // Nothing every ticked method can work: name the method that blocks it.
   const fixes = chans.map(c => chans.filter(x => x !== c)).filter(rest => rest.length && sp.combos[comboKey(rest)])
     .sort((a, b) => sp.combos[comboKey(b)] - sp.combos[comboKey(a)]);
   const fix = fixes[0];
   const drop = fix ? chans.find(c => !fix.includes(c)) : null;
   const why = chans.includes("door_hanger") ? " Door hangers need a property address (and a unit number at an apartment or condo complex)." : "";
-  return { n, extra, html: `<strong>No unassigned ${kindWord(kind, 2)}</strong> can be worked by all of ${esc(methodList(chans))}.${why}${esc(extraNote)}${followed}`
-    + (drop ? ` <button class="btn small" id="aDrop" data-drop="${drop}">Untick ${esc(chName(drop))} (${sp.combos[comboKey(fix)]} leads)</button>` : "") };
+  return { n, fit, extra, html: `<strong>No unassigned ${kindWord(kind, 2)}</strong> can be worked by all of ${esc(methodList(chans))}.${why}${esc(extraNote)}${followed}`
+    + (drop ? ` <button class="btn small" id="aDrop" data-drop="${drop}">Untick ${esc(chName(drop))} (${sp.combos[comboKey(fix)]} leads)</button>` : "")
+    + fitNote(chans, kind) };
 }
 function otherChoices(chans, kind) {
   const sp = splitFor(kind);
@@ -80,6 +102,7 @@ function setLastRound(r) {
 function roundSummary(r) {
   if (!r) return "";
   const got = Object.entries(r.assigned || {}).map(([c, k]) => `${esc(chName(c))} ${k}`).join(", ");
+  const fitted = Object.entries(r.fitted || {}).map(([c, k]) => `${esc(chName(c))} ${k}`).join(", ");
   const followed = Object.values(r.followed || {}).reduce((a, b) => a + b, 0);
   const lo = r.left_out || {}, nLeft = Object.values(lo).reduce((a, b) => a + b, 0);
   const why = Object.entries(lo).filter(([, n]) => n).map(([k, n]) => `${n} with ${LEFT_OUT_WHY[k] || k}`).join("; ");
@@ -89,7 +112,7 @@ function roundSummary(r) {
   return `<div class="notice info mt8" id="roundSummary" role="status">
     <div class="row between"><strong>Last round${r.lead_type ? ` (${esc(KIND_LABEL[r.lead_type].toLowerCase())})` : ""}: ${esc(kindsLine(r.kinds))} assigned</strong>
       <button class="btn small" id="roundDismiss" aria-label="Dismiss the last round's summary">Dismiss</button></div>
-    <p class="hint">${got ? `By method: ${got}.` : "No leads were assigned."}${followed ? ` ${followed} more went to the method already working their landlord.` : ""}</p>
+    <p class="hint">${got ? `By method: ${got}.` : "No leads were assigned in the balanced split."}${fitted ? ` To a method they could use, outside the balanced split: ${fitted}.` : ""}${followed ? ` ${followed} more went to the method already working their landlord.` : ""}</p>
     ${nLeft ? `<p class="hint">${nLeft} left out: ${esc(why)}.${fix}</p>${leads ? `<p class="hint">Left out${nLeft > (r.left_out_leads || []).length ? " (the first few)" : ""}: ${leads}</p>` : ""}` : ""}
   </div>`;
 }
@@ -151,7 +174,7 @@ function renderOutreach() {
         <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" class="w-80"></label>
         ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot c-${c}"></span>${esc(n)}</label>`).join("")}
         ${line.extra || ui.aAll ? `<label class="ch" title="Call methods normally get only leads with a phone or email. Tick this to deal the others too and look their numbers up yourself."><input type="checkbox" id="aAll" ${ui.aAll ? "checked" : ""}>Include leads with no phone or email</label>` : ""}
-        <button class="btn primary" id="aGo" ${line.n ? "" : "disabled"}>Assign leads</button>
+        <button class="btn primary" id="aGo" ${line.n || line.fit ? "" : "disabled"}>Assign leads</button>
         ${fieldError("aCount")}
       </div>
       <p class="hint mt8" id="aSplit" aria-live="polite">${line.html}</p>
@@ -164,6 +187,8 @@ function renderOutreach() {
   $("#aKind").onchange = e => { ui.aKind = e.target.value; ui.aChannels = null; renderOutreach(); $("#aKind").focus(); };
   document.querySelectorAll(".aCh").forEach(b => b.onchange = () =>
     setChans([...document.querySelectorAll(".aCh:checked")].map(x => x.value), `.aCh[value="${b.value}"]`));
+  const fitBox = $("#aFit");
+  if (fitBox) fitBox.onchange = () => { ui.aFit = fitBox.checked; renderOutreach(); const a = $("#aFit"); if (a) a.focus(); };
   const all = $("#aAll");
   if (all) all.onchange = () => { ui.aAll = all.checked; ui.aChannels = null; renderOutreach(); const a = $("#aAll"); if (a) a.focus(); };
   const drop = $("#aDrop");
@@ -181,23 +206,30 @@ function renderOutreach() {
     if (!checkFields(countCheck)) return;
     const n = +$("#aCount").value;
     const single = chans.length === 1;
-    const body = { count: n, channels: chans, single_method: single, lead_type: kind, include_unreachable: !!ui.aAll };
+    const body = { count: n, channels: chans, single_method: single, lead_type: kind, include_unreachable: !!ui.aAll, fit: !!ui.aFit };
     // Work the round out first, so the question says exactly which leads it takes.
     let pre;
     btn.disabled = true;
     try { pre = await api("/api/assign", { ...body, preview: true }); }
     catch (err) { if (!showFieldErrors(err, { count: "aCount" })) toast(err.message, 8000); return; }
     finally { btn.disabled = false; }
-    const most = Object.values(pre.assigned).reduce((a, b) => a + b, 0);
+    const fittedPre = Object.values(pre.fitted || {}).reduce((a, b) => a + b, 0);
+    const most = Object.values(pre.assigned).reduce((a, b) => a + b, 0) + fittedPre;
     const followedPre = Object.values(pre.followed || {}).reduce((a, b) => a + b, 0);
-    if (!most && !followedPre) return toast("No lead can go out with these methods. Untick one, or pick another kind of lead.", 8000);
+    if (!most && !followedPre) {
+      // Never a round of nothing without saying why, and what would work.
+      const lo = pre.left_out || {}, why = Object.entries(lo).filter(([, k]) => k).map(([k, v]) => `${v} with ${LEFT_OUT_WHY[k] || k}`).join("; ");
+      const offer = !ui.aFit && fitCount(chans, kind) ? " Tick “Also deal them to a method they can use” to give each lead to a method that can work it." : " Untick a method, or pick another kind of lead.";
+      return toast(`No lead can go out with these methods${why ? `: ${why}` : ""}.${offer}`, 10000);
+    }
     if (!(await confirmBox({ title: `Assign ${most} lead${most === 1 ? "" : "s"}${single ? ` to ${chName(chans[0])} only` : ""}?`,
       body: `This round: ${kindsLine(pre.kinds)}. ` + (single ? `Only one method is ticked, so this round won't compare methods: all ${most} go to ${chName(chans[0])}. Tick another method to compare.`
         : `They are split between ${methodList(chans)}, and each one then shows up in that method's work list.`) + (followedPre ? ` ${followedPre} more go to the method already working their landlord.` : "")
+        + (fittedPre ? ` ${fittedPre === 1 ? "1 of them goes to a ticked method it" : `${fittedPre} of them go to a ticked method they`} can use (${Object.entries(pre.fitted).map(([c, k]) => `${chName(c)} ${k}`).join(", ")}), outside the balanced split.` : "")
         + (pre.without_contact ? ` ${pre.without_contact} of them have no phone or email yet: you'll need to look those numbers up before calling.` : ""),
       ok: `Assign ${most} lead${most === 1 ? "" : "s"}` }))) return;
     ui.aChannels = null;  // the next suggestion fits the leads that are left
-    const r = await act(() => api("/api/assign", body), r => `Assigned ${Object.values(r.assigned).reduce((a, b) => a + b, 0)} leads. The summary stays on the Outreach tab.`, btn);
+    const r = await act(() => api("/api/assign", body), r => `Assigned ${[...Object.values(r.assigned), ...Object.values(r.fitted || {})].reduce((a, b) => a + b, 0)} leads. The summary stays on the Outreach tab.`, btn);
     if (r) { setLastRound(r); renderOutreach(); const box = $("#roundSummary"); if (box) box.scrollIntoView({ block: "nearest" }); }
   };
   document.querySelectorAll("[data-otab]").forEach(b => b.onclick = async () => {

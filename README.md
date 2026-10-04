@@ -15,6 +15,17 @@ a small web app that runs on his computer or online.
 Made for Steve's junk-removal business in Tucson. Phase 1 (this) is the lead
 list. Phase 2 will add price estimates.
 
+What it doesn't do, by the owner's decision ([docs/DECISIONS.md](docs/DECISIONS.md)):
+
+- **Clean-out leads cover the City of Tucson only.** Unincorporated Pima
+  County, Marana, Oro Valley, Sahuarita and South Tucson have no code-case
+  source yet, and foreclosures and probate clean-outs aren't collected.
+  Evictions cover the whole Consolidated Justice Court.
+- **No phone numbers from the court.** Lead Desk looks up company landlords
+  by itself (OpenStreetMap, and Google Places with a key); the rest you find
+  by hand with the first-phones pass, about 15 minutes for the top 10.
+- **English only.** Spanish waits until the client asks for it.
+
 ## Quick start
 
 Python 3.9 or newer.

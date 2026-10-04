@@ -471,8 +471,10 @@ _ADDRESS_REASON = {"no_address": "needs_address", "unconfirmed": "needs_confirm"
 LEFT_OUT_SHOWN = 12
 
 # How a lead got its method (``assigned_by``): dealt by an Assign leads
-# round, sent to the method already working its landlord, or set by hand.
-BY_ROUND, FOLLOWED, BY_HAND = "round", "followed", "hand"
+# round, sent to the method already working its landlord, set by hand, or
+# dealt by a round to the one ticked method it could use (``fit``: outside
+# the balanced split, so left out of Results' mix like followed leads).
+BY_ROUND, FOLLOWED, BY_HAND, BY_FIT = "round", "followed", "hand", "fit"
 
 
 def _taken(conn: Conn) -> dict[str, str]:
@@ -617,9 +619,14 @@ def assign(
     lead_type: str = "",
     preview: bool = False,
     include_unreachable: bool = False,
+    fit: bool = False,
 ) -> dict:
     """Deal up to ``count`` of the best unassigned leads across ``channels``
     so that each channel gets a like-for-like share (see the module notes).
+    With ``fit``, leads that only some of the ticked methods can work (a
+    phone but no confirmed address, say) are dealt too, after the balanced
+    split, each to a method it can use (``fitted``); they are kept apart in
+    Results, as the balanced split didn't choose them.
     ``lead_type`` ("eviction" or "code_violation") limits the round to one
     kind of lead. ``preview`` works the round out without saving anything:
     which leads it would take (the page says so before Steve confirms).
@@ -628,8 +635,8 @@ def assign(
     Each method gets floor(N/M) or ceil(N/M) of the N leads dealt (all of
     one landlord's leads go together, which can tip that by a group).
 
-    Returns counts: ``{"assigned": {channel: n}, "followed": {channel: n},
-    "kinds": {lead type: n} (the leads dealt, not those followed),
+    Returns counts: ``{"assigned": {channel: n}, "followed": {channel: n}, "fitted": {channel: n},
+    "kinds": {lead type: n} (the leads dealt, fitted ones too, not those followed),
     "left_out": {"needs_address": n, "needs_confirm": n, "needs_unit": n, "no_contact": n},
     "left_out_leads": [{"id", "label", "reason"}] (the first few of them),
     "round": id}``.
@@ -651,6 +658,7 @@ def assign(
     out: dict[str, Any] = {
         "assigned": {c: 0 for c in channels},
         "followed": {},
+        "fitted": {},
         "kinds": {},
         "left_out": {"needs_address": 0, "needs_confirm": 0, "needs_unit": 0, "no_contact": 0},
         "left_out_leads": [],
@@ -662,7 +670,7 @@ def assign(
     }
 
     def give(lead: LeadRow, ch: str, how: str) -> None:
-        if how == BY_ROUND:
+        if how in (BY_ROUND, BY_FIT):
             kind = str(lead["lead_type"])
             out["kinds"][kind] = out["kinds"].get(kind, 0) + 1
         if ch != "door_hanger" and not has_contact(lead):
@@ -676,6 +684,7 @@ def assign(
 
     followed = 0
     clusters: dict[str, list] = {}  # landlord -> leads, in score order
+    partial: dict[str, list] = {}  # landlord -> leads only some ticked methods can work
     for lead in pool:
         eligible = eligible_channels(lead, need_contact=not include_unreachable)
         key = landlord_key(lead)
@@ -687,6 +696,9 @@ def assign(
                 followed += 1
             continue
         missing = [c for c in channels if c not in eligible]
+        if missing and fit and len(missing) < len(channels):
+            partial.setdefault(key, []).append(lead)
+            continue
         if missing:
             if missing == ["door_hanger"]:
                 reason = _ADDRESS_REASON.get(door_hanger_problem(lead) or "", "needs_address")
@@ -733,6 +745,22 @@ def assign(
                     give(lead, ch, BY_ROUND)
                 have[ch] += len(group)
                 total[ch] += len(group)
+
+    # Leads only some ticked methods can work (``fit``): best landlords first,
+    # while the round has room, each landlord to the method it can use that
+    # has the fewest leads so far (all of its leads to that one method).
+    fitted = 0
+    for _key, group in sorted(partial.items(), key=lambda kv: (*rank_key(kv[1][0]), kv[0])):
+        if picked + fitted + len(group) > count:
+            continue
+        usable = [c for c in channels if all(c in eligible_channels(l, not include_unreachable) for l in group)]
+        if not usable:
+            continue
+        ch = min(usable, key=lambda c: (total[c] + out["fitted"].get(c, 0), channels.index(c)))
+        for lead in group:
+            give(lead, ch, BY_FIT)
+        out["fitted"][ch] = out["fitted"].get(ch, 0) + len(group)
+        fitted += len(group)
     if not preview:
         conn.commit()
     return out
@@ -742,7 +770,7 @@ def how_assigned(row: LeadRow) -> str:
     """``round``, ``followed`` or ``hand``. Leads from before ``assigned_by``
     was kept: dealt by a round when they carry its id, else by hand."""
     by = _get(row, "assigned_by")
-    if by in (BY_ROUND, FOLLOWED, BY_HAND):
+    if by in (BY_ROUND, FOLLOWED, BY_HAND, BY_FIT):
         return str(by)
     return BY_ROUND if _get(row, "assign_round") else BY_HAND
 
@@ -768,8 +796,9 @@ def _mix(rows: list) -> dict:
     the balanced split didn't choose them."""
     how = [how_assigned(r) for r in rows]
     followed = how.count(FOLLOWED)
+    fitted = how.count(BY_FIT)
     by_hand = how.count(BY_HAND)
-    rows = [r for r, h in zip(rows, how) if h != FOLLOWED]
+    rows = [r for r, h in zip(rows, how) if h not in (FOLLOWED, BY_FIT)]
     n = len(rows)
     if not n:
         return {
@@ -779,6 +808,7 @@ def _mix(rows: list) -> dict:
             "avg_score": None,
             "set_by_hand": by_hand,
             "followed": followed,
+            "fitted": fitted,
         }
     return {
         "leads": n,
@@ -787,6 +817,7 @@ def _mix(rows: list) -> dict:
         "avg_score": round(sum(r["_score"] for r in rows) / n, 1),
         "set_by_hand": by_hand,
         "followed": followed,
+        "fitted": fitted,
     }
 
 
@@ -892,6 +923,12 @@ def comparison(results_rows: list[dict]) -> dict:
             notes.append(
                 f"{n} {r['label']} lead{' went' if n == 1 else 's went'} to the method already working "
                 "their landlord; they are left out of the mix below."
+            )
+        n = r["mix"].get("fitted", 0)
+        if n:
+            notes.append(
+                f"{n} {r['label']} lead{' was' if n == 1 else 's were'} dealt to it outside the balanced split, "
+                "as not every ticked method could work them; left out of the mix below."
             )
     fair = not reasons
     thin = [r["label"] for r in active if r["touched"] < MIN_CONTACTS]

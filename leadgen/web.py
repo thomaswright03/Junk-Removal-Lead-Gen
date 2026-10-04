@@ -562,6 +562,7 @@ class App(JobRunner):
                 lead_type=kind,
                 preview=body.get("preview") is True,
                 include_unreachable=body.get("include_unreachable") is True,
+                fit=body.get("fit") is True,
             )
 
     def split_preview(self, conn: Conn, settings: dict) -> dict:

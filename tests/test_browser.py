@@ -289,6 +289,18 @@ def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     page.check(".aCh[value=door_hanger]")
     page.wait_for_selector("#aSplit >> text=No unassigned evictions")
     assert page.is_disabled("#aGo")
+    # ...and offers to deal the eviction to a method it can use instead of a round of nothing.
+    assert "1 more eviction can be worked by some of the ticked methods but not all" in page.inner_text("#aSplit")
+    page.check("#aFit")
+    page.wait_for_selector("#aSplit >> text=outside the balanced split")
+    assert page.is_enabled("#aGo")
+    page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
+    assert "1 of them goes to a ticked method it can use (Phone call to owner 1)" in page.inner_text("#confirmBody")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#confirmBox:not([open])", state="attached")
+    page.uncheck("#aFit")
+    page.wait_for_selector("#aDrop")
     page.click("#aDrop")
     page.wait_for_selector("#aSplit >> text=1 eviction")
     # Code cases are a round of their own.
