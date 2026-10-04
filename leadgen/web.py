@@ -425,7 +425,9 @@ class App(JobRunner):
             cost = money_value(cost, "Cost", MAX_CONTACT_CENTS)
         notes = notes_value(body.get("notes"))
         logged = duplicates = 0
-        with self.conn() as conn:
+        # The check for a contact just logged and the insert run under one
+        # lock, so identical requests at the same moment store one contact.
+        with self.conn() as conn, db.write_lock(conn, ids):
             settings = self.settings(conn)
             rows = {}
             for lead_id in ids:
@@ -472,7 +474,6 @@ class App(JobRunner):
                 if updates:
                     sets = ", ".join(f"{k} = ?" for k in updates)
                     conn.execute(f"UPDATE leads SET {sets} WHERE id = ?", [*updates.values(), lead_id])
-            conn.commit()
         return {"ok": True, "logged": logged, "duplicates": duplicates}
 
     # What a removed contact keeps, so Undo can put the same entry back.

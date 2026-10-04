@@ -11,9 +11,10 @@ that address, so exports show each property once.
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Iterator, Literal, Optional, Sequence
 
 from . import pg
 from .models import Lead
@@ -423,6 +424,39 @@ def _upgrade_case_stages(conn: Conn) -> None:
         return
     rederive_stages(conn)
     put_settings(conn, {"case_stage_rules": STAGE_RULES_VERSION})
+    conn.commit()
+
+
+@contextmanager
+def write_lock(conn: Conn, lead_ids: Sequence[int] = ()) -> Iterator[None]:
+    """One transaction for a read-then-write that must not interleave with
+    the same one from another request (two identical "log contact" requests
+    at once must store one contact). Committed when the block ends, rolled
+    back on an error.
+
+    SQLite: ``BEGIN IMMEDIATE`` takes the database's write lock first, so a
+    second writer waits (busy timeout) and then reads what the first wrote.
+    Postgres: a transaction that locks the leads' rows (``FOR UPDATE``, in id
+    order so two requests can't deadlock); it works through Neon's
+    transaction pooler, unlike a session lock."""
+    if isinstance(conn, pg.Connection):
+        with conn.raw.transaction():
+            ids = sorted({int(i) for i in lead_ids})
+            for i in range(0, len(ids), 500):
+                chunk = ids[i : i + 500]
+                conn.execute(
+                    f"SELECT id FROM leads WHERE id IN ({','.join('?' * len(chunk))}) ORDER BY id FOR UPDATE", chunk
+                )
+            yield
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.rollback()
+        raise
     conn.commit()
 
 
