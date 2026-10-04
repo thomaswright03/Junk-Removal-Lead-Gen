@@ -10,8 +10,8 @@ function leadRow(l) {
   return `<tr class="click" data-id="${l.id}" data-label="${esc(title(fullAddress(l) || l.plaintiff || l.source_id))}">
     <td class="num" data-th="${th[0]}">${scoreChip(l)}</td>
     <td class="datecell" data-th="${th[1]}"><span>${dateCell(l)}</span></td>
-    <td data-th="${th[2]}"><span>${esc(whatLabel(l))}${noticeChip(l)}${l.next_court_date ? `<span class="small-line" style="display:block">court ${esc(courtDate(l.next_court_date))}</span>` : ""}</span></td>
-    <td data-th="${th[3]}"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}${l.property_use ? `<span class="small-line" style="display:block">${esc(title(l.property_use))}</span>` : ""}</span></td>
+    <td data-th="${th[2]}"><span>${esc(whatLabel(l))}${noticeChip(l)}${l.next_court_date ? `<span class="small-line block">court ${esc(courtDate(l.next_court_date))}</span>` : ""}</span></td>
+    <td data-th="${th[3]}"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}${l.property_use ? `<span class="small-line block">${esc(title(l.property_use))}</span>` : ""}</span></td>
     <td data-th="${th[4]}"><span>${ownerLine(l)}</span></td>
     <td data-th="${th[5]}" class="phonecell">${phoneCell(l)}${canFindPhone(l) ? ` <button class="btn small" data-findphone="${l.id}" aria-expanded="${ui.findOpen === l.id}" aria-controls="find-${l.id}">Find phone</button>` : ""}${reachChip(l)}</td>
     <td data-th="${th[6]}" class="${l.owner_email ? "" : "m-hide"}">${emailCell(l)}</td>
@@ -38,7 +38,7 @@ function findPanel(l) {
       ${l.owner_website ? `<a class="btn small" href="${esc(/^https?:/i.test(l.owner_website) ? l.owner_website : "https://" + l.owner_website)}" target="_blank" rel="noopener">Company website</a>` : ""}
     </div>
     <div class="row mt8">
-      <input id="fp-${l.id}" inputmode="tel" autocomplete="off" placeholder="Paste the number, e.g. (520) 555-0100" aria-label="Phone number for ${name}" style="width:240px">
+      <input id="fp-${l.id}" inputmode="tel" autocomplete="off" placeholder="Paste the number, e.g. (520) 555-0100" aria-label="Phone number for ${name}" class="w-240">
       <label class="ch"><input type="checkbox" id="fpAll-${l.id}" checked> Also on this landlord's other leads with no number${others}</label>
       <button class="btn small primary" data-savephone="${l.id}">Save number</button>
       ${fieldError("fp-" + l.id)}
@@ -146,7 +146,7 @@ function renderLeads() {
         <label class="wide-pick">Show <select id="fView">${opts(Object.keys(VIEW_LABEL).map(v => [v, viewName(v)]), view)}</select></label>
         <button class="btn m-only" id="toolsToggle" aria-expanded="${!!ui.toolsOpen}" aria-controls="leadTools">${ui.toolsOpen ? "Hide" : "Add cases, update cases, find phones"}</button>
         <div id="leadTools" class="row tools ${ui.toolsOpen ? "open" : ""}">
-          <input type="text" id="cLinks" aria-label="Justice Court case links" placeholder="Paste Justice Court case links to add cases">
+          <input type="text" id="cLinks" aria-label="Justice Court case links" placeholder="Paste court case links" title="Paste one or more Justice Court case links (jcDisplayCase) to add those cases">
           <button class="btn primary" id="cAdd">Add cases</button>
           <button class="btn" id="cUpdate" title="Re-read every open eviction case page for new documents (notice, judgment, writ) and court dates. Runs in the background.">Update court cases</button>
           <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes (OpenStreetMap and company websites, and Google Places when a key is set)">Find landlord phones &amp; emails</button>
@@ -156,7 +156,7 @@ function renderLeads() {
       </div>
     </div>
     <div class="filters ${ui.filtersOpen ? "open" : ""}">
-      <div class="searchrow"><input type="search" id="q" aria-label="Search leads" placeholder="Search address, owner, landlord, case, parcel…" value="${esc(ui.q)}">
+      <div class="searchrow"><input type="search" id="q" aria-label="Search leads" placeholder="Search address, owner, case…" title="Searches the address, owner, landlord, tenant, case number, parcel, notes, phone and email" value="${esc(ui.q)}">
       <button class="btn m-only" id="filtersToggle" aria-expanded="${!!ui.filtersOpen}">Filters${nFilters ? ` (${nFilters})` : ""}</button></div>
       <select id="fType" aria-label="Kind of lead">${opts([["", "Any kind of lead"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Owner lives elsewhere"], ["entity", "Company or trust owner"], ["has_phone", "Has a phone"], ["no_phone", "No phone yet"], ["no_address", "Address needed"], ["guessed_address", "Address to confirm"], ["address_work", "Address work queue (evictions)"], ["reachable", "Can be reached (phone, email or address)"], ["unreachable", "Can't be reached yet"]], ui.type)}</select>
       <select id="fStatus" aria-label="Status">${opts([["open", "Open (not won/lost)"], ["", "Any status"], ...S.statuses.map(s => [s, STATUS_LABEL[s] || title(s)])], ui.status)}</select>
@@ -285,7 +285,7 @@ function addressRow(l) {
   const guess = l.address && l.address_source === "landlord";
   return `<tr class="click" data-id="${l.id}" data-label="${esc(title(landlord || l.source_id))}">
     <td class="num" data-th="Priority">${scoreChip(l)}</td>
-    <td data-th="Case"><span>${esc(l.source_id)}${noticeChip(l)}<span class="small-line" style="display:block">tenant ${esc(title(tenant) || "–")}</span></span></td>
+    <td data-th="Case"><span>${esc(l.source_id)}${noticeChip(l)}<span class="small-line block">tenant ${esc(title(tenant) || "–")}</span></span></td>
     <td data-th="Landlord"><span>${esc(title(landlord) || "–")}</span></td>
     <td data-th="Address now"><span>${guess ? `${esc(title(fullAddress(l)))} <span class="chip warn" title="The landlord owns one property in the county, so the eviction is probably there">landlord's only ${isMultifamily(l) ? "complex" : "property"}</span>
       <button class="btn small" data-aconfirm="${l.id}">Confirm</button>` : '<span class="muted">none yet</span>'}</span></td>
@@ -321,7 +321,7 @@ function bindAddressQueue() {
     try {
       const props = (await api("/api/owner?name=" + encodeURIComponent(who))).filter(p => p.site_address);
       cell.innerHTML = props.length ? `<p class="hint">${props.length} propert${props.length === 1 ? "y" : "ies"} owned by names starting “${esc(title(who))}”. Use the one the tenant rents.</p>
-        <div class="tablewrap" style="max-height:260px;overflow:auto"><table><tbody>${props.map(p => `<tr><td>${esc(title(p.site_address))}</td><td class="muted">${esc(title(p.property_use || ""))}</td>
+        <div class="tablewrap scrollbox"><table><tbody>${props.map(p => `<tr><td>${esc(title(p.site_address))}</td><td class="muted">${esc(title(p.property_use || ""))}</td>
         <td><button class="btn small" data-ause="${esc(p.site_address)}">Use</button></td></tr>`).join("")}</tbody></table></div>`
         : '<p class="hint">No properties found under that name. Landlords often own through a differently named LLC: try the records request above, or click the case to type the address.</p>';
       cell.querySelectorAll("[data-ause]").forEach(u => u.onclick = () =>
@@ -369,7 +369,7 @@ function setupGuide(addrLine) {
          <li>Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Credentials</a>, press <b>+ Create credentials</b>, then <b>API key</b>. Press the copy button next to the key.</li>
          <li>Safer, and takes a minute: press <b>Edit API key</b>, under <b>API restrictions</b> pick <b>Restrict key</b>, tick <b>Places API (New)</b> and press <b>Save</b>.</li>
          <li>Paste the key in the box below and press <b>Save key and find phones</b>.</li></ol></details>
-       <div class="row"><input id="setupKey" type="password" autocomplete="off" aria-label="Google Places API key" aria-describedby="setupKey-err" placeholder="Paste the Google Places API key" style="flex:1;min-width:240px">
+       <div class="row"><input id="setupKey" type="password" autocomplete="off" aria-label="Google Places API key" aria-describedby="setupKey-err" placeholder="Paste the Google Places API key" class="grow wide">
          <button class="btn primary" id="setupKeySave">Save key and find phones</button></div>
        ${fieldError("setupKey")}`;
   const recState = rec.waiting ? done(`sent ${fmtDate(rec.last_request)}: waiting for the file`)

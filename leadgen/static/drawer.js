@@ -159,28 +159,28 @@ function renderDrawer() {
       ${who ? `<dt>Find phone</dt><dd><a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search the web</a>${l.owner_entity || l.plaintiff ? ` · <a href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener">AZ Corp Commission</a> (lists the company's registered contact, its “statutory agent”)` : ""}</dd>` : ""}
     </dl>
 
-    <div class="card" style="margin-top:16px">
+    <div class="card mt16">
       <h2>Property address</h2>
       ${l.address ? `<p>${esc(title(fullAddress(l)))}${addressNote(l)}</p>` : ""}
       ${l.address && (l.address_source === "landlord" || l.door_hanger_problem === "needs_unit") ? `<div class="row mb12"><button class="btn small" id="dConfirm">Confirm address</button>
-        <span class="hint" style="margin:0">${l.address_source === "landlord" ? "Checked that the eviction is at this property?" : "No unit number, but a door hanger at this address is fine (for example at the leasing office or the park office)?"}</span></div>` : ""}
+        <span class="hint m0">${l.address_source === "landlord" ? "Checked that the eviction is at this property?" : "No unit number, but a door hanger at this address is fine (for example at the leasing office or the park office)?"}</span></div>` : ""}
       ${l.lead_type === "eviction" && (!l.address || l.address_source === "landlord") ? addressGuide(l) : ""}
       <p class="hint">${l.address ? "Correct it here if it's wrong." : "Court case pages don't list the property."} Saving finds it on the map, looks up the parcel and owner, fills in the miles, and makes the lead eligible for door hangers.</p>
       <div class="row">
-        <input id="dAddress" data-draft="address" placeholder="Street address, e.g. 123 W Main St" value="${esc(draftOf(l, "address"))}" style="flex:1;min-width:200px" aria-label="Property street address">
-        <input id="dUnit" data-draft="unit" placeholder="Unit" value="${esc(draftOf(l, "unit"))}" style="width:80px" aria-label="Unit">
+        <input id="dAddress" data-draft="address" placeholder="Street address, e.g. 123 W Main St" value="${esc(draftOf(l, "address"))}" class="grow" aria-label="Property street address">
+        <input id="dUnit" data-draft="unit" placeholder="Unit" value="${esc(draftOf(l, "unit"))}" class="w-80" aria-label="Unit">
         <button class="btn small" id="dSaveAddress">Save address</button>
         ${fieldError("dAddress")}${fieldError("dUnit")}
       </div>
-      ${who && (l.owner_entity || l.lead_type === "eviction") ? `<div class="row" style="margin-top:8px"><button class="btn small" id="dOwnerProps">Other properties this owner has</button></div><div id="ownerProps"></div>` : ""}
+      ${who && (l.owner_entity || l.lead_type === "eviction") ? `<div class="row mt8"><button class="btn small" id="dOwnerProps">Other properties this owner has</button></div><div id="ownerProps"></div>` : ""}
     </div>
 
     <div class="card">
       <h2>Contact</h2>
       <p class="hint">Check that a found number belongs to this owner before calling. Editing here marks it as entered by hand, and lookups and imports won't overwrite it.</p>
       <div class="row">
-        <input id="dPhone" data-draft="owner_phone" placeholder="Phone" value="${esc(draftOf(l, "owner_phone"))}" style="width:150px" aria-label="Phone">
-        <input id="dEmail" data-draft="owner_email" placeholder="Email" value="${esc(draftOf(l, "owner_email"))}" style="flex:1;min-width:180px" aria-label="Email">
+        <input id="dPhone" data-draft="owner_phone" placeholder="Phone" value="${esc(draftOf(l, "owner_phone"))}" class="w-150" aria-label="Phone">
+        <input id="dEmail" data-draft="owner_email" placeholder="Email" value="${esc(draftOf(l, "owner_email"))}" class="grow" aria-label="Email">
         <button class="btn small" id="dSaveContact">Save contact</button>
         ${fieldError("dPhone")}${fieldError("dEmail")}
       </div>
@@ -188,34 +188,34 @@ function renderDrawer() {
 
     <div class="card">
       <h2>Outreach</h2>
-      <div class="row" style="margin:8px 0">
+      <div class="row my8">
         <select id="dChannel" aria-label="Outreach method">${[["", "Not assigned"], ...Object.entries(S.channels)].map(([v, t]) => `<option value="${v}" ${v === (ch || "") ? "selected" : ""} ${v && !l.eligible.includes(v) ? "disabled" : ""}>${t}${v && !l.eligible.includes(v) ? (v !== "door_hanger" ? " (no one to contact)" : DOOR_HANGER_WHY[l.door_hanger_problem] || " (needs an address)") : v && !(l.ready || []).includes(v) ? (v === "phone" ? " (no phone number yet)" : " (no phone or email yet)") : ""}</option>`).join("")}</select>
         <button class="btn small" id="dSaveCh">Set method</button>
       </div>
       ${ch ? `${pitchLine(ch, l)}${phoneMissing(ch, l)}<div class="script">${esc(fill(ch, l))}</div>
-      <div class="row" style="margin-top:8px">
+      <div class="row mt8">
         ${touchButtons(ch).map(([k, t]) => `<button class="btn small" data-touch="${k}">${t}</button>`).join("")}
       </div>` : `<p class="hint">Pick a method to see the message and log outreach.</p>`}
-      ${l.touches.length ? `<h3>History</h3>${l.touches.map(t => `<div class="row muted" style="font-size:13px">${esc(fmtDate(t.created_at))} · ${esc(chName(t.channel))} · ${esc(t.kind.replaceAll("_", " "))}${t.cost ? " · " + money(t.cost) : ""}${t.notes ? " · " + esc(t.notes) : ""}
+      ${l.touches.length ? `<h3>History</h3>${l.touches.map(t => `<div class="row small-line">${esc(fmtDate(t.created_at))} · ${esc(chName(t.channel))} · ${esc(t.kind.replaceAll("_", " "))}${t.cost ? " · " + money(t.cost) : ""}${t.notes ? " · " + esc(t.notes) : ""}
         <button class="btn small" data-untouch="${t.id}" aria-label="Remove this ${esc(t.kind.replaceAll("_", " "))} entry">Remove</button></div>`).join("")}` : ""}
     </div>
 
     <div class="card">
       <h2>Result</h2>
-      <div class="row" style="margin:8px 0">
+      <div class="row my8">
         ${["responded", "quoted", "won", "lost", "skip"].map(s => `<button class="btn small ${l.status === s ? "primary" : ""}" data-status="${s}">${STATUS_LABEL[s]}</button>`).join("")}
         ${l.status !== "new" ? `<button class="btn small" data-status="new">Reset to new</button>` : ""}
       </div>
       <div class="row">
-        <label>Quote $ <input id="dQuote" data-draft="quote_amount" type="number" min="0" step="1" style="width:100px" value="${esc(draftOf(l, "quote_amount"))}"></label>
-        <label>Job revenue $ <input id="dRev" data-draft="job_revenue" type="number" min="0" step="1" style="width:100px" value="${esc(draftOf(l, "job_revenue"))}"></label>
+        <label>Quote $ <input id="dQuote" data-draft="quote_amount" type="number" min="0" step="1" class="w-100" value="${esc(draftOf(l, "quote_amount"))}"></label>
+        <label>Job revenue $ <input id="dRev" data-draft="job_revenue" type="number" min="0" step="1" class="w-100" value="${esc(draftOf(l, "job_revenue"))}"></label>
         ${fieldError("dQuote")}${fieldError("dRev")}
       </div>
       <h3><label for="dNotes">Notes</label></h3>
       <textarea id="dNotes" data-draft="notes" aria-describedby="dNotesCount" placeholder="Who you talked to, what they need, next step…">${esc(draftOf(l, "notes"))}</textarea>
       <div class="counter" id="dNotesCount" aria-live="polite"></div>
       ${fieldError("dNotes")}
-      <div class="row" style="margin-top:8px"><button class="btn primary" id="dSave">Save result</button></div>
+      <div class="row mt8"><button class="btn primary" id="dSave">Save result</button></div>
     </div>`;
   d.classList.add("open");
   d.scrollTop = scroll;
@@ -300,7 +300,7 @@ function renderDrawer() {
     try {
       const rows = await api("/api/owner?name=" + encodeURIComponent(who));
       $("#ownerProps").innerHTML = rows.length ? `<p class="hint">${rows.length} parcel${rows.length > 1 ? "s" : ""} owned by names starting “${esc(who)}”. Pick one to use it as this lead's address.</p>
-        <div class="tablewrap" style="max-height:260px;overflow:auto"><table><tbody>${rows.map(r => `<tr><td>${esc(title(r.site_address || "(no site address)"))}</td><td class="muted">${esc(title(r.property_use || ""))}</td>
+        <div class="tablewrap scrollbox"><table><tbody>${rows.map(r => `<tr><td>${esc(title(r.site_address || "(no site address)"))}</td><td class="muted">${esc(title(r.property_use || ""))}</td>
           <td>${r.site_address ? `<button class="btn small" data-use-address="${esc(r.site_address)}">Use</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`
         : '<p class="hint">No parcels found under that name. Landlords often own through a differently named LLC.</p>';
       $("#ownerProps").querySelectorAll("[data-use-address]").forEach(b => b.onclick = () => {

@@ -39,7 +39,7 @@ function renderResults() {
     <p class="hint">Which outreach method turns leads into paid jobs, for the least money.</p>
     <div class="row mb12"><label class="wide-pick">Compare methods on <select id="rKind">${kinds.map(([v, t]) => `<option value="${v}" ${v === kind ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></div>
     <p class="hint" id="rBasis">${esc((S.comparison_basis || {})[kind] || "")}</p>
-    <div class="grid4" style="margin-bottom:16px">
+    <div class="grid4 mb16">
       <div class="kpi"><div class="v">${touched}</div><div class="l">leads contacted</div></div>
       <div class="kpi"><div class="v">${tot("responded")}</div><div class="l">responses</div></div>
       <div class="kpi"><div class="v">${tot("won")}</div><div class="l">jobs won</div></div>
@@ -70,5 +70,5 @@ function renderResults() {
 }
 // One listener for the kind picker, which is redrawn with the tab.
 document.addEventListener("change", e => { if (e.target && e.target.id === "rKind") { ui.resultsKind = e.target.value; renderResults(); $("#rKind").focus(); } });
-const bar = (r, v, max, label) => `<div class="bar"><div>${chDot(r.channel)}</div><div class="track"><div class="fill" style="width:${Math.round(100 * v / max)}%;background:var(--c-${r.channel})"></div></div><div class="num" style="text-align:right">${label}</div></div>`;
+const bar = (r, v, max, label) => `<div class="bar"><div>${chDot(r.channel)}</div><div class="track"><div class="fill c-${r.channel}" style="width:${Math.round(100 * v / max)}%"></div></div><div class="num">${label}</div></div>`;
 

@@ -1110,3 +1110,22 @@ def test_the_page_never_scrolls_sideways_on_a_tablet_or_laptop(server, page, wid
     page.click("#nav [data-tab=leads]")
     page.wait_for_selector("#leadTable tbody tr[data-id]")
     assert page.evaluate("document.documentElement.scrollWidth") == width
+
+
+@pytest.mark.parametrize("width", [1280, 1440])
+def test_box_hints_are_whole_on_a_computer(server, page, width):
+    """The case-link and search boxes' hints fit their boxes."""
+    url, app, path = server
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    cut = page.evaluate(
+        """['#cLinks', '#q'].filter(sel => {
+          const el = document.querySelector(sel), cs = getComputedStyle(el);
+          const ctx = document.createElement('canvas').getContext('2d');
+          ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+          const room = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+          return ctx.measureText(el.placeholder).width > room - (el.type === 'search' ? 20 : 0);
+        })"""
+    )
+    assert cut == []

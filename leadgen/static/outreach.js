@@ -87,7 +87,7 @@ function roundSummary(r) {
     + (lo.no_contact ? " Find their phone numbers first (Leads tab), or tick “Include leads with no phone or email” next round." : "");
   const leads = (r.left_out_leads || []).map(l => `<button class="linkbtn" data-lead="${l.id}" title="${esc(LEFT_OUT_WHY[l.reason] || "")}">${esc(title(l.label))}</button>`).join(" · ");
   return `<div class="notice info mt8" id="roundSummary" role="status">
-    <div class="row" style="justify-content:space-between"><strong>Last round${r.lead_type ? ` (${esc(KIND_LABEL[r.lead_type].toLowerCase())})` : ""}: ${esc(kindsLine(r.kinds))} assigned</strong>
+    <div class="row between"><strong>Last round${r.lead_type ? ` (${esc(KIND_LABEL[r.lead_type].toLowerCase())})` : ""}: ${esc(kindsLine(r.kinds))} assigned</strong>
       <button class="btn small" id="roundDismiss" aria-label="Dismiss the last round's summary">Dismiss</button></div>
     <p class="hint">${got ? `By method: ${got}.` : "No leads were assigned."}${followed ? ` ${followed} more went to the method already working their landlord.` : ""}</p>
     ${nLeft ? `<p class="hint">${nLeft} left out: ${esc(why)}.${fix}</p>${leads ? `<p class="hint">Left out${nLeft > (r.left_out_leads || []).length ? " (the first few)" : ""}: ${leads}</p>` : ""}` : ""}
@@ -148,8 +148,8 @@ function renderOutreach() {
         <li>Each method reaches someone different or makes a different offer: the lead shows which.</li></ul></details>
       <div class="row">
         <label>Which leads <select id="aKind">${kindOptions(kind)}</select></label>
-        <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" style="width:80px"></label>
-        ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot" style="background:var(--c-${c})"></span>${esc(n)}</label>`).join("")}
+        <label>Leads this round <input type="number" id="aCount" value="${Math.min(40, line.n) || 40}" min="1" class="w-80"></label>
+        ${Object.entries(S.channels).map(([c, n]) => `<label class="ch"><input type="checkbox" class="aCh" value="${c}" ${chans.includes(c) ? "checked" : ""}><span class="dot c-${c}"></span>${esc(n)}</label>`).join("")}
         ${line.extra || ui.aAll ? `<label class="ch" title="Call methods normally get only leads with a phone or email. Tick this to deal the others too and look their numbers up yourself."><input type="checkbox" id="aAll" ${ui.aAll ? "checked" : ""}>Include leads with no phone or email</label>` : ""}
         <button class="btn primary" id="aGo" ${line.n ? "" : "disabled"}>Assign leads</button>
         ${fieldError("aCount")}
@@ -158,7 +158,7 @@ function renderOutreach() {
       ${others ? `<p class="hint">Other choices: ${others}</p>` : ""}
       ${roundSummary(ui.lastRound)}
     </div>
-    <div class="tabs2">${Object.entries(S.channels).map(([c, n]) => `<button data-otab="${c}" class="${c === t ? "on" : ""}"><span class="dot" style="background:var(--c-${c})"></span> ${esc(n)} · ${(per[c] || {}).to_do || 0} to do / ${(per[c] || {}).active || 0}</button>`).join("")}</div>
+    <div class="tabs2">${Object.entries(S.channels).map(([c, n]) => `<button data-otab="${c}" class="${c === t ? "on" : ""}"><span class="dot c-${c}"></span> ${esc(n)} · ${(per[c] || {}).to_do || 0} to do / ${(per[c] || {}).active || 0}</button>`).join("")}</div>
     <div id="oBody"></div>`;
   const setChans = (list, focusSel) => { ui.aChannels = list; renderOutreach(); const f = $(focusSel); if (f) f.focus(); };
   $("#aKind").onchange = e => { ui.aKind = e.target.value; ui.aChannels = null; renderOutreach(); $("#aKind").focus(); };
@@ -282,7 +282,7 @@ function renderCalls(el, q, ch) {
     <p class="hint">Each lead's own page shows the script filled in with its owner and address.</p></div>
     ${q.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th class="num">Priority</th><th>Owner</th><th>Property</th><th>Phone</th><th>Log</th></tr></thead><tbody>
       ${q.map(l => { const who = l.owner_name || l.plaintiff || ""; return `<tr class="click" data-id="${l.id}"><td class="num" data-th="Priority">${scoreChip(l)}</td><td data-th="Owner"><span>${ownerLine(l)}</span></td><td data-th="Property"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}</span></td>
-      <td style="white-space:nowrap" data-th="Phone">${l.owner_phone ? phoneCell(l) : `<a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search</a>`}</td>
+      <td class="nowrap" data-th="Phone">${l.owner_phone ? phoneCell(l) : `<a href="https://www.google.com/search?q=${encodeURIComponent(who + " Tucson AZ phone")}" target="_blank" rel="noopener">Search</a>`}</td>
       <td data-th="Log"><div class="row">${touchButtons(ch).slice(0, 3).map(([k, t]) => `<button class="btn small" data-quick="${l.id}" data-kind="${k}">${t}</button>`).join("")}</div></td></tr>`; }).join("")}
     </tbody></table></div>` : emptyQueue()}`;
   bindQuick(el);
@@ -302,8 +302,8 @@ function renderManagers(el, leads) {
     ${phoneMissing("property_manager")}<div class="script">${esc(fill("property_manager", {}))}</div></div>
     ${list.length ? `<div class="tablewrap"><table class="cards"><thead><tr><th>Company / owner</th><th>Phone / email</th><th class="num">Leads</th><th>Properties</th><th>Contacted</th><th>Log</th></tr></thead><tbody>
       ${list.map(([name, ls]) => { const ids = ls.map(l => l.id).join(","); const done = ls.some(l => l.touches.length);
-        return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="muted" style="font-size:13px">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
-        <td style="white-space:nowrap" data-th="Contact">${(() => { const c = ls.find(x => x.owner_phone || x.owner_email); return c ? `${c.owner_phone ? phoneCell(c) : ""}${c.owner_phone && c.owner_email ? "<br>" : ""}${c.owner_email ? emailCell(c) : ""}` : '<span class="muted">–</span>'; })()}</td>
+        return `<tr class="click" data-id="${ls[0].id}"><td data-th="Company"><strong>${esc(title(name))}</strong>${ls[0].owner_address ? `<div class="small-line">${esc(title(ls[0].owner_address))}, ${esc(title(ls[0].owner_city))} ${esc(ls[0].owner_state || "")}</div>` : ""}</td>
+        <td class="nowrap" data-th="Contact">${(() => { const c = ls.find(x => x.owner_phone || x.owner_email); return c ? `${c.owner_phone ? phoneCell(c) : ""}${c.owner_phone && c.owner_email ? "<br>" : ""}${c.owner_email ? emailCell(c) : ""}` : '<span class="muted">–</span>'; })()}</td>
         <td class="num" data-th="Leads">${ls.length}</td><td data-th="Properties"><span>${ls.slice(0, 3).map(l => l.address ? esc(title(l.address)) : esc(l.source_id)).join("<br>")}${ls.length > 3 ? `<br><span class="muted">+${ls.length - 3} more</span>` : ""}</span></td>
         <td data-th="Contacted">${done ? '<span class="chip good">yes</span>' : '<span class="chip">no</span>'}</td>
         <td data-th="Log"><div class="row"><a class="btn small" href="https://www.google.com/search?q=${encodeURIComponent(name + " Tucson")}" target="_blank" rel="noopener">Search</a>

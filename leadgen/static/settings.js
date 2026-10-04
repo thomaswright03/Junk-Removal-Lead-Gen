@@ -23,7 +23,7 @@ function setTheme(t) {
 }
 function limitField(id, value, step, label) {
   const unlimited = value == null;
-  return `<label>${label} <input id="${id}" type="number" min="0" step="${step}" value="${unlimited ? "" : value}" style="width:90px" ${unlimited ? "disabled" : ""}></label>
+  return `<label>${label} <input id="${id}" type="number" min="0" step="${step}" value="${unlimited ? "" : value}" class="w-90" ${unlimited ? "disabled" : ""}></label>
     <label class="ch"><input type="checkbox" id="${id}None" ${unlimited ? "checked" : ""}> no limit</label>${fieldError(id)}`;
 }
 // The Settings boxes and the server's rules for each (see checkFields).
@@ -60,27 +60,27 @@ function renderSettings() {
     </div>
     <div class="card"><h2>Business</h2>
       <div class="grid4">
-        <label>Business name<br><input id="sName" value="${esc(st.business_name)}" style="width:100%">${fieldError("sName")}</label>
-        <label>Main phone<br><input id="sPhone" value="${esc(st.business_phone)}" placeholder="(520) 555-0100" style="width:100%">${fieldError("sPhone")}</label>
-        <label>Base address (for miles and routes)<br><input id="sBase" value="${esc(st.base_address)}" style="width:100%">${fieldError("sBase")}</label>
+        <label>Business name<br><input id="sName" class="w-full" value="${esc(st.business_name)}">${fieldError("sName")}</label>
+        <label>Main phone<br><input id="sPhone" value="${esc(st.business_phone)}" placeholder="(520) 555-0100" class="w-full">${fieldError("sPhone")}</label>
+        <label>Base address (for miles and routes)<br><input id="sBase" class="w-full" value="${esc(st.base_address)}">${fieldError("sBase")}</label>
       </div>
       <p class="hint" id="baseFound">${st.base_lat != null ? "Base address found on the map: miles and the door-hanger route start from it." : "Base address not found on the map yet. It's looked up when you save; if this stays, check the address (street, city and “AZ”). Miles and the route start from it once found."}</p>
     </div>
     <div class="card"><h2>Phone and email lookup</h2>
       <p class="hint">“Find landlord phones &amp; emails” always checks OpenStreetMap and company websites for free, which finds a number for some apartment complexes and management companies; most landlord companies aren't on OpenStreetMap. A Google Places API key (Google Maps Platform, pay per lookup after the monthly free credit) finds far more office numbers, and <b>Find phone</b> on a lead's row finds one by hand. Google's terms limit how long results may be kept, so Google-found contacts are re-checked after 30 days.</p>
       <label class="ch"><input type="checkbox" id="sGoogleOn" ${st.google_enabled !== false ? "checked" : ""}> Use Google lookups</label>
-      <div class="row" style="margin-top:8px"><input id="sGoogle" type="password" aria-label="Google Places API key" placeholder="${st.google_key_set ? "Key saved. Paste a new one to replace it" : "Google Places API key"}" style="flex:1;min-width:260px" autocomplete="off">
+      <div class="row mt8"><input id="sGoogle" type="password" aria-label="Google Places API key" placeholder="${st.google_key_set ? "Key saved. Paste a new one to replace it" : "Google Places API key"}" class="grow wide" autocomplete="off">
       ${st.google_key_from_env ? `<span class="chip good">key set on the server</span>` : st.google_key_set ? `<span class="chip good">key saved</span> <button class="btn small danger" id="sGoogleClear">Remove key</button>` : `<span class="chip">no key</span>`}${fieldError("sGoogle")}</div>
       ${st.google_key_from_env ? `<p class="hint">The key comes from GOOGLE_PLACES_API_KEY on the server (or the GitHub secret), so removing it here wouldn't stop it. Untick “Use Google lookups”, set the limits to 0, or pause Lead Desk to stop Google searches.</p>` : ""}
-      <div class="row" style="margin-top:8px">${limitField("sGoogleLimit", st.google_monthly_limit, 100, "Google lookups per month, at most")}
+      <div class="row mt8">${limitField("sGoogleLimit", st.google_monthly_limit, 100, "Google lookups per month, at most")}
       <span class="hint">${st.google_used_this_month || 0} used this month. Google gives 1,000 a month free, then charges about $35 per 1,000. 0 means none.</span></div>
-      <div class="row" style="margin-top:8px">${limitField("sGoogleDaily", st.google_daily_limit, 1, "Google lookups per day, at most")}
+      <div class="row mt8">${limitField("sGoogleDaily", st.google_daily_limit, 1, "Google lookups per day, at most")}
       <span class="hint">${st.google_used_today || 0} used today. 0 means none.</span></div>
     </div>
     <div class="card"><h2>Outreach methods</h2>
       <p class="hint">A separate tracking phone number per method (Google Voice, CallRail and similar) is the cleanest way to know which one a caller came from. Cost is what one contact costs, including printing.</p>
       <div class="tablewrap"><table><thead><tr><th>Method</th><th>Cost per contact $</th><th>Tracking number</th></tr></thead><tbody>
-      ${Object.entries(S.channels).map(([c, n]) => `<tr><td>${chDot(c)}</td><td><input type="number" step="0.01" min="0" id="cost-${c}" data-cost="${c}" value="${st.costs[c] ?? 0}" style="width:90px" aria-label="Cost per contact for ${esc(n)}">${fieldError("cost-" + c)}</td>
+      ${Object.entries(S.channels).map(([c, n]) => `<tr><td>${chDot(c)}</td><td><input type="number" step="0.01" min="0" id="cost-${c}" data-cost="${c}" value="${st.costs[c] ?? 0}" class="w-90" aria-label="Cost per contact for ${esc(n)}">${fieldError("cost-" + c)}</td>
         <td><input data-track="${c}" value="${esc(st.tracking_numbers[c] || "")}" placeholder="uses main phone" aria-label="Tracking number for ${esc(n)}"></td></tr>`).join("")}</tbody></table></div></div>
     <div class="card"><h2>Messages</h2><p class="hint">What each outreach method says. Click a field button to put it where the cursor is; the preview shows the message for one of your leads.</p>
       ${Object.keys(st.templates).map(c => `<h3><label for="tpl-${c}">${esc(TEMPLATE_LABEL[c] || c)}</label></h3><textarea id="tpl-${c}" data-tpl="${c}">${esc(st.templates[c] || "")}</textarea>${fieldError("tpl-" + c)}

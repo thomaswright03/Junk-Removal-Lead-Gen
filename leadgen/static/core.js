@@ -193,7 +193,7 @@ function showFieldErrors(e, boxes) {
 
 // ---------- helpers ---------------------------------------------------------
 const chName = c => S.channels[c] || "Unassigned";
-const chDot = c => c ? `<span class="ch"><span class="dot" style="background:var(--c-${c})"></span>${esc(chName(c))}</span>` : `<span class="muted">–</span>`;
+const chDot = c => c ? `<span class="ch"><span class="dot c-${c}"></span>${esc(chName(c))}</span>` : `<span class="muted">–</span>`;
 // The priority number, with what it is made of on hover (and read out by
 // screen readers): "Eviction 35 · owner lives elsewhere 20 · filed 3 days ago 15".
 const scoreParts = l => (l.score_parts || []).map(([t, p]) => `${t} ${p}`).join(" · ");
