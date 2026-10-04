@@ -33,7 +33,8 @@ only with the owner's say-so.
   decides whether one is wanted (and whether any cost is acceptable).
   Until then the City-only coverage above stands.
 - **Require CI before merging to `main`.** This needs a repository admin, in
-  GitHub's settings. Code can't do it. Steps:
+  GitHub's settings. Code can't do it. As of 2026-10-04 `main` has no
+  ruleset, so a pull request can still be merged with CI failing. Steps:
   1. Open the repository's **Settings → Rules → Rulesets → New ruleset →
      New branch ruleset**.
   2. Name it `main`, set **Enforcement status** to Active, and under
