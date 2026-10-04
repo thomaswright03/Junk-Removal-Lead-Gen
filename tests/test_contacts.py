@@ -1,7 +1,10 @@
+import pytest
+
 from leadgen import db
 from leadgen.contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
 from leadgen.lookup import (
     Contact,
+    ProviderUnavailable,
     find_contacts,
     lookup_targets,
     names_match,
@@ -551,3 +554,56 @@ def test_a_provider_that_is_down_is_reported_once_per_run():
     assert "Error" not in log[0]
     # Nothing was marked as looked up: the next run tries them all again.
     assert conn.execute("SELECT COUNT(*) FROM leads WHERE contact_checked_at IS NOT NULL").fetchone()[0] == 0
+
+
+def test_osm_finds_a_landlord_by_name_when_the_property_isnt_mapped():
+    """Most evictions have no property address, so OpenStreetMap is asked
+    for a business of the landlord's name around Tucson (made-up places)."""
+    import requests
+
+    from leadgen.lookup import OsmProvider
+
+    class Resp:
+        def __init__(self, places):
+            self.places = places
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.places
+
+    class Session:
+        headers = {}
+
+        def __init__(self):
+            self.asked = []
+
+        def get(self, url, params=None, **kw):
+            self.asked.append(params["q"])
+            if params["q"] == "BROKEN":
+                raise requests.ConnectionError("down")
+            return Resp(
+                [
+                    {"name": "Desert Sample Storage", "extratags": {"phone": "520-555-0111"}},
+                    {"name": "Desert Sample Apartments", "extratags": {"website": "https://example.com"}},
+                    {"name": "Desert Sample Apartments Office", "extratags": {"contact:phone": "520-555-0123"}},
+                ]
+            )
+
+        def post(self, *a, **kw):
+            raise AssertionError("no property on the map: no Overpass search")
+
+    session = Session()
+    osm = OsmProvider(session=session, delay=0)
+    c = osm.find({"lat": None, "lon": None}, "DESERT SAMPLE APARTMENTS LLC")
+    assert session.asked == ["DESERT SAMPLE APARTMENTS"]  # without LLC and the like
+    assert (c.phone, c.source, c.matched_name) == ("(520) 555-0123", "osm", "Desert Sample Apartments Office")
+    # Nothing distinctive left to search for: no search.
+    assert osm.find({"lat": None, "lon": None}, "THE LLC") is None and len(session.asked) == 1
+    # A search service that keeps failing is skipped for the rest of the run.
+    for _ in range(OsmProvider.max_failures):
+        with pytest.raises(requests.ConnectionError):
+            osm.find({"lat": None, "lon": None}, "BROKEN")
+    with pytest.raises(ProviderUnavailable):
+        osm.find({"lat": None, "lon": None}, "ANOTHER NAME LLC")

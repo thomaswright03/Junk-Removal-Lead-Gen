@@ -1,0 +1,52 @@
+# Does the free phone lookup still find anyone? Once a day (15:00 UTC, 8:00 in
+# Tucson) and on demand, this fills a fresh, throwaway database from the court
+# calendar (at most 20 case pages read), runs the free OpenStreetMap lookup on
+# up to 20 eviction landlords (no Google key, so it costs nothing) and fails
+# when not one eviction lead ended up with a phone or email. GitHub then
+# emails the repository owner, instead of the Leads tab quietly showing
+# "0 can be reached". This repository is public: the log prints counts only,
+# and the database is deleted with the runner.
+name: Phone lookup check
+
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+
+jobs:
+  contacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The kill switch (docs/VERCEL.md): no request anywhere while paused.
+      LEADDESK_PAUSED: ${{ vars.LEADDESK_PAUSED }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - name: Fill a fresh database and look up landlords (counts only)
+        run: |
+          python - <<'EOF'
+          import sys
+          from leadgen import daily, db
+          from leadgen.util import is_paused
+
+          if is_paused():
+              print("paused: nothing checked")
+              sys.exit(0)
+          conn = db.connect("/tmp/contacts.db")
+          daily.run_daily(conn, case_limit=20, contact_limit=20, log=lambda m: None)
+          row = conn.execute(
+              "SELECT COUNT(*) AS evictions, "
+              "SUM(CASE WHEN COALESCE(owner_phone, '') <> '' OR COALESCE(owner_email, '') <> '' "
+              "THEN 1 ELSE 0 END) AS reachable FROM leads WHERE lead_type = 'eviction'"
+          ).fetchone()
+          evictions, reachable = row["evictions"], row["reachable"] or 0
+          print(f"eviction leads {evictions}; with a phone or email {reachable}")
+          if not evictions:
+              sys.exit("No eviction leads at all: see the Court calendar check.")
+          if not reachable:
+              sys.exit("The free lookup found no phone or email for any eviction landlord.")
+          EOF
