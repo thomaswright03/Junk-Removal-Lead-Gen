@@ -187,6 +187,88 @@ def test_writs_then_judgments_come_before_every_notice_only_case(desk):
     assert dealt == {"CV26-000011-EA", "CV26-000012-EA"}
 
 
+def test_an_old_judgment_is_ranked_like_any_lead_and_goes_stale(desk):
+    """Only a recent writ or judgment goes to the top. A disposed case judged
+    500 days ago, with a post-judgment hearing ahead, ranks by its points
+    and age (below yesterday's notice) and becomes Old."""
+    app, conn = desk
+    db.put_settings(conn, {"lead_view": "eviction_notice"})
+    today = az_today()
+    ago = lambda n: (today - timedelta(days=n)).isoformat()
+    cases = [
+        ("CV26-000021-EA", ago(30), "writ", ago(12), ago(10), "Pending", None),
+        ("CV26-000022-EA", ago(1), "notice", None, None, "Pending", None),
+        ("CV25-000023-EA", ago(530), "judgment", ago(500), None, "Disposed", (today + timedelta(days=20)).isoformat()),
+    ]
+    for case, filed, stage, judged, writ, status, hearing in cases:
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                case,
+                "eviction",
+                filed,
+                plaintiff="SAMPLE RENTALS LLC",
+                in_pima=True,
+                eviction_notice=True,
+                case_stage=stage,
+                case_status=status,
+                judgment_date=judged,
+                writ_date=writ,
+                next_court_date=hearing,
+                url="https://www.jp.pima.gov/CaseSearch/jcDisplayCase.aspx?ID=" + case[-9:-3],
+            ),
+        )
+    conn.commit()
+    rows = app.state({"list": "leads"})["list"]["leads"]
+    assert [l["source_id"] for l in rows] == ["CV26-000021-EA", "CV26-000022-EA", "CV25-000023-EA"]
+    old = rows[2]
+    assert old["stage_rank"] == 0 and ("judgment", 15) not in old["score_parts"]
+    assert rows[0]["stage_rank"] == 2 and ("writ issued", 25) in rows[0]["score_parts"]
+    # The export and `leadgen list` agree.
+    ranked = export.ranked(conn, conn.execute("SELECT * FROM leads").fetchall())
+    assert [r["source_id"] for r in ranked] == ["CV26-000021-EA", "CV26-000022-EA", "CV25-000023-EA"]
+    # Old: the hearing ahead doesn't keep a decided case fresh. The writ and notice stay.
+    assert db.mark_stale(conn, 30, today=today) == 1
+    stale = {r[0] for r in conn.execute("SELECT source_id FROM leads WHERE status = 'stale'").fetchall()}
+    assert stale == {"CV25-000023-EA"}
+
+
+def test_a_judgment_stops_counting_as_recent_as_the_days_pass(tmp_path):
+    """The stored rank follows the day: 45 days after the judgment the case
+    is still at the top, the day after it isn't (and loses the points)."""
+    from leadgen import leadlist, outreach
+
+    conn = db.connect(tmp_path / "l.db")
+    start = az_today()
+    for case, stage in (("CV26-000031-EA", "judgment"), ("CV26-000032-EA", "notice")):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_case",
+                case,
+                "eviction",
+                # The notice-only case is filed the day after the judgment.
+                (start - timedelta(days=5) if stage == "judgment" else start + timedelta(days=1)).isoformat(),
+                plaintiff="EXAMPLE HOMES LLC" if stage == "judgment" else "OTHER HOMES LLC",
+                in_pima=True,
+                eviction_notice=True,
+                case_stage=stage,
+                judgment_date=start.isoformat() if stage == "judgment" else None,
+            ),
+        )
+    conn.commit()
+    settings = outreach.merged_settings({"lead_view": "evictions"})
+    for days, first, points in ((45, "CV26-000031-EA", 50), (46, "CV26-000032-EA", 35)):
+        day = start + timedelta(days=days)
+        got = leadlist.page(conn, settings, {}, today=day)["leads"]
+        assert got[0]["source_id"] == first, days
+        judged = next(l for l in got if l["source_id"] == "CV26-000031-EA")
+        assert judged["score"] == points
+        stored = conn.execute("SELECT stage_rank, rank_score FROM leads WHERE source_id = 'CV26-000031-EA'").fetchone()
+        assert (stored["stage_rank"], stored["rank_score"]) == (1 if days == 45 else 0, points)
+
+
 def test_assign_with_a_count_that_is_not_a_number(desk):
     app, _ = desk
     status, body, _ = post(app, "/api/assign", {"count": "abc"})

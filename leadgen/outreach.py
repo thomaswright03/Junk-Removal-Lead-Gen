@@ -286,13 +286,12 @@ def score_parts(
     parts: list[tuple[str, int]] = []
     if lead["lead_type"] == "eviction":
         parts.append(("Eviction", 35))
-        # A judgment, and above all a writ of restitution (lockout), means the
-        # tenant is out or about to be: the unit needs clearing now.
-        stage = _get(lead, "case_stage")
-        if stage == "writ":
-            parts.append(("writ issued", 25))
-        elif stage == "judgment":
-            parts.append(("judgment", 15))
+        # A recent judgment, and above all a recent writ of restitution
+        # (lockout), means the tenant is out or about to be: the unit needs
+        # clearing now. One from months ago was cleared long since.
+        stage = fresh_stage(lead, today)
+        if stage:
+            parts.append(("writ issued" if stage == "writ" else "judgment", STAGE_POINTS[stage]))
     else:
         desc = (lead["description"] or "").upper()
         code = "VACANT" if "VACANT/NUISANCE" in desc else code_of(lead["description"])
@@ -323,22 +322,45 @@ def score_parts(
 
 # How far an eviction has got, for the list order: a writ (lockout) means the
 # unit needs clearing now, a judgment means a writ usually follows within days.
-# Every writ case comes before every judgment case, which comes before every
-# other lead; priority points order the leads within a stage.
+# Every recent writ case comes before every recent judgment case, which comes
+# before every other lead; priority points order the leads within a stage.
+# Recent means the case's latest real event (its writ, judgment or filing,
+# see ``latest_event``) is at most STAGE_FRESH_DAYS old: a judgment from
+# months ago is ranked like any other lead, by its points and recency, and
+# gets no stage points.
 STAGE_RANK = {"writ": 2, "judgment": 1}
+STAGE_POINTS = {"writ": 25, "judgment": 15}
+STAGE_FRESH_DAYS = 45
 
 
-def stage_rank(lead: LeadRow) -> int:
-    """2 for an eviction with a writ, 1 for one with a judgment, else 0."""
-    if _get(lead, "lead_type") != "eviction":
-        return 0
-    return STAGE_RANK.get(str(_get(lead, "case_stage") or ""), 0)
+def fresh_stage(lead: LeadRow, today: Optional[date] = None) -> str:
+    """``"writ"`` or ``"judgment"`` for an eviction at that stage whose latest
+    event is within ``STAGE_FRESH_DAYS`` of today, else ``""``."""
+    stage = str(_get(lead, "case_stage") or "")
+    if _get(lead, "lead_type") != "eviction" or stage not in STAGE_RANK:
+        return ""
+    today = today or az_today()
+    _label, when = latest_event(lead, today)
+    if not when or (today - date.fromisoformat(when)).days > STAGE_FRESH_DAYS:
+        return ""
+    return stage
+
+
+def stage_rank(lead: LeadRow, today: Optional[date] = None) -> int:
+    """2 for an eviction with a recent writ, 1 for one with a recent
+    judgment, else 0 (see ``fresh_stage``)."""
+    return STAGE_RANK.get(fresh_stage(lead, today), 0)
 
 
 def rank_key(lead: LeadRow) -> tuple[int, int]:
-    """Sort key, best first: stage (writ, judgment, the rest), then the
-    priority number already on the lead (``score``)."""
-    return (-stage_rank(lead), -int(_get(lead, "score") or 0))
+    """Sort key, best first: stage (recent writ, recent judgment, the rest),
+    then the priority number already on the lead (``score``). A lead from
+    the lead list carries its ``stage_rank`` (worked out for the day it was
+    built); otherwise it is worked out for today."""
+    rank = _get(lead, "stage_rank")
+    if rank is None:
+        rank = stage_rank(lead)
+    return (-int(rank), -int(_get(lead, "score") or 0))
 
 
 def score(lead: LeadRow, owner_lead_counts: Optional[dict] = None, today: Optional[date] = None) -> int:

@@ -83,7 +83,7 @@ function leadHelp(view, c, addrLine) {
     ${addrLine}
     <p class="small-line" id="coverage">${CODE_COVERAGE}${view === "all" ? "" : " Pick “All leads” under Show to see them."}</p>
     <p class="small-line">${c.with_phone || 0} leads have a phone, ${c.with_email || 0} an email.
-      Order: writs first, then judgments, then everything else by priority. Hover a priority number to see what it's made of. Miles are straight-line from ${esc(S.settings.base_address)}.</p>
+      Order: writs first, then judgments (each only while 45 days old or less), then everything else by priority. Hover a priority number to see what it's made of. Miles are straight-line from ${esc(S.settings.base_address)}.</p>
     <details class="hint" id="coverageMore"><summary>What Lead Desk covers</summary><ul>
       <li><b>Evictions:</b> every eviction hearing on the Pima County Consolidated Justice Court's calendar (the Green Valley and Ajo justice courts keep their own and aren't read).</li>
       <li><b>Clean-out leads (code cases):</b> City of Tucson code-enforcement cases only. Nothing yet for Marana, Oro Valley, Sahuarita, South Tucson or unincorporated Pima County, which is much of the northwest near your base.</li>

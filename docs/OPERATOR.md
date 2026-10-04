@@ -135,8 +135,8 @@ addresses** links to it:
   the court sends:
   - Rows for cases already in Lead Desk fill in their address. An address
     you typed or confirmed is kept.
-  - New judgment and writ cases join the default view at the top of the
-    list.
+  - New judgment and writ cases join the default view, at the top of the
+    list while the judgment or writ is 45 days old or less.
 
 The address queue (**Work through the ones that need one**) lists evictions
 with no address or only a guess:
@@ -155,7 +155,12 @@ Up to 40 points for what the case says:
 - Vacant building, dumping and trash/debris score highest; weeds score
   lowest.
 - Evictions score 35, with 25 more for a writ of restitution or 15 more for
-  a judgment.
+  a judgment, while that writ or judgment is recent (45 days or less).
+
+The list puts recent writ cases first, then recent judgments, then
+everything else by priority. A judgment or writ older than 45 days gets no
+stage points and no place at the top: that unit was cleared long ago, so it
+ranks like any other lead.
 
 Then:
 
@@ -166,7 +171,9 @@ Then:
 - **+8** if it was 8 to 14 days ago.
 
 A lead becomes Old (stale) 30 days after its latest event. A case with a
-court date today or later is never marked Old.
+court date today or later is not marked Old, unless it already has a
+judgment or writ: a hearing after the judgment doesn't keep an old case
+fresh.
 
 ## Outreach and Results
 

@@ -212,6 +212,7 @@ def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[da
     )
     d["score_parts"] = outreach.score_parts(r, owner_counts, today=today)
     d["score"] = sum(points for _label, points in d["score_parts"])
+    d["stage_rank"] = outreach.stage_rank(r, today)
     d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
     d["owner_first"] = outreach.owner_first_name(r)
     # Methods that can work it now (Assign leads), and those that could
@@ -276,7 +277,7 @@ def one_lead(conn: Conn, settings: dict, lead_id: int) -> Optional[dict]:
 
 
 def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
-    """Highest priority first (writ cases, then judgments, then the rest, each
+    """Highest priority first (recent writ cases, then recent judgments, then the rest, each
     by priority; see ``outreach.rank_key``); or newest first by the latest real event
     (filing, judgment or writ; cases not read yet, which only have a hearing
     date, come last); or closest first."""
@@ -345,24 +346,32 @@ def _later(a: str, b: str) -> str:
 
 
 def _rank_sets(today: date) -> str:
-    """SET clauses for a row's stage rank, its points that don't depend on
-    other rows or the day (kind of lead, stage, absentee and company owner;
-    see ``outreach.score_parts``) and its latest real event on or before
-    today (``outreach.latest_event``; '' when none)."""
+    """SET clauses for a row's points that don't depend on other rows or the
+    day (kind of lead, absentee and company owner; see
+    ``outreach.score_parts``) and its latest real event on or before today
+    (``outreach.latest_event``; '' when none). The stage's rank and points
+    depend on the day (a judgment stops counting as recent), so they are
+    worked out with the day's priorities (``_stage_sql``)."""
     t = today.isoformat()
     hearing = "(lead_type IN ('eviction', 'civil') AND source = 'pima_jp_calendar' AND case_checked_at IS NULL)"
     filed = f"CASE WHEN {hearing} THEN NULL ELSE {_iso_or_null('event_date', t)} END"
     latest = _later(_later(filed, _iso_or_null("judgment_date", t)), _iso_or_null("writ_date", t))
     points = " ".join(f"WHEN '{code}' THEN {n}" for code, n in outreach._TYPE_POINTS.items())
     return (
-        "stage_rank = CASE WHEN lead_type = 'eviction' AND case_stage = 'writ' THEN 2 "
-        "WHEN lead_type = 'eviction' AND case_stage = 'judgment' THEN 1 ELSE 0 END, "
-        "base_points = (CASE WHEN lead_type = 'eviction' THEN 35 + CASE case_stage WHEN 'writ' THEN 25 "
-        f"WHEN 'judgment' THEN 15 ELSE 0 END ELSE CASE rank_code {points} ELSE 20 END END"
+        f"base_points = (CASE WHEN lead_type = 'eviction' THEN 35 ELSE CASE rank_code {points} ELSE 20 END END"
         f" + CASE WHEN {_truthy('owner_absentee')} AND lead_type <> 'eviction' THEN 20 ELSE 0 END"
         f" + CASE WHEN {_truthy('owner_entity')} THEN 10 ELSE 0 END), "
         f"rank_latest = COALESCE({latest}, '')"
     )
+
+
+def _stage_sql(today: date, values: dict[str, int]) -> str:
+    """``values[stage]`` for an eviction at a writ or judgment whose latest
+    event is recent (``outreach.fresh_stage``), else 0."""
+    cutoff = (today - timedelta(days=outreach.STAGE_FRESH_DAYS)).isoformat()
+    fresh = f"lead_type = 'eviction' AND rank_latest >= '{cutoff}'"
+    whens = " ".join(f"WHEN {fresh} AND case_stage = '{stage}' THEN {n}" for stage, n in values.items())
+    return f"(CASE {whens} ELSE 0 END)"
 
 
 def _case_of(column: str, rows: list[tuple], kind: str) -> tuple[str, list]:
@@ -462,11 +471,15 @@ def refresh_ranking(conn: Conn, settings: dict, today: Optional[date] = None) ->
                 "GROUP BY owner_name HAVING COUNT(*) > 1"
             )
             score = (
-                f"(COALESCE(base_points, 0) + CASE WHEN rank_latest >= '{c7}' THEN 15 "
-                f"WHEN rank_latest >= '{c14}' THEN 8 ELSE 0 END "
+                f"(COALESCE(base_points, 0) + {_stage_sql(today, outreach.STAGE_POINTS)} "
+                f"+ CASE WHEN rank_latest >= '{c7}' THEN 15 WHEN rank_latest >= '{c14}' THEN 8 ELSE 0 END "
                 f"+ CASE WHEN owner_name IN ({repeat}) THEN 10 ELSE 0 END)"
             )
-            conn.execute(f"UPDATE leads SET rank_score = {score} WHERE COALESCE(rank_score, -1) <> {score}")
+            stage = _stage_sql(today, outreach.STAGE_RANK)
+            conn.execute(
+                f"UPDATE leads SET rank_score = {score}, stage_rank = {stage} "
+                f"WHERE COALESCE(rank_score, -1) <> {score} OR COALESCE(stage_rank, -1) <> {stage}"
+            )
             db.put_settings(conn, {"rank_day": day, "rank_view": view})
         conn.commit()
         return changed
