@@ -124,11 +124,22 @@ dialog#confirmBox p { margin: 0 0 16px; color: var(--muted); }
 .notice { background: var(--warn-soft); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
 .notice.info { background: var(--accent-soft); }
 .notice .hint { color: var(--fg); }
+/* The Leads tab: one status line above the list, the tools in one row. */
+.statusline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 12px; font-size: 13px; }
+.statusline .sep { color: var(--muted); }
+.toolbar { padding: 12px 16px; }
+.toolbar .tools { flex: 1 1 520px; }
+.toolbar #cLinks { flex: 1 1 220px; min-width: 200px; }
+/* Find phone on a lead's row. */
+.phonecell .btn.small { margin: 2px 0; }
+tr.findrow > td { background: var(--accent-soft); }
+.findphone .hint { color: var(--fg); margin-top: 0; }
+/* While the first page loads: rows the shape of leads. */
+.skeleton td { padding: 14px 12px; }
+.skeleton span { display: block; height: 12px; border-radius: 6px; background: var(--chip); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .skeleton span { animation: none; } }
 /* The setup guide's numbered steps. */
-details.setup > summary { cursor: pointer; }
-details.setup > summary h2 { display: inline; }
-details.setup > summary #reachLine { display: block; margin: 4px 0 0 20px; }
-details.setup[open] > summary { margin-bottom: 8px; }
 ol.setup-steps { margin: 0 0 8px; padding-left: 20px; display: grid; gap: 12px; }
 ol.setup-steps > li > .chip { margin-left: 4px; }
 /* A value that can't be saved: the box is outlined and the reason is under it. */
@@ -139,6 +150,12 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
 
 /* Wide screens: the header is one row, the main action at the right. The
    title line (kept short) wraps rather than being cut. */
+/* A computer: the lead table's column names stay in view under the page
+   header while the list scrolls (the wrapper doesn't clip, so they can). */
+@media (min-width: 721px) {
+  .tablewrap.sticky-head { overflow: visible; }
+  .sticky-head thead th { position: sticky; top: var(--header-h, 0px); z-index: 2; box-shadow: 0 1px 0 var(--line); }
+}
 @media (min-width: 1200px) {
   header { flex-wrap: nowrap; }
   header > div:first-child { flex: 1 1 auto; min-width: 0; }
@@ -180,7 +197,10 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
   table.cards td { border: 0; padding: 4px 12px; display: flex; gap: 8px; align-items: baseline; text-align: left; }
   table.cards td::before { content: attr(data-th); flex: 0 0 88px; color: var(--muted); font-size: 13px; }
   table.cards td.empty { display: block; }
-  table.cards td.empty::before, table.cards tr.aprops td::before { content: none; }
+  table.cards td.empty::before, table.cards tr.aprops td::before, table.cards tr.findrow td::before { content: none; }
+  table.cards tr.findrow td { display: block; }
+  .statusline { font-size: 14px; }
+  .toolbar { padding: 12px; }
   table.cards td.m-hide { display: none; }
   table.cards td > div.row { flex: 1; }
 }

@@ -9,6 +9,20 @@ function resultsKind() {
   return Object.keys(S.lead_kinds || {}).sort((a, b) => assigned(b) - assigned(a))[0] || "";
 }
 function renderResults() {
+  if (outreachLocked()) {
+    $("#tab-results").innerHTML = lockedCard("resultsLocked", "Results fill in once you reach out to leads",
+      "This tab compares the outreach methods (which one turns leads into paid jobs, for the least money) as you log calls, door hangers and pitches. "
+      + "None of your open leads can be contacted yet: find a phone number for one with <b>Find phone</b> on the Leads tab, then hand leads out on the Outreach tab.");
+    bindUnlock($("#tab-results"));
+    return;
+  }
+  if (!contactedAny()) {
+    $("#tab-results").innerHTML = `<div class="card locked" id="resultsEmpty"><h2>No results yet</h2>
+      <p class="hint">Results compare the outreach methods once leads are handed out and contacted. Hand leads out on the Outreach tab and log each contact; responses, quotes and wins fill in here.</p>
+      <button class="btn primary" id="goOutreach">Go to Outreach</button></div>`;
+    $("#goOutreach").onclick = async () => { ui.tab = "outreach"; syncUrl(true); await reloadList(); };
+    return;
+  }
   const kind = resultsKind();
   const pick = kind ? (S.results_by_kind || {})[kind] : { results: S.results, comparison: S.comparison };
   const R = pick.results;

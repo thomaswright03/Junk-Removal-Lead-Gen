@@ -203,7 +203,10 @@ def test_code_case_coverage_and_counts_are_shown(server, page):
     page.goto(url)
     page.wait_for_selector("#leadTable tbody tr[data-id]")
     assert "1 of them code cases" in page.inner_text("#fView")
-    assert "City of Tucson only" in page.inner_text("#tab-leads")
+    # The explanations are one click away ("How this works"), not above the list.
+    assert page.locator("#leadHelp").count() == 0
+    page.click("#helpToggle")
+    assert "City of Tucson only" in page.inner_text("#leadHelp")
     assert "0 of 1 open eviction lead has an address a door hanger can go to" in page.inner_text("#addrShare")
 
 
@@ -248,9 +251,15 @@ def test_double_click_logs_one_contact_and_it_can_be_removed(server, page):
     page.wait_for_selector("[data-untouch]")
     conn = db.connect(path)
     assert conn.execute("SELECT COUNT(*) FROM touches").fetchone()[0] == 1
+    before = tuple(conn.execute("SELECT id, created_at, cost_cents, kind FROM touches").fetchone())
     page.click("[data-untouch]")
     page.wait_for_selector("text=Removed from the history")
     assert conn.execute("SELECT COUNT(*) FROM touches").fetchone()[0] == 0
+    # A mis-tap: Undo puts the same entry back, with its time and cost.
+    page.click("#toastUndo")
+    page.wait_for_selector("text=Put back in the history")
+    page.wait_for_selector("[data-untouch]")
+    assert tuple(conn.execute("SELECT id, created_at, cost_cents, kind FROM touches").fetchone()) == before
 
 
 def test_import_a_csv_and_see_the_leads(server, page, tmp_path):
@@ -411,10 +420,14 @@ def test_address_work_queue_confirms_a_guess_in_one_click(server, page):
     )
     conn.commit()
     page.goto(url)
+    page.click("#helpToggle")
     page.click("#fNeedAddr")
     page.wait_for_selector("#recordsCard")
-    # What to ask the court for, with the dates, and where.
+    # What to ask the court for, with the dates, and where: the first request
+    # reaches back a month, for the judgments and writs the calendar never shows.
     assert "special detainer" in page.inner_text("#recAsk")
+    assert "judgment or writ of restitution" in page.inner_text("#recAsk")
+    assert "First request: the last month" in page.inner_text("#backfillNote")
     assert page.get_attribute("#recordsCard a", "href").startswith("https://www.jp.pima.gov/OnlineRecordsRequest")
     rows = page.locator("#addrTable tbody tr.click")
     assert rows.count() == 2
@@ -653,11 +666,20 @@ def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
     add_unreachable_eviction(path)
     app.providers = []  # "find phones" looks nothing up here
     page.goto(url)
+    # One status line above the list says how many can be reached and how many
+    # steps are left; the guide opens from it (shut, so the list starts on screen).
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    assert "1 of 2 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    assert "2 steps to do" in page.inner_text("#reachLine")
+    assert page.locator("#setupGuide").count() == 0
+    page.click("#setupShow")
     guide = page.locator("#setupGuide")
     guide.wait_for()
     assert "2 steps to do" in guide.inner_text()
-    assert "1 of 2 open eviction leads can't be reached yet" in page.inner_text("#reachLine")
     assert "1,000 of these lookups a month free" in guide.inner_text() and "$0 a month" in guide.inner_text()
+    # The key, click by click, with links straight to each Google page.
+    assert "places.googleapis.com" in page.get_attribute("#keySteps a >> nth=2", "href")
+    assert "Restrict key" in page.inner_text("#keySteps")
     # What each step would reach, and the one to start with (it reaches more).
     assert "up to 2 of 2 open eviction leads" in page.inner_text("#yieldRecords")
     assert "up to 1 of 2 open eviction leads" in page.inner_text("#yieldGoogle")
@@ -684,9 +706,9 @@ def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
     assert db.get_settings(db.connect(path))["records_requested"]["date"]
     page.click("#setupHide")
     page.wait_for_selector("#setupGuide", state="detached")
-    assert db.get_settings(db.connect(path))["setup_guide_hidden"] is True
     # The reach numbers stay above the list, with the way back to the guide.
     assert "1 of 2 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    assert "to do" not in page.inner_text("#reachLine")
     page.click("#fUnreach")
     page.wait_for_function("document.querySelectorAll('#leadTable tbody tr[data-id]').length === 1")
     assert "Sample Properties" in page.inner_text("#leadTable")
@@ -710,7 +732,7 @@ def test_call_list_puts_numbers_first_and_says_why_others_have_none(server, page
     assert "Search" in rows.nth(1).inner_text()
     # "Set up phone lookups" opens the guide on the Leads tab.
     page.click("#noPhoneNote [data-setup]")
-    page.wait_for_selector("#setupGuide[open]")
+    page.wait_for_selector("#setupGuide")
 
 
 def test_form_mistakes_show_under_the_field_and_nothing_is_sent(server, page):
@@ -823,6 +845,7 @@ def test_leads_tab_controls_have_distinct_labels_and_the_hint_fits_the_view(serv
     assert len(seen) == len(set(seen)), seen
     assert page.inner_text("#fType option[value='']") == "Any kind of lead"
     # Show is already All leads: no instruction to pick it.
+    page.click("#helpToggle")
     assert "Pick “All leads”" not in page.inner_text("#coverage")
     assert "City of Tucson only" in page.inner_text("#coverage")
     # What is and isn't collected, one click away.
@@ -940,3 +963,127 @@ def test_dark_theme_is_the_same_from_the_computer_and_from_settings(server, page
     # Back to "Same as this computer": light again.
     page.select_option("#sTheme", "system")
     page.wait_for_function("document.documentElement.dataset.theme === 'light'")
+
+
+def test_find_phone_on_the_row_saves_a_number_without_leaving_the_list(server, page):
+    """No Google key: each lead with no number has Find phone on its row,
+    with searches for the landlord and a box to paste the number into."""
+    url, app, path = server
+    add_unreachable_eviction(path)
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000003-EA",
+            "eviction",
+            "2026-09-27",
+            None,
+            plaintiff="SAMPLE PROPERTIES LLC",
+            defendant="ROE, JO",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000004-EA",
+            "eviction",
+            "2026-09-26",
+            None,
+            plaintiff="MHC DIAMOND II LLC",
+            defendant="ROE, AL",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    assert "1 of 4 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    # Company names keep their acronyms.
+    assert "MHC Diamond II LLC" in page.inner_text("#leadTable")
+    first = page.locator("#leadTable [data-findphone]").first
+    first.click()
+    panel = page.locator("tr.findrow:not([hidden])")
+    panel.wait_for()
+    assert page.evaluate("document.activeElement.id").startswith("fp-")
+    links = [panel.locator("a").nth(i).get_attribute("href") for i in range(3)]
+    assert (
+        links[0].startswith("https://www.google.com/search?q=") and "maps" in links[1] and "ecorp.azcc.gov" in links[2]
+    )
+    # A number that isn't one is refused at the box.
+    page.keyboard.type("555-01")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".findphone .field-error:not([hidden])")
+    lid = int(page.evaluate("document.activeElement.id").split("-")[1])
+    page.fill(f"#fp-{lid}", "(520) 555-0177")
+    page.click(f"[data-savephone='{lid}']")
+    page.wait_for_selector("text=Number saved")
+    rows = {r[0]: r[1] for r in db.connect(path).execute("SELECT source_id, owner_phone FROM leads").fetchall()}
+    saved = [k for k, v in rows.items() if v == "(520) 555-0177"]
+    assert saved and all(k.startswith("CV26") for k in saved)
+    # The same landlord's other lead got it too; the reach count went up; on to the next.
+    if "CV26-000002-EA" in saved:
+        assert "CV26-000003-EA" in saved
+    page.wait_for_function("document.activeElement && document.activeElement.dataset.findphone")
+    assert f"{1 + len(saved)} of 4 open eviction leads can be reached now" in page.inner_text("#reachLine")
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (390, 844)])
+def test_the_first_lead_is_on_screen_without_scrolling(server, page, size):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    page.set_viewport_size({"width": size[0], "height": size[1]})
+    page.goto(url)
+    first = page.locator("#leadTable tbody tr[data-id]").first
+    first.wait_for()
+    assert page.evaluate("window.scrollY") == 0
+    box = first.bounding_box()
+    assert box["y"] + min(box["height"], 60) <= size[1], box
+
+
+def test_outreach_and_results_say_what_unlocks_them(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    conn.execute("UPDATE leads SET owner_phone = NULL, address = NULL")
+    conn.commit()
+    page.goto(url + "#tab=outreach")
+    locked = page.locator("#outreachLocked")
+    locked.wait_for()
+    assert page.locator("#aGo").count() == 0  # no form that can't do anything
+    assert "opens once a lead can be contacted" in locked.inner_text()
+    page.click("#nav [data-tab=results]")
+    page.wait_for_selector("#resultsLocked")
+    assert page.locator("#tab-results table").count() == 0  # no tables of zeros
+    page.click("#resultsLocked [data-unlock]")
+    page.wait_for_selector("#leadTable [data-findphone]")
+    assert page.input_value("#fType") == "unreachable"
+
+
+def test_message_previews_use_a_lead_of_the_right_kind(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    conn.execute("DELETE FROM leads WHERE lead_type = 'code_violation'")
+    db.put_settings(conn, {"lead_view": "eviction_notice"})
+    conn.commit()
+    page.goto(url + "#tab=settings")
+    page.wait_for_selector("#pvl-phone")
+    assert "No code case to preview yet" in page.inner_text("#pvl-phone")
+    assert "Example Homes LLC" in page.inner_text("#pvl-phone_eviction")
+
+
+def test_theme_colour_and_column_names_stay_in_view(server, page):
+    url, app, path = server
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.emulate_media(color_scheme="dark")
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    colours = page.evaluate("[...document.querySelectorAll('meta[name=theme-color]')].map(m => m.content)")
+    assert "#1b1b1e" in colours
+    assert page.evaluate("getComputedStyle(document.querySelector('#leadTable thead th')).position") == "sticky"
+    top = page.evaluate("getComputedStyle(document.querySelector('#leadTable thead th')).top")
+    header = page.evaluate("document.querySelector('header').offsetHeight")
+    assert top == f"{header}px"

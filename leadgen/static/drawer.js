@@ -120,7 +120,7 @@ const REACH_TEXT = {
   both: "Phone or email, and a door hanger at the property.",
   contact: "Phone or email. No confirmed property address yet, so no door hanger.",
   address: "A door hanger or visit at the property. No phone or email yet.",
-  none: "Nothing yet: no phone, email or confirmed address. Find landlord phones on the Leads tab, or find the address below.",
+  none: "Nothing yet: no phone, email or confirmed address. Search for the landlord's number (Find phone, below) and paste it under Contact, or find the address below.",
 };
 function renderDrawer() {
   const d = $("#drawer");
@@ -254,8 +254,13 @@ function renderDrawer() {
   };
   d.querySelectorAll("[data-touch]").forEach(b => b.onclick = () =>
     act(() => api("/api/touch", { lead_id: l.id, kind: b.dataset.touch }), r => r.logged ? "Logged: " + b.textContent : "Already logged a moment ago", b));
-  d.querySelectorAll("[data-untouch]").forEach(b => b.onclick = () =>
-    act(() => api("/api/touch/delete", { id: +b.dataset.untouch }), "Removed from the history", b));
+  // Removing an entry offers Undo, which puts the same entry back (its time and cost too).
+  d.querySelectorAll("[data-untouch]").forEach(b => b.onclick = async () => {
+    let removed = null;
+    await act(async () => { const r = await api("/api/touch/delete", { id: +b.dataset.untouch }); removed = r.removed; return r; },
+      "Removed from the history", b,
+      () => act(() => api("/api/touch/restore", { removed }), "Put back in the history"));
+  });
   d.querySelectorAll("[data-status]").forEach(b => b.onclick = async () => {
     const extra = pendingResult(l), before = l.status, to = b.dataset.status;
     if (!drawerOk(["dQuote", "dRev", "dNotes"])) return;
@@ -283,8 +288,10 @@ function renderDrawer() {
         ok: `Mark ${to.toLowerCase()}`, cancel: `Keep it ${was.toLowerCase()}` });
       if (!yes) { status = null; kept = was; }
     }
+    // Keeping a Lost or Skip lead as it is says so to the server, which
+    // otherwise marks a lead with new job revenue Won (or asks, for these).
     const r = await act(() => api("/api/lead", { id: l.id, fields: { quote_amount: quote, job_revenue: rev, notes: $("#dNotes").value,
-      ...(status ? { status } : {}) } }), kept ? `Saved. The lead stays ${kept}.` : status === "won" ? "Saved and marked won" : status === "quoted" && l.status !== "quoted" ? "Saved and marked quoted" : "Saved", btn, undefined, drawerError);
+      ...(status ? { status } : kept ? { status: l.status } : {}) } }), kept ? `Saved. The lead stays ${kept}.` : status === "won" ? "Saved and marked won" : status === "quoted" && l.status !== "quoted" ? "Saved and marked quoted" : "Saved", btn, undefined, drawerError);
     if (r) { clearDrafts(l.id, RESULT_FIELDS); renderDrawer(); }
   };
   const op = $("#dOwnerProps");

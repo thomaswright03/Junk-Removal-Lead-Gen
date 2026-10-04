@@ -8,8 +8,18 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = v => v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const pct = v => v == null ? "–" : (v * 100).toFixed(v < 0.1 && v > 0 ? 1 : 0) + "%";
-const title = s => String(s ?? "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
-  .replace(/\b(Llc|Lllp|Lp|Po|Nw|Ne|Sw|Se|Hoa|Usa|Az)\b/g, w => w.toUpperCase());
+// Names and addresses arrive in capitals ("MHC DIAMOND II LLC"): shown in
+// title case, except acronyms ("MHC Diamond II LLC"): known ones, Roman
+// numerals, and short words with no vowel that aren't street or name
+// abbreviations (St, Rd, Dr, Mr...).
+const ACRONYMS = new Set(["LLC", "LLLP", "LLP", "PLLC", "LP", "PC", "PO", "NW", "NE", "SW", "SE", "HOA", "USA", "AZ", "US", "AHC", "MHC", "ICG", "RV", "SFR", "MFD", "MFR", "DBA", "LLLC", "FBO", "CDC", "HUD", "REIT", "AMH"]);
+const ROMAN = /^(II|III|IV|VI|VII|VIII|IX|XI|XII|XIII|XIV|XV)$/;
+const NOT_ACRONYMS = new Set(["ST", "RD", "DR", "CT", "PL", "LN", "WY", "HWY", "PKWY", "BLVD", "TRL", "SQ", "MR", "MRS", "MS", "JR", "SR", "DRS", "STS", "W", "N", "S", "E"]);
+const title = s => String(s ?? "").replace(/[A-Za-z0-9']+/g, w => {
+  const up = w.toUpperCase();
+  if (ACRONYMS.has(up) || ROMAN.test(up) || (/^[A-Z]{2,4}$/.test(up) && !/[AEIOUY]/.test(up) && !NOT_ACRONYMS.has(up))) return up;
+  return (up.charAt(0) + up.slice(1).toLowerCase()).replace(/^([A-Z])'([a-z])/, (m, a, b) => `${a}'${b.toUpperCase()}`);  // O'Brien
+});
 
 const OFFLINE = "Lead Desk didn't answer. Check that it is still running (and your internet connection), then try again.";
 async function api(path, body) {
@@ -331,7 +341,7 @@ function phoneCell(l) {
 // Evictions with no phone, email or known address can't be contacted yet.
 function reachChip(l) {
   if (l.lead_type !== "eviction" || l.reach !== "none") return "";
-  return ` <span class="chip warn" title="No phone, email or confirmed property address yet. Find landlord phones, or a court records request, fills these in.">can't reach yet</span>`;
+  return ` <span class="chip warn" title="No phone, email or confirmed property address yet. Find phone finds a number now; Google lookups or a court records request fill in more.">can't reach yet</span>`;
 }
 function emailCell(l) {
   return l.owner_email ? `<a href="mailto:${esc(l.owner_email)}">${esc(l.owner_email)}</a>` : '<span class="muted">–</span>';
