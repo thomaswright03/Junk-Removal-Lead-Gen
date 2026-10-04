@@ -56,9 +56,9 @@ class Job:
             self.result = work(self, lambda: self.cancel.is_set() or bool(should_stop and should_stop()))
             if self.cancel.is_set():
                 self.result["cancelled"] = True
-        except Exception as e:
+        except Exception:  # the details go to the server log
             traceback.print_exc(file=sys.stderr)
-            self.error = f"{self.label} stopped with an error ({type(e).__name__}). Try again later."
+            self.error = f"{self.label} stopped because of an unexpected problem. Try again later."
         finally:
             self.finished_at = now_iso()
             self._thread_running.clear()
@@ -224,9 +224,9 @@ class JobRunner:
         def work() -> None:
             try:
                 self.refresh(body or {})
-            except Exception as e:
+            except Exception:  # the details go to the server log
                 traceback.print_exc(file=sys.stderr)
-                self.daily_message = f"the daily check stopped with an error ({type(e).__name__})"
+                self.daily_message = "the daily check stopped because of an unexpected problem"
 
         threading.Thread(target=work, daemon=True, name="daily").start()
         return {"started": True, "running": True, "message": STARTED_MESSAGE}

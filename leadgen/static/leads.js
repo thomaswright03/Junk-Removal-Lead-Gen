@@ -1,24 +1,47 @@
 // Leads tab: the court case box, the lookup buttons, the filters and one
 // page of the lead list (the server filters, sorts and pages it).
 "use strict";
-const LEAD_COLUMNS = ["Priority", "Latest event", "What", "Property", "Owner / landlord", "Phone", "Email", "Miles", "Outreach", "Status"];
+// Phone and email share one Contact column, so the table fits a laptop
+// screen with Status (updated every day) in view.
+const LEAD_COLUMNS = ["Priority", "Latest event", "What", "Property", "Owner / landlord", "Contact", "Miles", "Outreach", "Status"];
 // The landlord (eviction) or owner a phone number is looked for.
 const landlordOf = l => (l.plaintiff || l.owner_name || "").split(";")[0].trim();
 const canFindPhone = l => !l.owner_phone && !!landlordOf(l);
+// What tells one eviction row from another at the same complex: the case
+// number and the tenant's surname ("CV26-031646-EA · tenant Doe").
+function caseLine(l) {
+  if (l.lead_type !== "eviction") return "";
+  const tenant = (l.defendant || "").split(";")[0].split(",")[0].trim();
+  return `<span class="small-line block caseline"><span class="nowrap">${esc(l.source_id)}</span>${tenant ? ` · tenant ${esc(title(tenant))}` : ""}</span>`;
+}
+// Several open leads at one address (tenants of one complex): a button that
+// lists them together, so the landlord can be called about all of them.
+function sameAddress(l) {
+  const n = l.address_lead_count || 0;
+  if (n < 2 || !l.address) return "";
+  const where = isMultifamily(l) ? "complex" : "address";
+  return ` <button class="linkbtn small-line" data-sameaddr="${esc(l.address)}" title="${n} open cases at this ${where}: call the landlord about all of them at once. Lists them together.">${n} cases at this ${where}</button>`;
+}
+function contactCell(l) {
+  const parts = [];
+  if (l.owner_phone) parts.push(phoneCell(l));
+  if (l.owner_email) parts.push(`<span class="email">${emailCell(l)}</span>`);
+  if (!parts.length && !canFindPhone(l)) parts.push('<span class="muted">–</span>');
+  return parts.join("<br>") + (canFindPhone(l) ? ` <button class="btn small" data-findphone="${l.id}" aria-expanded="${ui.findOpen === l.id}" aria-controls="find-${l.id}">Find phone</button>` : "") + reachChip(l);
+}
 function leadRow(l) {
   const th = LEAD_COLUMNS;
   return `<tr class="click" data-id="${l.id}" data-label="${esc(title(fullAddress(l) || l.plaintiff || l.source_id))}">
     <td class="num" data-th="${th[0]}">${scoreChip(l)}</td>
     <td class="datecell" data-th="${th[1]}"><span>${dateCell(l)}</span></td>
-    <td data-th="${th[2]}"><span>${esc(whatLabel(l))}${noticeChip(l)}${l.next_court_date ? `<span class="small-line block">court ${esc(courtDate(l.next_court_date))}</span>` : ""}</span></td>
-    <td data-th="${th[3]}"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}${l.property_use ? `<span class="small-line block">${esc(title(l.property_use))}</span>` : ""}</span></td>
+    <td data-th="${th[2]}"><span>${esc(whatLabel(l))}${noticeChip(l)}${caseLine(l)}${l.next_court_date ? `<span class="small-line block" title="The next court date. The tenant may move out before or after it.">court ${esc(courtDate(l.next_court_date))}</span>` : ""}</span></td>
+    <td data-th="${th[3]}"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) + sameAddress(l) : '<span class="muted">address needed</span>'}${l.property_use ? `<span class="small-line block">${esc(title(l.property_use))}</span>` : ""}</span></td>
     <td data-th="${th[4]}"><span>${ownerLine(l)}</span></td>
-    <td data-th="${th[5]}" class="phonecell">${phoneCell(l)}${canFindPhone(l) ? ` <button class="btn small" data-findphone="${l.id}" aria-expanded="${ui.findOpen === l.id}" aria-controls="find-${l.id}">Find phone</button>` : ""}${reachChip(l)}</td>
-    <td data-th="${th[6]}" class="${l.owner_email ? "" : "m-hide"}">${emailCell(l)}</td>
-    <td class="num m-hide" data-th="${th[7]}">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
-    <td data-th="${th[8]}" class="${l.channel ? "" : "m-hide"}">${chDot(l.channel)}</td>
-    <td data-th="${th[9]}">${statusChip(l.status)}</td></tr>
-    ${canFindPhone(l) ? `<tr class="findrow" id="find-${l.id}" ${ui.findOpen === l.id ? "" : "hidden"}><td colspan="10">${ui.findOpen === l.id ? findPanel(l) : ""}</td></tr>` : ""}`;
+    <td data-th="${th[5]}" class="contactcell">${contactCell(l)}</td>
+    <td class="num m-hide" data-th="${th[6]}">${l.miles != null ? l.miles.toFixed(1) : "–"}</td>
+    <td data-th="${th[7]}" class="${l.channel ? "" : "m-hide"}">${chDot(l.channel)}</td>
+    <td data-th="${th[8]}">${statusChip(l.status)}</td></tr>
+    ${canFindPhone(l) ? `<tr class="findrow" id="find-${l.id}" ${ui.findOpen === l.id ? "" : "hidden"}><td colspan="${th.length}">${ui.findOpen === l.id ? findPanel(l) : ""}</td></tr>` : ""}`;
 }
 // Find phone, on the lead's own row: searches for the landlord in a new tab
 // and a box to paste the number into, so a number goes in without leaving
@@ -57,9 +80,9 @@ function autoYieldLine() {
   const y = S.auto_yield || {}, google = googleReady();
   const sources = google ? "OpenStreetMap and Google Places" : "OpenStreetMap";
   const sofar = y.looked_up ? `So far it found a number for <strong>${y.found} of ${y.looked_up}</strong> landlord${y.looked_up === 1 ? "" : "s"} it looked up.`
-    : "It hasn't looked any up yet (the morning check does, or Find landlord phones &amp; emails).";
+    : "It hasn't looked any up yet (the morning check does, or More tools, Find landlord phones now).";
   return `<p class="hint" id="autoYield"><b>What Lead Desk fills in by itself:</b> each morning it looks up company landlords on ${sources}. ${sofar}
-    ${google ? "" : " A Google Places key (under Get phones and addresses) finds more, free up to 1,000 lookups a month."}
+    ${google ? "" : " A Google Places key (More tools, Set up phone lookups) finds more, free up to 1,000 lookups a month."}
     <b>What it can't:</b> the court lists no phone numbers, private landlords (people, not companies) are never looked up, and Lead Desk uses no paid phone service.
     The rest is a quick search by hand, about a minute a landlord.</p>`;
 }
@@ -88,7 +111,7 @@ function phonePassCard(P) {
     <h2 id="passTitle" tabindex="-1">Find phones for your top landlords</h2>
     ${autoYieldLine()}
     <p class="statusline" id="passProgress"><span><strong>${done} of ${L.length}</strong> landlord${L.length === 1 ? "" : "s"} below have a number.</span>
-      <span class="sep" aria-hidden="true">·</span><span>Top ${top.leads || 0} leads: <strong>${top.reached || 0}</strong> can be reached now.</span></p>
+      <span>Top ${top.leads || 0} leads: <strong>${top.reached || 0}</strong> can be reached now.</span></p>
     ${L.length ? `<ol class="passlist">${rows}</ol>` : `<p class="hint">No landlords left to search for${P.skipped ? " (apart from the ones you skipped)" : ""}.</p>`}
     <div class="row">
       <button class="btn" id="passPrev" ${P.offset > 0 ? "" : "disabled"}>Previous ${P.size}</button>
@@ -169,7 +192,7 @@ function leadHelp(view, c, addrLine) {
     ${addrLine}
     <p class="small-line" id="coverage">${CODE_COVERAGE}${view === "all" ? "" : " Pick “All leads” under Show to see them."}</p>
     <p class="small-line">${c.with_phone || 0} leads have a phone, ${c.with_email || 0} an email.
-      Order: writs first, then judgments (each only while 45 days old or less), then everything else by priority. Hover a priority number to see what it's made of. Miles are straight-line from ${esc(S.settings.base_address)}.</p>
+      Order: writs first, then judgments (each only while 45 days old or less), then everything else by priority. Hover a priority number to see why it's there. ${S.settings.base_address ? `Miles are straight-line from ${esc(S.settings.base_address)}.` : "Miles show once your base address is saved in Settings."}</p>
     <details class="hint" id="coverageMore"><summary>What Lead Desk covers</summary><ul>
       <li><b>Evictions:</b> every eviction hearing on the Pima County Consolidated Justice Court's calendar (the Green Valley and Ajo justice courts keep their own and aren't read).</li>
       <li><b>Clean-out leads (code cases):</b> City of Tucson code-enforcement cases only. Nothing yet for Marana, Oro Valley, Sahuarita, South Tucson or unincorporated Pima County, which is much of the northwest near your base.</li>
@@ -183,11 +206,71 @@ function leadHelp(view, c, addrLine) {
       <dt>Hearing</dt><dd>The court date for the case. It hasn't happened yet, so it doesn't make a lead fresher.</dd>
       <dt>Parcel</dt><dd>The county's number for a piece of property; it tells Lead Desk the owner of record.</dd>
       <dt>Owner lives elsewhere</dt><dd>On a City code case, the owner's mailing address isn't the property: a landlord, not someone living there. (On an eviction the owner is the landlord, whose office is nearly always elsewhere, so it isn't shown or counted there.)</dd>
-      <dt>Priority</dt><dd>Points for how far the eviction has got (or how much hauling a code case suggests), a code case owner who lives elsewhere, a company owner, an owner with several leads, and how recent the latest court or city event is.</dd>
+      <dt>Priority</dt><dd>How soon a lead is worth working: higher for a lockout or judgment, a recent filing, a company landlord, a landlord with several cases, and (on a code case) an owner who lives elsewhere. Hover the number for the reasons.</dd>
+      <dt>Complex, unit needed</dt><dd>The address is a whole apartment complex or park, not the tenant's door. A door hanger needs the unit number; until then, call the landlord (about every case at that complex at once).</dd>
       <dt>Phone-lookup service</dt><dd>A paid service (“skip tracing”) that finds phone numbers for a list of owners.</dd>
     </dl></details>
     <button class="linkbtn" id="helpClose">Close</button>
   </div>`;
+}
+// The occasional tools, in one menu ("More tools"), each with what it does.
+// The everyday screen is the list, its search and filters, Check for new
+// evictions (in the header) and the one next step.
+function toolsMenu(todo) {
+  const tool = (control, text) => `<li>${control}<span class="tool-desc">${text}</span></li>`;
+  return `<ul id="leadTools" class="tools-menu" ${ui.toolsOpen ? "" : "hidden"}>
+    ${tool(`<span class="row nowrap-row"><input type="text" id="cLinks" aria-label="Justice Court case links" placeholder="Paste court case links"><button class="btn small primary" id="cAdd">Add cases</button></span>`,
+      "Add Justice Court cases now from their links (jcDisplayCase), without waiting for the morning check.")}
+    ${tool(`<button class="btn small" id="cUpdate">Update court cases</button>`,
+      "Re-read every open case for a new notice, judgment, writ or court date. The morning check does this by itself.")}
+    ${tool(`<button class="btn small" id="lFind">Find landlord phones now</button>`,
+      "Look up company landlords' office numbers (OpenStreetMap, and Google when a key is set), best leads first. The morning check does this too.")}
+    ${tool(`<button class="btn small" id="importBtn">Import a court file or saved page</button>`,
+      "The court's records-request file (CSV) fills in property addresses; a saved case or calendar page adds those cases.")}
+    ${tool(`<label class="btn small">Import phones / emails<input type="file" id="lImport" accept=".csv" hidden></label>`,
+      "A CSV of numbers from a phone-lookup service or your own list. Fills only empty fields, never a number you typed.")}
+    ${tool(`<a class="btn small" href="/api/skiptrace.csv" download="phone-lookup-list.csv">Download the phone-lookup list</a>`,
+      "Owners still missing a phone, as a CSV for a paid phone-lookup (skip-tracing) service, if you ever use one.")}
+    ${tool(`<button class="btn small" id="setupShow" aria-expanded="${!!ui.showSetup}" aria-controls="setupGuide">Set up phone lookups and court addresses</button>${todo ? ` <span class="chip warn">${todo} step${todo > 1 ? "s" : ""} to do</span>` : ""}`,
+      "A Google Places key finds more landlord numbers; the court's records request gives property addresses. Step by step, with the cost.")}
+  </ul>`;
+}
+// Before the first lead is worked: the business name every message uses,
+// and the base address miles and routes start from (no miles until it's set).
+function firstRunCard() {
+  const st = S.settings;
+  if (st.business_name && st.base_address) return "";
+  return `<div class="card mb12 notice info" id="firstRun"><h2>Before you start: your business details</h2>
+    <p class="hint">Your business name goes on every door hanger and call script. Your base address is where miles and driving routes start from; miles stay blank until it's saved.</p>
+    <div class="row">
+      <label>Business name<br><input id="frName" value="${esc(st.business_name || "")}" placeholder="e.g. Desert Junk Removal" autocomplete="organization">${fieldError("frName")}</label>
+      <label class="grow">Base address<br><input id="frBase" class="w-full" value="${esc(st.base_address || "")}" placeholder="Where you start from, e.g. 123 W Main St, Tucson, AZ" autocomplete="street-address">${fieldError("frBase")}</label>
+      <button class="btn" id="frSave">Save</button>
+    </div></div>`;
+}
+function bindFirstRun() {
+  const save = $("#frSave"); if (!save) return;
+  const go = async () => {
+    const name = $("#frName").value.trim(), base = $("#frBase").value.trim();
+    if (!checkFields({ frName: () => name ? checkText(name, "Business name") : "Type your business name: every door hanger and call script uses it.",
+      frBase: () => base ? checkText(base, "Base address") : "Type the address you start from, so miles can be worked out." })) return;
+    await act(() => api("/api/settings", { business_name: name, base_address: base }), "Saved. Miles fill in once the address is found on the map.", save,
+      undefined, e => showFieldErrors(e, { business_name: "frName", base_address: "frBase" }));
+  };
+  save.onclick = go;
+  for (const id of ["frName", "frBase"]) { const box = $("#" + id); box.onkeydown = e => { if (e.key === "Enter") go(); }; box.oninput = () => clearFieldError(id); }
+}
+// What the free lookup did for the best leads, and, when that's little,
+// the Google option with its cost: said plainly above the list.
+function topYieldLine(top) {
+  if (!top.leads) return "";
+  const n = top.leads, looked = top.looked_up || 0, found = top.found || 0;
+  const what = looked ? `Lead Desk's free lookup found numbers for <strong>${found} of the ${looked}</strong> it looked up`
+    : top.lookable ? "Lead Desk's free lookup hasn't looked them up yet (the morning check does)"
+    : "none has a company landlord, and the free lookup only finds companies";
+  const low = !googleReady() && (looked ? found * 2 < looked : !top.lookable);
+  const google = low ? ` Free sources know few Tucson landlords. A Google Places key finds more: the first 1,000 lookups a month are free, then about $35 per 1,000, and Lead Desk stops at the limits you set. <button class="linkbtn" id="yieldSetup">Set up Google lookups</button>` : "";
+  return `<p class="hint m0 mb12" id="topYield">Top ${n} lead${n === 1 ? "" : "s"}: <strong>${top.reached || 0}</strong> can be reached now; ${what}.${google}</p>`;
 }
 function renderLeads() {
   const list = S.list || { leads: [], total: 0, offset: 0, limit: 100 };
@@ -203,63 +286,53 @@ function renderLeads() {
     : view === "all" ? "No leads match. Try “Any status”, or press Check for new evictions."
     : (S.daily || {}).running ? `Checking for new evictions (${esc((S.daily || {}).message || "starting")}). A first check takes about 15 minutes: each court case page is read with a pause between them, and cases show up here when the check finishes.`
     : `No ${view === "eviction_notice" ? "eviction cases with a notice, judgment or writ" : "eviction cases"} yet. Press <b>Check for new evictions</b>
-       to search the court calendar now (it also runs by itself every morning), or paste case links above.` +
+       to search the court calendar now (it also runs by itself every morning), or add case links under More tools.` +
       (vc.unchecked ? ` ${vc.unchecked} eviction cases haven't been checked yet; they appear here once their case page shows a notice (next check ${esc((S.daily || {}).next_run || "tomorrow 6:00 AM")}).` : "");
   const viewName = v => v === "all" && vc.code_cases ? `${VIEW_LABEL[v]}: ${vc[v] ?? 0}, ${vc.code_cases} of them code cases` : `${VIEW_LABEL[v]} (${vc[v] ?? 0})`;
   const evOpen = c.evictions_open || 0, evAddr = c.evictions_with_address || 0;
-  const evReach = c.evictions_reachable || 0, evNone = evOpen - evReach;
+  const evReach = c.evictions_reachable || 0;
   const A = S.addresses || {}, wk = A.week_ago, rec = A.records || {};
   const share = (n, d) => d ? Math.round(100 * n / d) + "%" : "–";
   const trend = wk && wk.open ? `; ${share(wk.with_address, wk.open)} a week ago` : "";
-  const addrLine = evOpen ? `<p class="small-line" id="addrShare">${evAddr} of ${evOpen} open eviction lead${evOpen === 1 ? " has" : "s have"} an address a door hanger can go to (${share(evAddr, evOpen)}${trend}): typed, confirmed or from the court, with a unit where the parcel has several homes.
+  const addrLine = evOpen ? `<p class="small-line" id="addrShare">${evAddr} of ${evOpen} open eviction lead${evOpen === 1 ? " has" : "s have"} an address a door hanger can go to (${share(evAddr, evOpen)}${trend}): typed, confirmed or from the court, with a unit where the parcel has several homes. A whole complex with no unit doesn't count: work those through the landlord.
     ${evOpen > evAddr && ui.type !== "address_work" ? `<button class="linkbtn" id="fNeedAddr">Work through the ones that need one</button>` : ""}
-    ${rec.due && ui.type !== "address_work" ? ` · <span class="chip warn">records request due</span>` : ""}</p>` : "";
-  // One short status line: how many eviction leads can be reached now, and
-  // the ways to more (the setup steps, Help), each one click away.
+    ${rec.due && ui.type !== "address_work" ? ` <span class="chip warn">records request due</span>` : ""}</p>` : "";
+  // One status line: how many eviction leads can be reached now, the top
+  // ten, and the one next step (finding phones for the top ten while any of
+  // them can't be reached). Everything else is under More tools or Help.
   const todo = (googleReady() ? 0 : 1) + (recordsStarted() ? 0 : 1);
   const top = S.top_reach || {}, topLeft = (top.leads || 0) - (top.reached || 0);
-  const passBtn = evOpen ? `<button class="${topLeft ? "btn small primary" : "linkbtn"}" id="passShow" aria-expanded="${!!ui.passOpen}" aria-controls="phonePass">${
+  const setupFirst = !!firstRunCard();
+  const passBtn = evOpen ? `<button class="${topLeft && !setupFirst ? "btn primary" : "linkbtn"}" id="passShow" aria-expanded="${!!ui.passOpen}" aria-controls="phonePass">${
       topLeft ? `Find phones for the top ${top.leads} (about 15 minutes)` : "Next landlords to find phones for"}</button>` : "";
-  const statusLine = `<p class="statusline" id="reachLine">${evOpen
-      ? `<span><strong>${evReach} of ${evOpen}</strong> open eviction lead${evOpen === 1 ? "" : "s"} can be reached now.</span>
-        ${evNone && ui.type !== "unreachable" ? `<button class="linkbtn" id="fUnreach">Show the ${evNone} that can't</button>` : ""}
-        <span class="sep" aria-hidden="true">·</span>${passBtn}`
+  const statusLine = `<div class="statusline" id="reachLine">${evOpen
+      ? `<span><strong>${evReach} of ${evOpen}</strong> open eviction lead${evOpen === 1 ? "" : "s"} can be reached now.</span>${passBtn}`
       : `<span>No open eviction leads yet.</span>`}
-    <span class="sep" aria-hidden="true">·</span><button class="linkbtn" id="setupShow" aria-expanded="${!!ui.showSetup}" aria-controls="setupGuide">Get phones and addresses</button>${todo ? ` <span class="chip warn">${todo} step${todo > 1 ? "s" : ""} to do</span>` : ""}
-    <span class="sep" aria-hidden="true">·</span><button class="linkbtn" id="helpToggle" aria-expanded="${!!ui.helpOpen}" aria-controls="leadHelp">How this works</button></p>`;
+    <button class="linkbtn" id="helpToggle" aria-expanded="${!!ui.helpOpen}" aria-controls="leadHelp">How this works</button></div>`;
   const queue = ui.type === "address_work";
   const nFilters = [ui.type, ui.status !== "open" ? ui.status : "", ui.channel, ui.sort !== "score" ? ui.sort : ""].filter(Boolean).length;
   const first = list.total ? list.offset + 1 : 0, last = list.offset + rows.length;
   $("#tab-leads").innerHTML = `
-    <div class="card mb12 toolbar">
-      <div class="row">
-        <label class="wide-pick">Show <select id="fView">${opts(Object.keys(VIEW_LABEL).map(v => [v, viewName(v)]), view)}</select></label>
-        <button class="btn m-only" id="toolsToggle" aria-expanded="${!!ui.toolsOpen}" aria-controls="leadTools">${ui.toolsOpen ? "Hide" : "Add cases, update cases, find phones"}</button>
-        <div id="leadTools" class="row tools ${ui.toolsOpen ? "open" : ""}">
-          <input type="text" id="cLinks" aria-label="Justice Court case links" placeholder="Paste court case links" title="Paste one or more Justice Court case links (jcDisplayCase) to add those cases">
-          <button class="btn primary" id="cAdd">Add cases</button>
-          <button class="btn" id="cUpdate" title="Re-read every open eviction case page for new documents (notice, judgment, writ) and court dates. Runs in the background.">Update court cases</button>
-          <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes (OpenStreetMap and company websites, and Google Places when a key is set)">Find landlord phones &amp; emails</button>
-          <a class="btn" href="/api/skiptrace.csv" download="phone-lookup-list.csv" title="Owners still missing a phone, in the layout phone-lookup (skip-tracing) services such as BatchSkipTracing take">Phone-lookup list</a>
-          <label class="btn" title="CSV with phone/email columns, from a phone-lookup service or your own list. Fills only empty fields; never changes a number you typed in.">Import phones / emails<input type="file" id="lImport" accept=".csv" hidden></label>
-        </div>
-      </div>
-    </div>
     <div class="filters ${ui.filtersOpen ? "open" : ""}">
+      <label class="wide-pick">Show <select id="fView">${opts(Object.keys(VIEW_LABEL).map(v => [v, viewName(v)]), view)}</select></label>
       <div class="searchrow"><input type="search" id="q" aria-label="Search leads" placeholder="Search address, owner, case…" title="Searches the address, owner, landlord, tenant, case number, parcel, notes, phone and email" value="${esc(ui.q)}">
       <button class="btn m-only" id="filtersToggle" aria-expanded="${!!ui.filtersOpen}">Filters${nFilters ? ` (${nFilters})` : ""}</button></div>
       <select id="fType" aria-label="Kind of lead">${opts([["", "Any kind of lead"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Owner lives elsewhere"], ["entity", "Company or trust owner"], ["has_phone", "Has a phone"], ["no_phone", "No phone yet"], ["no_address", "Address needed"], ["guessed_address", "Address to confirm"], ["address_work", "Address work queue (evictions)"], ["reachable", "Can be reached (phone, email or address)"], ["unreachable", "Can't be reached yet"]], ui.type)}</select>
       <select id="fStatus" aria-label="Status">${opts([["open", "Open (not won/lost)"], ["", "Any status"], ...S.statuses.map(s => [s, STATUS_LABEL[s] || title(s)])], ui.status)}</select>
       <select id="fChannel" aria-label="Outreach method">${opts([["", "Any outreach method"], ["none", "Not assigned"], ...Object.entries(S.channels)], ui.channel)}</select>
       <select id="fSort" aria-label="Sort">${opts([["score", "Highest priority first"], ["date", "Newest first (latest court or city event)"], ["miles", "Closest first"]], ui.sort)}</select>
+      <button class="btn" id="toolsToggle" aria-expanded="${!!ui.toolsOpen}" aria-controls="leadTools">${ui.toolsOpen ? "Hide tools" : "More tools"}</button>
     </div>
+    ${toolsMenu(todo)}
+    ${firstRunCard()}
     ${statusLine}
+    ${evOpen ? topYieldLine(top) : ""}
     ${ui.passOpen && S.phone_pass ? phonePassCard(S.phone_pass) : ""}
     ${ui.showSetup ? setupGuide(addrLine) : ""}
     ${ui.helpOpen ? leadHelp(view, c, ui.showSetup ? "" : addrLine) : ""}
     ${queue ? recordsCard(rec) + addressQueue(rows, emptyMsg) : `<div class="tablewrap sticky-head"><table class="cards" id="leadTable">
-      <thead><tr>${LEAD_COLUMNS.map((t, i) => `<th${i === 0 || i === 7 ? ' class="num"' : ""}>${t}</th>`).join("")}</tr></thead>
-      <tbody>${rows.map(leadRow).join("") || `<tr><td colspan="10" class="empty">${emptyMsg}</td></tr>`}
+      <thead><tr>${LEAD_COLUMNS.map((t, i) => `<th${i === 0 || i === 6 ? ' class="num"' : ""}>${t}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(leadRow).join("") || `<tr><td colspan="${LEAD_COLUMNS.length}" class="empty">${emptyMsg}</td></tr>`}
       </tbody></table></div>`}
     <div class="pager">
       <span class="muted" id="shown">${list.total ? `${first}–${last} of ${list.total} shown` : "0 shown"}</span>
@@ -275,13 +348,18 @@ function renderLeads() {
   if (clear) clear.onclick = async () => { Object.assign(ui, { q: "", type: "", status: "open", channel: "", offset: 0 }); syncUrl(); await reloadList(); $("#q").focus(); };
   const need = $("#fNeedAddr");
   if (need) need.onclick = async () => { Object.assign(ui, { type: "address_work", offset: 0 }); syncUrl(); await reloadList(); $("#fType").focus(); };
-  const unreach = $("#fUnreach");
-  if (unreach) unreach.onclick = async () => { Object.assign(ui, { type: "unreachable", offset: 0 }); syncUrl(); await reloadList(); $("#fType").focus(); };
-  $("#setupShow").onclick = () => { ui.showSetup = !ui.showSetup; renderLeads(); const g = ui.showSetup && $("#setupTitle"); if (g) g.focus(); else $("#setupShow").focus(); };
+  $("#tab-leads").querySelectorAll("[data-sameaddr]").forEach(b => b.onclick = async () => {
+    Object.assign(ui, { q: b.dataset.sameaddr, type: "", offset: 0 }); syncUrl(); await reloadList(); $("#q").focus();
+  });
+  const openSetup = from => { ui.showSetup = !ui.showSetup; renderLeads(); const g = ui.showSetup && $("#setupTitle"); if (g) g.focus(); else { const b = $(from); if (b) b.focus(); } };
+  $("#setupShow").onclick = () => openSetup("#setupShow");
+  const ys = $("#yieldSetup");
+  if (ys) ys.onclick = () => { ui.showSetup = false; openSetup("#yieldSetup"); };
   $("#helpToggle").onclick = () => { ui.helpOpen = !ui.helpOpen; renderLeads(); $("#helpToggle").focus(); };
   const hc = $("#helpClose");
   if (hc) hc.onclick = () => { ui.helpOpen = false; renderLeads(); $("#helpToggle").focus(); };
   if (ui.showSetup) bindSetupGuide();
+  bindFirstRun();
   const ps = $("#passShow");
   if (ps) ps.onclick = async () => {
     ui.passOpen = !ui.passOpen; ui.passOffset = 0;
@@ -299,6 +377,7 @@ function renderLeads() {
   $("#cLinks").onkeydown = e => { if (e.key === "Enter") addCases(e.target.value, $("#cAdd")); };
   $("#cUpdate").onclick = e => updateCases(e.currentTarget);
   $("#lFind").onclick = e => findContacts(e.currentTarget);
+  $("#importBtn").onclick = () => $("#importFile").click();
   $("#lImport").onchange = async e => { const f = e.target.files[0]; if (f) await importContacts(f); e.target.value = ""; };
   for (const [name, sel] of Object.entries({ cases: "#cUpdate", contacts: "#lFind" })) {
     const j = (S.jobs || {})[name], b = $(sel);
@@ -384,7 +463,9 @@ function addressRow(l) {
     <td class="num" data-th="Priority">${scoreChip(l)}</td>
     <td data-th="Case"><span>${esc(l.source_id)}${noticeChip(l)}<span class="small-line block">tenant ${esc(title(tenant) || "–")}</span></span></td>
     <td data-th="Landlord"><span>${esc(title(landlord) || "–")}</span></td>
-    <td data-th="Address now"><span>${guess ? `${esc(title(fullAddress(l)))} <span class="chip warn" title="The landlord owns one property in the county, so the eviction is probably there">landlord's only ${isMultifamily(l) ? "complex" : "property"}</span>
+    <td data-th="Address now"><span>${l.door_hanger_problem === "needs_unit" ? `${esc(title(fullAddress(l)))}${addressNote(l)}
+      <span class="small-line block">Click the case to type the unit.</span>`
+      : guess ? `${esc(title(fullAddress(l)))} <span class="chip warn" title="The landlord owns one property in the county, so the eviction is probably there">landlord's only property</span>
       <button class="btn small" data-aconfirm="${l.id}">Confirm</button>` : '<span class="muted">none yet</span>'}</span></td>
     <td data-th="Find it"><span>${landlord ? `<button class="btn small" data-aprops="${l.id}" aria-expanded="false">Landlord's properties</button>` : ""}
       ${tenant ? `<a href="https://www.google.com/search?q=${encodeURIComponent(tenant + " Tucson AZ")}" target="_blank" rel="noopener">search tenant</a>` : ""}</span></td></tr>
@@ -478,7 +559,7 @@ function setupGuide(addrLine) {
   const lookN = c.lookup_leads || 0, firms = c.lookup_companies || 0, recN = c.records_leads || 0;
   const perDay = st.google_daily_limit, days = perDay ? Math.ceil(firms / perDay) : 0;
   const keyYield = evOpen ? `<p class="hint yield" id="yieldGoogle"><b>What it reaches:</b> up to ${lookN} of ${evOpen} open eviction lead${evOpen === 1 ? "" : "s"},
-    the ones whose landlord is a company (${firms} compan${firms === 1 ? "y" : "ies"} not looked up yet). Google lists businesses, not private landlords, and won't have a number for every company.
+    the ones whose landlord is a company (${firms} compan${firms === 1 ? "y" : "ies"} with no number yet, including those the free lookup didn't find). Google lists businesses, not private landlords, and won't have a number for every company.
     ${firms && perDay ? `At ${perDay} lookups a day that takes about ${days} day${days === 1 ? "" : "s"}.` : ""}</p>` : "";
   const recYield = evOpen ? `<p class="hint yield" id="yieldRecords"><b>What it reaches:</b> up to ${recN} of ${evOpen} open eviction lead${evOpen === 1 ? "" : "s"},
     the ones with no address a door hanger can go to. The file lists the property for every case filed in the dates you ask for (a unit number too, where the court has one); the court takes days to answer. An address gives a door hanger, not a phone number.</p>` : "";

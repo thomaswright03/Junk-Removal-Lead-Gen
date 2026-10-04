@@ -162,7 +162,7 @@ function renderOutreach() {
   $("#tab-outreach").innerHTML = `
     <div class="card">
       <h2>Split leads between outreach methods</h2>
-      <p class="hint">Assign leads deals the best of your ${unassignedCount} unassigned leads evenly across the ticked methods, so Results can say which one wins jobs.</p>
+      <p class="hint">Assign leads hands out your best leads that have no outreach method yet (${unassignedCount} now), the same number to each method you tick, so the Results tab can show which method wins more jobs.</p>
       <details class="hint"><summary>How the split works</summary><ul>
         <li>A round is evictions only or City code cases only, unless you pick both: the methods reach different people on each, so Results compares them one kind at a time.</li>
         <li>Only leads every ticked method can work are used: door hangers need a property address (and a unit number at an apartment complex).</li>

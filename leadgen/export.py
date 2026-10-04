@@ -117,7 +117,7 @@ input{flex:1;min-width:180px}
 table{border-collapse:collapse;width:100%}
 th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
 th{position:sticky;top:0;background:var(--bg);font-weight:600}
-.chip{display:inline-block;padding:1px 8px;border-radius:10px;background:var(--chip);font-size:13px}
+.chip{display:inline-block;padding:1px 8px;border-radius:10px;background:var(--chip);font-size:14px}
 a{color:var(--accent)}.muted{color:var(--muted)}
 </style></head><body>
 <header><h1>Pima County clean-out leads</h1>

@@ -278,7 +278,16 @@ class App(JobRunner, LeadEdits):
                 values.pop("google_places_api_key", None)  # blank field keeps the saved key
             if body.get("clear_google_key"):
                 values["google_places_api_key"] = ""
-            if values.get("base_address") and values["base_address"] != current["base_address"]:
+            new_key = bool(values.get("google_places_api_key")) and values["google_places_api_key"] != current.get(
+                "google_places_api_key"
+            )
+            turned_on = values.get("google_enabled") is True and current.get("google_enabled") is False
+            if new_key or turned_on:
+                # Leads the free lookup found nothing for get a Google lookup too
+                # (best first, within the daily and monthly limits).
+                leadlist.recheck_without_contact(conn)
+            if "base_address" in values and values["base_address"] != current["base_address"]:
+                # Miles are worked out again from the new address (none while it's blank).
                 values["base_lat"] = values["base_lon"] = None
             db.put_settings(conn, values)
             conn.commit()
@@ -297,12 +306,13 @@ class App(JobRunner, LeadEdits):
     def _ensure_base(self) -> None:
         with self.conn() as conn:
             s = self.settings(conn)
-            if s.get("base_lat") is not None or is_paused(s):
+            if s.get("base_lat") is not None or is_paused(s) or not (s.get("base_address") or "").strip():
                 return
             try:
                 r = (self.geocoder or CensusGeocoder()).geocode(s["base_address"])
-            except Exception as e:  # map service down: tried again on the next save or start
-                log.warning("base address lookup failed: %s", type(e).__name__)
+            except Exception:  # map service down: tried again on the next save or start
+                log.warning("the map service couldn't be reached for the base address; tried again on the next save")
+                log.debug("base address lookup failed", exc_info=True)
                 return
             if r:
                 db.put_settings(conn, {"base_lat": r.lat, "base_lon": r.lon})

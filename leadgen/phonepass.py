@@ -102,16 +102,29 @@ def landlords(conn: Conn, settings: dict, offset: int = 0, size: int = PASS_SIZE
 
 
 def top_reach(conn: Conn, settings: dict, size: int = PASS_SIZE) -> dict:
-    """Of the best ``size`` open eviction leads (list order), how many there
-    are (``leads``) and how many can be reached now (``reached``). The rank
-    must be up to date."""
+    """Of the best ``size`` open eviction leads (list order): how many there
+    are (``leads``), how many can be reached now (``reached``), how many
+    have a company landlord the free lookup can search for (``lookable``;
+    it never looks up a private landlord), how many it has looked up
+    (``looked_up``) and found a phone or email for by itself (``found``).
+    The rank must be up to date."""
+    manual = ", ".join(repr(s) for s in MANUAL_SOURCES)
+    auto_found = (
+        f"COALESCE(contact_source, '') NOT IN ({manual}, '') "
+        f"AND {leadlist.HAS_CONTACT} AND contact_checked_at IS NOT NULL"
+    )
     r = conn.execute(
-        f"SELECT COUNT(*) AS n, SUM(CASE WHEN {leadlist.REACHABLE} THEN 1 ELSE 0 END) AS reached FROM "
+        f"SELECT COUNT(*) AS n, SUM(CASE WHEN {leadlist.REACHABLE} THEN 1 ELSE 0 END) AS reached, "
+        "SUM(CASE WHEN lookup_name IS NOT NULL THEN 1 ELSE 0 END) AS lookable, "
+        "SUM(CASE WHEN contact_checked_at IS NOT NULL THEN 1 ELSE 0 END) AS looked_up, "
+        f"SUM(CASE WHEN {auto_found} THEN 1 ELSE 0 END) AS found FROM "
         f"(SELECT * FROM leads WHERE {_open_evictions(settings)} "
         "ORDER BY stage_rank DESC, rank_score DESC, rank_latest DESC, id DESC LIMIT ?) best",
         (size,),
     ).fetchone()
-    return {"leads": int(r["n"] or 0), "reached": int(r["reached"] or 0)}
+    return {
+        k: int(r[c] or 0) for k, c in (("leads", "n"), *((x, x) for x in ("reached", "lookable", "looked_up", "found")))
+    }
 
 
 def set_skipped(conn: Conn, key: Any, skip: bool) -> dict:

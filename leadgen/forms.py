@@ -3,13 +3,14 @@ ids, counts and notes. Each check raises ValueError with a plain sentence
 the page shows as it is."""
 
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Iterator, Optional
 
 from . import outreach
 from .leadlist import LEAD_VIEWS
 from .normalize import extract_zip, normalize_address
-from .util import az_today
+from .util import ARIZONA, az_today
 
 EDITABLE = {
     "status",
@@ -71,9 +72,31 @@ def _limit(value: Any, label: str) -> Optional[int]:
     return int(n)
 
 
+# Every setting the page (or another caller) may send to /api/settings.
+SETTINGS_KEYS = {
+    *_TEXT_SETTINGS,
+    "lead_view",
+    "google_monthly_limit",
+    "google_daily_limit",
+    "paused",
+    "google_enabled",
+    "setup_guide_hidden",
+    "records_requested",
+    "costs",
+    "tracking_numbers",
+    "templates",
+    "clear_google_key",
+}
+
+
 def validate_settings(body: dict) -> dict:
-    """The settings in ``body`` that Lead Desk knows, checked. Raises
-    ValueError naming the field when one has the wrong shape."""
+    """The settings in ``body``, checked. Raises ValueError naming the field
+    when one has the wrong shape, or naming any key Lead Desk doesn't have
+    (a misspelt name would otherwise look saved and change nothing)."""
+    unknown = sorted(str(k) for k in body if k not in SETTINGS_KEYS)
+    if unknown:
+        names = ", ".join(f"“{k[:40]}”" for k in unknown[:5])
+        raise FieldError(f"Lead Desk has no setting called {names}. Nothing was saved.", unknown[0][:40])
     values: dict[str, Any] = {}
     for key, label in _TEXT_SETTINGS.items():
         if key in body:
@@ -194,7 +217,52 @@ def money_value(value: Any, label: str, most: int = MAX_JOB_CENTS) -> Optional[i
         raise ValueError(f"{label} can't be negative.")
     if amount * 100 > most:
         raise ValueError(f"{label} can be at most ${most // 100:,}. Check for an extra zero.")
-    return int(round(amount * 100))
+    # Exact decimal arithmetic on the amount as written: whole cents only,
+    # never a float rounded one way or the other (12.345 is refused).
+    exact = (
+        Decimal(str(value).strip().replace("$", "").replace(",", "")) if isinstance(value, str) else Decimal(str(value))
+    )
+    cents = exact * 100
+    if cents != cents.to_integral_value():
+        raise ValueError(f"{label} can have at most 2 decimal places (whole cents), like 12.35.")
+    return int(cents)
+
+
+def responded_value(value: Any) -> Optional[str]:
+    """When the owner first responded: a date or date-time (ISO, as the page
+    and the API send it) no later than now, or None to clear it. Stored as
+    UTC ISO text like every other time. The earliest it can be is checked
+    against the lead (``check_responded_after_filing``)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    bad = "Responded at must be a date and time, like 2026-10-04T15:30."
+    if not isinstance(value, str) or len(value) > 40:
+        raise ValueError(bad)
+    text = value.strip()
+    try:
+        when = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        raise ValueError(bad) from None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=ARIZONA)  # a time typed on the page is Tucson time
+    when = when.astimezone(timezone.utc)
+    if when > datetime.now(timezone.utc) + timedelta(minutes=5):
+        raise ValueError("Responded at can't be in the future.")
+    if when.year < 2000:
+        raise ValueError(bad)
+    return when.isoformat()
+
+
+def check_responded_after_filing(responded_at: str, row: Any) -> None:
+    """A response can't come before the lead existed: before its court filing
+    or City case opened (or, for a case seen first on the calendar, before
+    Lead Desk first saw it)."""
+    starts = [str(v)[:10] for v in (row["event_date"], row["first_seen"]) if v and str(v)[:4].isdigit()]
+    earliest = min(starts) if starts else None
+    if earliest and responded_at[:10] < earliest:
+        raise FieldError(
+            f"Responded at can't be before the lead was filed ({earliest}). Check the date.", "responded_at"
+        )
 
 
 def _seconds_between(a: Any, b: Any) -> float:

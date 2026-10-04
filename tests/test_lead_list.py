@@ -294,13 +294,13 @@ def test_assign_refuses_unknown_methods_and_asks_before_a_one_method_round(desk)
 
 def test_a_blank_business_name_is_refused_and_the_old_one_kept(desk):
     app, _ = desk
+    status, _, _ = post(app, "/api/settings", {"business_name": "Desert Haul"})
+    assert status == 200 and app.state()["settings"]["business_name"] == "Desert Haul"
     for blank in ("", "   ", None):
         status, body, _ = post(app, "/api/settings", {"business_name": blank, "business_phone": "(520) 555-0199"})
         assert status == 400 and "business name" in body["error"]
     settings = app.state()["settings"]
-    assert settings["business_name"] == "Steve's Junk Removal" and settings["business_phone"] == ""
-    status, _, _ = post(app, "/api/settings", {"business_name": "Desert Haul"})
-    assert status == 200 and app.state()["settings"]["business_name"] == "Desert Haul"
+    assert settings["business_name"] == "Desert Haul" and settings["business_phone"] == ""
 
 
 def test_notes_over_the_limit_are_refused_with_the_limit(desk):
@@ -382,11 +382,17 @@ def test_apartment_lead_needs_a_unit_or_confirmation_for_a_door_hanger(tmp_path)
     conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")  # the landlord's office
     conn.commit()
     lead = app.state()["leads"][0]
-    # A guess from the landlord's parcels: never a door hanger until confirmed.
+    # A guess from the landlord's parcels, and a whole complex: the unit is what's missing.
     assert lead["address_source"] == "landlord"
-    assert lead["door_hanger_problem"] == "unconfirmed" and "door_hanger" not in lead["eligible"]
+    assert lead["door_hanger_problem"] == "needs_unit" and "door_hanger" not in lead["eligible"]
     out = app.assign({"count": 10, "channels": ["door_hanger", "phone"]})
-    assert out["left_out"]["needs_confirm"] == 1 and sum(out["assigned"].values()) == 0
+    assert out["left_out"]["needs_unit"] == 1 and sum(out["assigned"].values()) == 0
+    # Confirming the complex says where the tenant lived, not which door: still no door hanger.
+    answer = app.update_lead({"id": lead["id"], "fields": {"confirm_address": True}})
+    assert "unit number" in answer["message"]
+    lead = app.state()["leads"][0]
+    assert lead["address_source"] == "confirmed" and lead["door_hanger_problem"] == "needs_unit"
+    assert lead["reach"] == "contact" and "door_hanger" not in lead["eligible"]
 
     # Confirmed, but a complex with no unit: still no single door.
     conn.execute("UPDATE leads SET address_source = NULL")  # as if the court had listed it
@@ -406,16 +412,36 @@ def test_apartment_lead_needs_a_unit_or_confirmation_for_a_door_hanger(tmp_path)
     assert sum(out["assigned"].values()) == 1
 
 
-def test_confirming_an_address_allows_door_hangers(tmp_path):
+def test_confirming_a_single_home_allows_door_hangers(tmp_path):
     path = tmp_path / "l.db"
     conn = db.connect(path)
     eviction(conn, "CV26-000001-EA", "2026-09-30")
-    enrich_landlords(conn, Assessor([parcel("111", "100 W EXAMPLE APTS", "APARTMENTS 25+ UNITS")]))
+    enrich_landlords(conn, Assessor([parcel("111", "100 W EXAMPLE ST", "RESIDENTIAL SINGLE FAMILY")]))
+    app = App(path)
+    lead = app.state()["leads"][0]
+    assert lead["door_hanger_problem"] == "unconfirmed" and lead["reach"] == "none"
+    assert app.state()["counts"]["evictions_with_address"] == 0
+    answer = app.update_lead({"id": lead["id"], "fields": {"confirm_address": True}})
+    assert "message" not in answer
+    lead = app.state()["leads"][0]
+    assert lead["address_source"] == "confirmed" and "door_hanger" in lead["eligible"]
+    assert app.state()["counts"]["evictions_with_address"] == 1
+
+
+def test_a_complex_with_no_unit_is_not_a_usable_address(tmp_path):
+    """Confirmed or not, a whole complex isn't counted as an address a door
+    hanger can go to, nor as reachable; the address queue keeps it."""
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    eviction(conn, "CV26-000001-EA", "2026-09-30")
+    enrich_landlords(conn, Assessor([parcel("111", "1655 W EXAMPLE WY", "MOBILE HOME PARK")]))
     app = App(path)
     lead_id = app.state()["leads"][0]["id"]
     app.update_lead({"id": lead_id, "fields": {"confirm_address": True}})
-    lead = app.state()["leads"][0]
-    assert lead["address_source"] == "confirmed" and "door_hanger" in lead["eligible"]
+    state = app.state({"list": "leads", "type": "address_work"})
+    assert state["counts"]["evictions_with_address"] == 0 and state["counts"]["evictions_reachable"] == 0
+    assert [l["id"] for l in state["list"]["leads"]] == [lead_id]
+    assert state["list"]["leads"][0]["door_hanger_problem"] == "needs_unit"
 
 
 def test_pause_stops_update_court_cases_within_one_case(tmp_path):

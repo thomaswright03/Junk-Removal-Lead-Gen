@@ -185,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         url = urlparse(self.path)
-        body = self._body() if method == "POST" else b""
+        body = self._body() if method in ("POST", "PUT", "PATCH", "DELETE") else b""
         self._send(*handle(self.app, method, url.path, url.query, self.headers, body))
 
     def do_GET(self) -> None:
@@ -193,3 +193,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._handle("POST")
+
+    # Any other method gets the same JSON 405 as online (``handle``), not the
+    # standard library's HTML "501 Unsupported method" page.
+    def do_PUT(self) -> None:
+        self._handle("PUT")
+
+    def do_PATCH(self) -> None:
+        self._handle("PATCH")
+
+    def do_DELETE(self) -> None:
+        self._handle("DELETE")
+
+    def do_OPTIONS(self) -> None:
+        self._handle("OPTIONS")
+
+    def do_HEAD(self) -> None:
+        # Refused like the rest, with the headers only (a HEAD answer has no body).
+        url = urlparse(self.path)
+        code, body, ctype = handle(self.app, "HEAD", url.path, url.query, self.headers, b"")
+        data = encode_body(body)
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()

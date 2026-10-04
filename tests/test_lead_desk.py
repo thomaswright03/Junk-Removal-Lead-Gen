@@ -283,6 +283,7 @@ def test_paused_commands_make_no_requests(tmp_path, monkeypatch, capsys, argv):
 
     monkeypatch.setattr("requests.Session.request", no_request)
     monkeypatch.setitem(sources.SOURCES, "tucson_code_cases", lambda: Refuse())
+    db.connect(tmp_path / "l.db")  # commands on existing leads need the database to be there
     with pytest.raises(SystemExit) as e:
         cli.main(["--db", str(tmp_path / "l.db"), *argv])
     assert "Lead Desk is paused" in str(e.value.code)

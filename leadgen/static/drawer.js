@@ -73,7 +73,7 @@ $("#drawer").addEventListener("keydown", e => {
 // What the source said about the lead, as readable lines, leaving out what
 // the drawer already shows (case status, notice, stage, the hearing).
 // Why the door hanger option is off for a lead (see outreach.door_hanger_problem).
-const DOOR_HANGER_WHY = { no_address: " (needs an address)", unconfirmed: " (the address is a guess: confirm it first)", needs_unit: " (needs a unit number or a confirmed address)" };
+const DOOR_HANGER_WHY = { no_address: " (needs an address)", unconfirmed: " (the address is a guess: confirm it first)", needs_unit: " (needs the unit number)" };
 function detailLines(l) {
   const parts = String(l.description || "").split(" | ").map(p => p.trim()).filter(Boolean);
   if (l.lead_type === "code_violation") {
@@ -93,7 +93,7 @@ function addressGuide(l) {
     l.plaintiff || l.owner_name ? "Check the landlord's other properties (button below) and pick the likely one." : "",
     tenant ? `Look up the tenant: <a href="https://www.google.com/search?q=${encodeURIComponent(tenant + " Tucson AZ")}" target="_blank" rel="noopener">search “${esc(title(tenant))}”</a>.` : "",
     "Ask the landlord when you call.",
-    "A Justice Court records request lists property addresses: import its CSV with “Import court page / CSV” and matching cases fill in.",
+    "A Justice Court records request lists property addresses: import its CSV under More tools (Import a court file) and matching cases fill in.",
   ].filter(Boolean);
   return `<p class="hint"><strong>Find the address:</strong></p><ol class="hint guide">${steps.map(t => `<li>${t}</li>`).join("")}</ol>`;
 }
@@ -118,9 +118,9 @@ const drawerError = e => showFieldErrors(e, DRAWER_FIELDS);
 const clearDrawerErrors = () => Object.keys(DRAWER_CHECKS).forEach(id => delete fieldErrors[id]);
 const REACH_TEXT = {
   both: "Phone or email, and a door hanger at the property.",
-  contact: "Phone or email. No confirmed property address yet, so no door hanger.",
+  contact: "Phone or email. No usable property address yet (a confirmed home, or a unit at a complex), so no door hanger.",
   address: "A door hanger or visit at the property. No phone or email yet.",
-  none: "Nothing yet: no phone, email or confirmed address. Search for the landlord's number (Find phone, below) and paste it under Contact, or find the address below.",
+  none: "Nothing yet: no phone, email or usable address (a whole complex needs the unit). Search for the landlord's number (Find phone, below) and paste it under Contact, or find the address below.",
 };
 function renderDrawer() {
   const d = $("#drawer");
@@ -138,7 +138,7 @@ function renderDrawer() {
     <button class="btn small close" id="dClose">Close</button>
     <h2 tabindex="-1" id="dTitle">${l.address ? esc(title(fullAddress(l))) : esc(title(l.plaintiff || l.source_id))}</h2>
     <div class="row">${scoreChip(l)} ${statusChip(l.status)} ${chDot(ch)}${dirty ? ' <span class="chip warn">unsaved changes</span>' : ""}</div>
-    <p class="small-line" id="dWhy">Priority ${l.score}: ${esc(scoreParts(l) || "no points yet")}</p>
+    <p class="small-line" id="dWhy">Why it's priority ${l.score}: ${esc(priorityWhy(l))}</p>
     <dl>
       <dt>What</dt><dd>${esc(whatLabel(l))}${noticeChip(l)}</dd>
       ${l.case_status ? `<dt>Case status</dt><dd>${esc(l.case_status)}</dd>` : ""}
@@ -162,13 +162,14 @@ function renderDrawer() {
     <div class="card mt16">
       <h2>Property address</h2>
       ${l.address ? `<p>${esc(title(fullAddress(l)))}${addressNote(l)}</p>` : ""}
-      ${l.address && (l.address_source === "landlord" || l.door_hanger_problem === "needs_unit") ? `<div class="row mb12"><button class="btn small" id="dConfirm">Confirm address</button>
-        <span class="hint m0">${l.address_source === "landlord" ? "Checked that the eviction is at this property?" : "No unit number, but a door hanger at this address is fine (for example at the leasing office or the park office)?"}</span></div>` : ""}
+      ${l.door_hanger_problem === "needs_unit" ? `<p class="notice hint" id="dUnitNeeded"><strong>Unit or space number needed.</strong> This is the whole ${isMultifamily(l) ? "complex" : "property"}, not the tenant's door, so no door hanger can go yet${(l.address_lead_count || 0) > 1 ? `, and ${l.address_lead_count - 1} other open case${l.address_lead_count > 2 ? "s are" : " is"} here too` : ""}. Ask the landlord for the unit when you call (about every case here at once), or find it in the court's records request, then type it in the Unit box below.</p>` : ""}
+      ${l.address && l.address_source === "landlord" ? `<div class="row mb12"><button class="btn small" id="dConfirm">${l.door_hanger_problem === "needs_unit" ? "Confirm the complex" : "Confirm address"}</button>
+        <span class="hint m0">Checked that the eviction is at this ${l.door_hanger_problem === "needs_unit" ? "complex? The unit is still needed for a door hanger." : "property?"}</span></div>` : ""}
       ${l.lead_type === "eviction" && (!l.address || l.address_source === "landlord") ? addressGuide(l) : ""}
       <p class="hint">${l.address ? "Correct it here if it's wrong." : "Court case pages don't list the property."} Saving finds it on the map, looks up the parcel and owner, fills in the miles, and makes the lead eligible for door hangers.</p>
       <div class="row">
         <input id="dAddress" data-draft="address" placeholder="Street address, e.g. 123 W Main St" value="${esc(draftOf(l, "address"))}" class="grow" aria-label="Property street address">
-        <input id="dUnit" data-draft="unit" placeholder="Unit" value="${esc(draftOf(l, "unit"))}" class="w-80" aria-label="Unit">
+        <input id="dUnit" data-draft="unit" placeholder="${l.door_hanger_problem === "needs_unit" ? "Unit needed" : "Unit"}" value="${esc(draftOf(l, "unit"))}" class="w-110" aria-label="Unit or space number${l.door_hanger_problem === "needs_unit" ? " (needed for a door hanger)" : ""}">
         <button class="btn small" id="dSaveAddress">Save address</button>
         ${fieldError("dAddress")}${fieldError("dUnit")}
       </div>
@@ -232,7 +233,7 @@ function renderDrawer() {
   });
   const conf = $("#dConfirm");
   if (conf) conf.onclick = e => act(() => api("/api/lead", { id: l.id, fields: { confirm_address: true } }),
-    "Address confirmed. Door hangers can go to this lead.", e.currentTarget);
+    r => r.message || "Address confirmed. Door hangers can go to this lead.", e.currentTarget);
   $("#dClose").onclick = closeDrawer;
   bindGotoSettings($("#drawer"));
   $("#dSaveContact").onclick = async e => {

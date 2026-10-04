@@ -47,10 +47,8 @@
     <button data-tab="settings">Settings</button>
   </nav>
   <div class="spacer"></div>
-  <label class="btn" title="Saved Justice Court case page or calendar page (.html), or a CSV of leads">
-    Import court page / CSV
-    <input type="file" id="importFile" accept=".html,.htm,.csv" hidden>
-  </label>
+  <!-- Opened from More tools on the Leads tab (Import a court file or saved page). -->
+  <input type="file" id="importFile" accept=".html,.htm,.csv" hidden aria-label="Court file or saved court page">
   <button class="btn primary" id="refreshBtn" title="Search the court calendar for new evictions, read the case pages, look up landlords and their phones, and pull new Tucson code cases. Runs by itself every morning.">Check for new evictions</button>
 </header>
 <div class="banner" id="pausedBanner" hidden></div>
