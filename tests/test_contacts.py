@@ -1,18 +1,11 @@
 import pytest
 
 from leadgen import db
+from leadgen.business import Contact, lookup_targets, names_match, split_owner
 from leadgen.contacts import clean_email, clean_phone, import_contacts, skiptrace_csv
-from leadgen.lookup import (
-    Contact,
-    ProviderUnavailable,
-    find_contacts,
-    lookup_targets,
-    names_match,
-    pick_osm,
-    scan_html,
-    split_owner,
-)
+from leadgen.lookup import find_contacts
 from leadgen.models import Lead
+from leadgen.providers import ProviderUnavailable, pick_osm, scan_html
 from leadgen.web import App
 
 
@@ -223,7 +216,7 @@ def test_osm_stops_after_servers_keep_timing_out():
     import pytest
     import requests
 
-    from leadgen.lookup import OsmProvider, ProviderUnavailable
+    from leadgen.providers import OsmProvider, ProviderUnavailable
 
     class DeadSession:
         headers = {}
@@ -246,7 +239,7 @@ def test_osm_stops_after_servers_keep_timing_out():
 
 
 def test_osm_prefers_the_server_that_answered():
-    from leadgen.lookup import OsmProvider
+    from leadgen.providers import OsmProvider
 
     class Resp:
         def raise_for_status(self):
@@ -291,7 +284,7 @@ def test_google_stops_at_monthly_limit(tmp_path):
 
     import pytest
 
-    from leadgen.lookup import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
+    from leadgen.providers import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
 
     conn = db.connect(str(tmp_path / "g.db"))
     session = FakePlaces()
@@ -312,7 +305,7 @@ def test_google_stops_at_daily_limit(tmp_path):
 
     import pytest
 
-    from leadgen.lookup import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
+    from leadgen.providers import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
 
     conn = db.connect(str(tmp_path / "g.db"))
     session = FakePlaces()
@@ -382,7 +375,7 @@ def test_google_only_for_newest_eviction_notices():
 
 
 def test_lead_over_google_limit_is_retried_tomorrow():
-    from leadgen.lookup import ProviderUnavailable
+    from leadgen.providers import ProviderUnavailable
 
     conn = make_db()
     db.upsert(
@@ -472,7 +465,7 @@ def test_contacts_csv_saved_by_excel(tmp_path):
 def test_google_daily_limit_of_zero_makes_no_search(tmp_path):
     import pytest
 
-    from leadgen.lookup import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
+    from leadgen.providers import GoogleBudget, GooglePlacesProvider, ProviderUnavailable
 
     conn = db.connect(str(tmp_path / "g.db"))
     session = FakePlaces()
@@ -489,7 +482,7 @@ def test_google_daily_limit_of_zero_makes_no_search(tmp_path):
 def test_parallel_lookups_never_overspend(tmp_path):
     import threading
 
-    from leadgen.lookup import GoogleBudget
+    from leadgen.providers import GoogleBudget
 
     path = str(tmp_path / "g.db")
     db.connect(path).close()
@@ -521,7 +514,7 @@ def test_turning_google_off_overrides_the_environment_key(tmp_path, monkeypatch)
 def test_a_provider_that_is_down_is_reported_once_per_run():
     import requests
 
-    from leadgen.lookup import OsmProvider
+    from leadgen.providers import OsmProvider
 
     class DeadSession:
         headers = {}
@@ -561,7 +554,7 @@ def test_osm_finds_a_landlord_by_name_when_the_property_isnt_mapped():
     for a business of the landlord's name around Tucson (made-up places)."""
     import requests
 
-    from leadgen.lookup import OsmProvider
+    from leadgen.providers import OsmProvider
 
     class Resp:
         def __init__(self, places):

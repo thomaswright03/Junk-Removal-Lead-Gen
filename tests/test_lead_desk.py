@@ -364,7 +364,7 @@ def test_update_court_cases_runs_in_the_background_with_progress(tmp_path):
 
 
 def test_find_phones_runs_in_the_background(tmp_path):
-    from leadgen.lookup import Contact
+    from leadgen.business import Contact
 
     class Phones:
         name = "fake"
@@ -485,6 +485,30 @@ def test_double_click_logs_one_contact_and_a_contact_can_be_removed(desk):
     assert res["cost"] == 0 and res["touched"] == 0
     status, body, _ = post(app, "/api/touch/delete", {"id": touch_id})
     assert status == 404
+
+
+def test_identical_contacts_logged_at_the_same_moment_store_one(desk):
+    """Five identical "log contact" requests at once (a double tap on a slow
+    connection, two tabs): one contact is stored, on SQLite and Postgres."""
+    app, lead_id, conn = desk
+    payload = {"lead_ids": [lead_id], "channel": "phone", "kind": "no_answer"}
+    start = threading.Barrier(5)
+    answers = []
+
+    def send():
+        start.wait()
+        answers.append(post(app, "/api/touch", payload))
+
+    threads = [threading.Thread(target=send) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert [a[0] for a in answers] == [200] * 5, answers
+    assert sum(a[1]["logged"] for a in answers) == 1
+    assert sum(a[1]["duplicates"] for a in answers) == 4
+    n = conn.execute("SELECT COUNT(*) AS n FROM touches WHERE lead_id = ?", (lead_id,)).fetchone()["n"]
+    assert n == 1
 
 
 # ---- #4 property address entered by hand ----------------------------------------

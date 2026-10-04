@@ -10,8 +10,8 @@ function leadRow(l) {
   return `<tr class="click" data-id="${l.id}" data-label="${esc(title(fullAddress(l) || l.plaintiff || l.source_id))}">
     <td class="num" data-th="${th[0]}">${scoreChip(l)}</td>
     <td class="datecell" data-th="${th[1]}"><span>${dateCell(l)}</span></td>
-    <td data-th="${th[2]}"><span>${esc(whatLabel(l))}${noticeChip(l)}${l.next_court_date ? `<span class="small-line" style="display:block">court ${esc(courtDate(l.next_court_date))}</span>` : ""}</span></td>
-    <td data-th="${th[3]}"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}${l.property_use ? `<span class="small-line" style="display:block">${esc(title(l.property_use))}</span>` : ""}</span></td>
+    <td data-th="${th[2]}"><span>${esc(whatLabel(l))}${noticeChip(l)}${l.next_court_date ? `<span class="small-line block">court ${esc(courtDate(l.next_court_date))}</span>` : ""}</span></td>
+    <td data-th="${th[3]}"><span>${l.address ? esc(title(fullAddress(l))) + addressNote(l) : '<span class="muted">address needed</span>'}${l.property_use ? `<span class="small-line block">${esc(title(l.property_use))}</span>` : ""}</span></td>
     <td data-th="${th[4]}"><span>${ownerLine(l)}</span></td>
     <td data-th="${th[5]}" class="phonecell">${phoneCell(l)}${canFindPhone(l) ? ` <button class="btn small" data-findphone="${l.id}" aria-expanded="${ui.findOpen === l.id}" aria-controls="find-${l.id}">Find phone</button>` : ""}${reachChip(l)}</td>
     <td data-th="${th[6]}" class="${l.owner_email ? "" : "m-hide"}">${emailCell(l)}</td>
@@ -23,26 +23,114 @@ function leadRow(l) {
 // Find phone, on the lead's own row: searches for the landlord in a new tab
 // and a box to paste the number into, so a number goes in without leaving
 // the list (no Google key needed).
-function findPanel(l) {
-  const who = landlordOf(l), name = esc(title(who));
+// The searches that find a landlord's number by hand (no Google key needed).
+function searchLinks(who, website) {
   const web = "https://www.google.com/search?q=" + encodeURIComponent(`"${who.replace(/[",]/g, " ").replace(/\s+/g, " ").trim()}" Tucson AZ phone`);
   const maps = "https://www.google.com/maps/search/" + encodeURIComponent(who + " Tucson AZ");
+  return `<a class="btn small" href="${web}" target="_blank" rel="noopener">Search the web</a>
+      <a class="btn small" href="${maps}" target="_blank" rel="noopener">Search Google Maps</a>
+      <a class="btn small" href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener" data-copyname="${esc(who)}" title="Arizona Corporation Commission company search. The name is copied: paste it into its search box.">AZ Corporation Commission (copies the name)</a>
+      ${website ? `<a class="btn small" href="${esc(/^https?:/i.test(website) ? website : "https://" + website)}" target="_blank" rel="noopener">Company website</a>` : ""}`;
+}
+function findPanel(l) {
+  const who = landlordOf(l), name = esc(title(who));
   const others = l.owner_lead_count > 1 ? ` (${l.owner_lead_count - 1} more)` : "";
   return `<div class="findphone" role="group" aria-label="Find a phone number for ${name}">
     <p class="hint"><strong>Find a number for ${name}.</strong> Open a search, copy the office or leasing number, paste it here.
       Companies are often listed under a property or management name: the Corporation Commission lists the company's agent and managers to search for too.</p>
     <div class="row">
-      <a class="btn small" href="${web}" target="_blank" rel="noopener">Search the web</a>
-      <a class="btn small" href="${maps}" target="_blank" rel="noopener">Search Google Maps</a>
-      <a class="btn small" href="https://ecorp.azcc.gov/EntitySearch/Index" target="_blank" rel="noopener" data-copyname="${esc(who)}" title="Arizona Corporation Commission company search. The name is copied: paste it into its search box.">AZ Corporation Commission (copies the name)</a>
-      ${l.owner_website ? `<a class="btn small" href="${esc(/^https?:/i.test(l.owner_website) ? l.owner_website : "https://" + l.owner_website)}" target="_blank" rel="noopener">Company website</a>` : ""}
+      ${searchLinks(who, l.owner_website)}
     </div>
     <div class="row mt8">
-      <input id="fp-${l.id}" inputmode="tel" autocomplete="off" placeholder="Paste the number, e.g. (520) 555-0100" aria-label="Phone number for ${name}" style="width:240px">
+      <input id="fp-${l.id}" inputmode="tel" autocomplete="off" placeholder="Paste the number, e.g. (520) 555-0100" aria-label="Phone number for ${name}" class="w-240">
       <label class="ch"><input type="checkbox" id="fpAll-${l.id}" checked> Also on this landlord's other leads with no number${others}</label>
       <button class="btn small primary" data-savephone="${l.id}">Save number</button>
       ${fieldError("fp-" + l.id)}
     </div></div>`;
+}
+// ---------- first phones: the landlords of the best leads, ten at a time ----
+// The court gives no phone number. This pass lists the landlords of the open
+// eviction leads in list order, each with its searches and a box for the
+// number; one number covers every open lead of that landlord, so ten numbers
+// reach at least the top ten leads (see phonepass.py).
+function autoYieldLine() {
+  const y = S.auto_yield || {}, google = googleReady();
+  const sources = google ? "OpenStreetMap and Google Places" : "OpenStreetMap";
+  const sofar = y.looked_up ? `So far it found a number for <strong>${y.found} of ${y.looked_up}</strong> landlord${y.looked_up === 1 ? "" : "s"} it looked up.`
+    : "It hasn't looked any up yet (the morning check does, or Find landlord phones &amp; emails).";
+  return `<p class="hint" id="autoYield"><b>What Lead Desk fills in by itself:</b> each morning it looks up company landlords on ${sources}. ${sofar}
+    ${google ? "" : " A Google Places key (under Get phones and addresses) finds more, free up to 1,000 lookups a month."}
+    <b>What it can't:</b> the court lists no phone numbers, private landlords (people, not companies) are never looked up, and Lead Desk uses no paid phone service.
+    The rest is a quick search by hand, about a minute a landlord.</p>`;
+}
+function phonePassCard(P) {
+  const L = P.landlords || [], top = P.top || {};
+  const rows = L.map((g, i) => {
+    const n = P.offset + i + 1, name = esc(title(g.name));
+    const stage = g.stage ? ` <span class="chip ${g.stage === "writ" ? "bad" : "warn"}">${g.stage === "writ" ? "writ issued" : "judgment"}</span>` : "";
+    const leads = `${g.leads} open lead${g.leads === 1 ? "" : "s"}`;
+    return `<li class="passrow${g.reached ? " done" : ""}" id="pass-${i}">
+      <div class="row between"><span><strong>${n}. ${name}</strong> · ${leads} · best priority ${g.score}${stage}</span>
+        ${g.reached ? `<span><span class="chip good">has a number</span> ${g.phone ? `<a href="tel:${esc(g.phone)}">${esc(g.phone)}</a>` : esc(g.email || "")}</span>` : ""}</div>
+      ${g.reached ? "" : `<div class="row mt8" role="group" aria-label="Find a phone number for ${name}">
+        ${searchLinks(g.name)}
+      </div>
+      <div class="row mt8">
+        <input id="pp-${i}" class="w-240" inputmode="tel" autocomplete="off" placeholder="Paste the number" aria-label="Phone number for ${name}" value="${esc(g.phone || "")}">
+        ${g.phone ? `<span class="small-line">Found on another of its leads: check it, then save it on the rest.</span>` : ""}
+        <button class="btn small primary" data-passsave="${i}">Save for ${g.leads === 1 ? "this lead" : `all ${g.leads} leads`}</button>
+        <button class="btn small" data-passskip="${i}" title="No number to be found: skip this landlord so the next one moves up">Can't find one</button>
+        ${fieldError("pp-" + i)}
+      </div>`}</li>`;
+  }).join("");
+  const done = P.done || 0;
+  return `<div class="card mb12" id="phonePass">
+    <h2 id="passTitle" tabindex="-1">Find phones for your top landlords</h2>
+    ${autoYieldLine()}
+    <p class="statusline" id="passProgress"><span><strong>${done} of ${L.length}</strong> landlord${L.length === 1 ? "" : "s"} below have a number.</span>
+      <span class="sep" aria-hidden="true">·</span><span>Top ${top.leads || 0} leads: <strong>${top.reached || 0}</strong> can be reached now.</span></p>
+    ${L.length ? `<ol class="passlist">${rows}</ol>` : `<p class="hint">No landlords left to search for${P.skipped ? " (apart from the ones you skipped)" : ""}.</p>`}
+    <div class="row">
+      <button class="btn" id="passPrev" ${P.offset > 0 ? "" : "disabled"}>Previous ${P.size}</button>
+      <button class="btn" id="passNext" ${P.more ? "" : "disabled"}>Next ${P.size} landlords</button>
+      ${P.skipped ? `<button class="linkbtn" id="passUnskip">Bring back the ${P.skipped} skipped</button>` : ""}
+      <button class="linkbtn" id="passHide">Close</button>
+    </div></div>`;
+}
+function bindPhonePass() {
+  const P = S.phone_pass; if (!P) return;
+  const root = $("#phonePass");
+  bindCopyName(root);
+  root.querySelectorAll("[data-passsave]").forEach(b => {
+    const i = +b.dataset.passsave, g = P.landlords[i], box = $("#pp-" + i);
+    const save = async () => {
+      const err = checkPhone(box.value) || (box.value.trim() ? null : "Paste the phone number first.");
+      if (err) return setFieldError("pp-" + i, err);
+      const r = await act(() => api("/api/lead", { id: g.lead_id, fields: { owner_phone: box.value }, same_landlord: true }),
+        r => `Number saved for ${title(g.name)}${r.also ? ` on ${1 + r.also} leads` : ""}. Top ${(S.phone_pass.top || {}).leads || 0} leads: ${(S.phone_pass.top || {}).reached || 0} can be reached now.`,
+        b, undefined, e => showFieldErrors(e, { owner_phone: "pp-" + i }));
+      if (r) { const next = document.querySelector("#phonePass input[id^=pp-]"); if (next) next.focus(); else $("#passTitle").focus(); }
+    };
+    b.onclick = save;
+    box.onkeydown = e => { if (e.key === "Enter") save(); };
+    box.oninput = () => clearFieldError("pp-" + i);
+  });
+  root.querySelectorAll("[data-passskip]").forEach(b => b.onclick = async () => {
+    const g = P.landlords[+b.dataset.passskip];
+    const r = await act(() => api("/api/phone-pass/skip", { key: g.key, skip: true }), `Skipped ${title(g.name)}. The next landlord moves up.`, b);
+    if (r) { const next = document.querySelector("#phonePass input[id^=pp-]"); if (next) next.focus(); else $("#passTitle").focus(); }
+  });
+  const go = async step => { ui.passOffset = Math.max(0, (ui.passOffset || 0) + step * P.size); await reloadList(); $("#passTitle").focus(); };
+  $("#passPrev").onclick = () => go(-1);
+  $("#passNext").onclick = () => go(1);
+  const un = $("#passUnskip");
+  if (un) un.onclick = () => act(() => api("/api/phone-pass/skip", { key: "*", skip: false }), "The skipped landlords are back in the list.", un);
+  $("#passHide").onclick = () => { ui.passOpen = false; renderLeads(); $("#passShow").focus(); };
+}
+function bindCopyName(root) {
+  root.querySelectorAll("[data-copyname]").forEach(a => a.addEventListener("click", () => {
+    try { navigator.clipboard.writeText(a.dataset.copyname).then(() => toast("Name copied: paste it into the Commission's search box."), () => {}); } catch (e) { /* no clipboard */ }
+  }));
 }
 function bindFindPhone(root) {
   root.querySelectorAll("[data-findphone]").forEach(b => b.onclick = () => {
@@ -52,9 +140,7 @@ function bindFindPhone(root) {
     const box = $("#fp-" + id);
     if (box) box.focus(); else { const again = document.querySelector(`[data-findphone="${id}"]`); if (again) again.focus(); }
   });
-  root.querySelectorAll("[data-copyname]").forEach(a => a.addEventListener("click", () => {
-    try { navigator.clipboard.writeText(a.dataset.copyname).then(() => toast("Name copied: paste it into the Commission's search box."), () => {}); } catch (e) { /* no clipboard */ }
-  }));
+  root.querySelectorAll(".findphone").forEach(bindCopyName);
   root.querySelectorAll("[data-savephone]").forEach(b => {
     const id = +b.dataset.savephone, box = $("#fp-" + id);
     const save = async () => {
@@ -83,7 +169,7 @@ function leadHelp(view, c, addrLine) {
     ${addrLine}
     <p class="small-line" id="coverage">${CODE_COVERAGE}${view === "all" ? "" : " Pick “All leads” under Show to see them."}</p>
     <p class="small-line">${c.with_phone || 0} leads have a phone, ${c.with_email || 0} an email.
-      Order: writs first, then judgments, then everything else by priority. Hover a priority number to see what it's made of. Miles are straight-line from ${esc(S.settings.base_address)}.</p>
+      Order: writs first, then judgments (each only while 45 days old or less), then everything else by priority. Hover a priority number to see what it's made of. Miles are straight-line from ${esc(S.settings.base_address)}.</p>
     <details class="hint" id="coverageMore"><summary>What Lead Desk covers</summary><ul>
       <li><b>Evictions:</b> every eviction hearing on the Pima County Consolidated Justice Court's calendar (the Green Valley and Ajo justice courts keep their own and aren't read).</li>
       <li><b>Clean-out leads (code cases):</b> City of Tucson code-enforcement cases only. Nothing yet for Marana, Oro Valley, Sahuarita, South Tucson or unincorporated Pima County, which is much of the northwest near your base.</li>
@@ -115,7 +201,7 @@ function renderLeads() {
     ui.status && ui.status !== "open" ? esc(STATUS_LABEL[ui.status] || ui.status) : ""].filter(Boolean);
   const emptyMsg = active.length ? `No leads match ${active.join(", ")}${view !== "all" ? ` in “${esc(VIEW_LABEL[view])}”` : ""}. <button class="btn small" id="fClear">Clear search and filters</button>`
     : view === "all" ? "No leads match. Try “Any status”, or press Check for new evictions."
-    : (S.daily || {}).running ? "Checking the court calendar for evictions. New cases show up here when the check finishes."
+    : (S.daily || {}).running ? `Checking for new evictions (${esc((S.daily || {}).message || "starting")}). A first check takes about 15 minutes: each court case page is read with a pause between them, and cases show up here when the check finishes.`
     : `No ${view === "eviction_notice" ? "eviction cases with a notice, judgment or writ" : "eviction cases"} yet. Press <b>Check for new evictions</b>
        to search the court calendar now (it also runs by itself every morning), or paste case links above.` +
       (vc.unchecked ? ` ${vc.unchecked} eviction cases haven't been checked yet; they appear here once their case page shows a notice (next check ${esc((S.daily || {}).next_run || "tomorrow 6:00 AM")}).` : "");
@@ -131,9 +217,13 @@ function renderLeads() {
   // One short status line: how many eviction leads can be reached now, and
   // the ways to more (the setup steps, Help), each one click away.
   const todo = (googleReady() ? 0 : 1) + (recordsStarted() ? 0 : 1);
+  const top = S.top_reach || {}, topLeft = (top.leads || 0) - (top.reached || 0);
+  const passBtn = evOpen ? `<button class="${topLeft ? "btn small primary" : "linkbtn"}" id="passShow" aria-expanded="${!!ui.passOpen}" aria-controls="phonePass">${
+      topLeft ? `Find phones for the top ${top.leads} (about 15 minutes)` : "Next landlords to find phones for"}</button>` : "";
   const statusLine = `<p class="statusline" id="reachLine">${evOpen
       ? `<span><strong>${evReach} of ${evOpen}</strong> open eviction lead${evOpen === 1 ? "" : "s"} can be reached now.</span>
-        ${evNone && ui.type !== "unreachable" ? `<button class="linkbtn" id="fUnreach">Show the ${evNone} that can't</button>` : ""}`
+        ${evNone && ui.type !== "unreachable" ? `<button class="linkbtn" id="fUnreach">Show the ${evNone} that can't</button>` : ""}
+        <span class="sep" aria-hidden="true">·</span>${passBtn}`
       : `<span>No open eviction leads yet.</span>`}
     <span class="sep" aria-hidden="true">·</span><button class="linkbtn" id="setupShow" aria-expanded="${!!ui.showSetup}" aria-controls="setupGuide">Get phones and addresses</button>${todo ? ` <span class="chip warn">${todo} step${todo > 1 ? "s" : ""} to do</span>` : ""}
     <span class="sep" aria-hidden="true">·</span><button class="linkbtn" id="helpToggle" aria-expanded="${!!ui.helpOpen}" aria-controls="leadHelp">How this works</button></p>`;
@@ -146,7 +236,7 @@ function renderLeads() {
         <label class="wide-pick">Show <select id="fView">${opts(Object.keys(VIEW_LABEL).map(v => [v, viewName(v)]), view)}</select></label>
         <button class="btn m-only" id="toolsToggle" aria-expanded="${!!ui.toolsOpen}" aria-controls="leadTools">${ui.toolsOpen ? "Hide" : "Add cases, update cases, find phones"}</button>
         <div id="leadTools" class="row tools ${ui.toolsOpen ? "open" : ""}">
-          <input type="text" id="cLinks" aria-label="Justice Court case links" placeholder="Paste Justice Court case links to add cases">
+          <input type="text" id="cLinks" aria-label="Justice Court case links" placeholder="Paste court case links" title="Paste one or more Justice Court case links (jcDisplayCase) to add those cases">
           <button class="btn primary" id="cAdd">Add cases</button>
           <button class="btn" id="cUpdate" title="Re-read every open eviction case page for new documents (notice, judgment, writ) and court dates. Runs in the background.">Update court cases</button>
           <button class="btn" id="lFind" title="Look up office phone, email and website for landlords, LLC owners and apartment complexes (OpenStreetMap and company websites, and Google Places when a key is set)">Find landlord phones &amp; emails</button>
@@ -156,7 +246,7 @@ function renderLeads() {
       </div>
     </div>
     <div class="filters ${ui.filtersOpen ? "open" : ""}">
-      <div class="searchrow"><input type="search" id="q" aria-label="Search leads" placeholder="Search address, owner, landlord, case, parcel…" value="${esc(ui.q)}">
+      <div class="searchrow"><input type="search" id="q" aria-label="Search leads" placeholder="Search address, owner, case…" title="Searches the address, owner, landlord, tenant, case number, parcel, notes, phone and email" value="${esc(ui.q)}">
       <button class="btn m-only" id="filtersToggle" aria-expanded="${!!ui.filtersOpen}">Filters${nFilters ? ` (${nFilters})` : ""}</button></div>
       <select id="fType" aria-label="Kind of lead">${opts([["", "Any kind of lead"], ["code_violation", "Code cases"], ["eviction", "Evictions"], ["absentee", "Owner lives elsewhere"], ["entity", "Company or trust owner"], ["has_phone", "Has a phone"], ["no_phone", "No phone yet"], ["no_address", "Address needed"], ["guessed_address", "Address to confirm"], ["address_work", "Address work queue (evictions)"], ["reachable", "Can be reached (phone, email or address)"], ["unreachable", "Can't be reached yet"]], ui.type)}</select>
       <select id="fStatus" aria-label="Status">${opts([["open", "Open (not won/lost)"], ["", "Any status"], ...S.statuses.map(s => [s, STATUS_LABEL[s] || title(s)])], ui.status)}</select>
@@ -164,6 +254,7 @@ function renderLeads() {
       <select id="fSort" aria-label="Sort">${opts([["score", "Highest priority first"], ["date", "Newest first (latest court or city event)"], ["miles", "Closest first"]], ui.sort)}</select>
     </div>
     ${statusLine}
+    ${ui.passOpen && S.phone_pass ? phonePassCard(S.phone_pass) : ""}
     ${ui.showSetup ? setupGuide(addrLine) : ""}
     ${ui.helpOpen ? leadHelp(view, c, ui.showSetup ? "" : addrLine) : ""}
     ${queue ? recordsCard(rec) + addressQueue(rows, emptyMsg) : `<div class="tablewrap sticky-head"><table class="cards" id="leadTable">
@@ -191,6 +282,12 @@ function renderLeads() {
   const hc = $("#helpClose");
   if (hc) hc.onclick = () => { ui.helpOpen = false; renderLeads(); $("#helpToggle").focus(); };
   if (ui.showSetup) bindSetupGuide();
+  const ps = $("#passShow");
+  if (ps) ps.onclick = async () => {
+    ui.passOpen = !ui.passOpen; ui.passOffset = 0;
+    if (ui.passOpen) { await reloadList(); const t = $("#passTitle"); if (t) t.focus(); } else { renderLeads(); $("#passShow").focus(); }
+  };
+  if (ui.passOpen && S.phone_pass) bindPhonePass();
   if (queue) bindAddressQueue();
   bindFindPhone($("#tab-leads"));
   $("#toolsToggle").onclick = () => { ui.toolsOpen = !ui.toolsOpen; renderLeads(); $("#toolsToggle").focus(); };
@@ -214,11 +311,30 @@ function renderLeads() {
   markFields($("#tab-leads"));
   stickyHeadOffset();
 }
-// The lead table's column names stay in view under the page header while
-// the list scrolls (on a computer; a phone shows one card per lead).
+// The lead table's column names stay in view while the list scrolls (on a
+// computer; a phone shows one card per lead): under the page header when the
+// table fits the window, else at the top of the table's own scrolling box,
+// so the page never scrolls sideways (see .sticky-head in app.css).
 function stickyHeadOffset() {
   const h = document.querySelector("header");
   document.documentElement.style.setProperty("--header-h", (h && getComputedStyle(h).position === "sticky" ? h.offsetHeight : 0) + "px");
+  fitTable();
+}
+function fitTable() {
+  const wrap = document.querySelector(".tablewrap.sticky-head"), table = wrap && wrap.querySelector("table");
+  if (!table) return;
+  wrap.classList.remove("fits");
+  // Not on screen (another tab is open): measured when the Leads tab shows.
+  if (wrap.clientWidth) wrap.classList.toggle("fits", table.scrollWidth <= wrap.clientWidth);
+}
+// The tab's width changes when it is shown, the window is resized or the
+// drawer opens: measure again (only for a change of width, so this can't loop).
+if (window.ResizeObserver) {
+  let lastWidth = -1;
+  new ResizeObserver(entries => {
+    const w = Math.round(entries[0].contentRect.width);
+    if (w !== lastWidth) { lastWidth = w; fitTable(); }
+  }).observe(document.getElementById("tab-leads"));
 }
 window.addEventListener("resize", () => stickyHeadOffset());
 async function page(step) {
@@ -266,7 +382,7 @@ function addressRow(l) {
   const guess = l.address && l.address_source === "landlord";
   return `<tr class="click" data-id="${l.id}" data-label="${esc(title(landlord || l.source_id))}">
     <td class="num" data-th="Priority">${scoreChip(l)}</td>
-    <td data-th="Case"><span>${esc(l.source_id)}${noticeChip(l)}<span class="small-line" style="display:block">tenant ${esc(title(tenant) || "–")}</span></span></td>
+    <td data-th="Case"><span>${esc(l.source_id)}${noticeChip(l)}<span class="small-line block">tenant ${esc(title(tenant) || "–")}</span></span></td>
     <td data-th="Landlord"><span>${esc(title(landlord) || "–")}</span></td>
     <td data-th="Address now"><span>${guess ? `${esc(title(fullAddress(l)))} <span class="chip warn" title="The landlord owns one property in the county, so the eviction is probably there">landlord's only ${isMultifamily(l) ? "complex" : "property"}</span>
       <button class="btn small" data-aconfirm="${l.id}">Confirm</button>` : '<span class="muted">none yet</span>'}</span></td>
@@ -302,7 +418,7 @@ function bindAddressQueue() {
     try {
       const props = (await api("/api/owner?name=" + encodeURIComponent(who))).filter(p => p.site_address);
       cell.innerHTML = props.length ? `<p class="hint">${props.length} propert${props.length === 1 ? "y" : "ies"} owned by names starting “${esc(title(who))}”. Use the one the tenant rents.</p>
-        <div class="tablewrap" style="max-height:260px;overflow:auto"><table><tbody>${props.map(p => `<tr><td>${esc(title(p.site_address))}</td><td class="muted">${esc(title(p.property_use || ""))}</td>
+        <div class="tablewrap scrollbox"><table><tbody>${props.map(p => `<tr><td>${esc(title(p.site_address))}</td><td class="muted">${esc(title(p.property_use || ""))}</td>
         <td><button class="btn small" data-ause="${esc(p.site_address)}">Use</button></td></tr>`).join("")}</tbody></table></div>`
         : '<p class="hint">No properties found under that name. Landlords often own through a differently named LLC: try the records request above, or click the case to type the address.</p>';
       cell.querySelectorAll("[data-ause]").forEach(u => u.onclick = () =>
@@ -350,7 +466,7 @@ function setupGuide(addrLine) {
          <li>Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Credentials</a>, press <b>+ Create credentials</b>, then <b>API key</b>. Press the copy button next to the key.</li>
          <li>Safer, and takes a minute: press <b>Edit API key</b>, under <b>API restrictions</b> pick <b>Restrict key</b>, tick <b>Places API (New)</b> and press <b>Save</b>.</li>
          <li>Paste the key in the box below and press <b>Save key and find phones</b>.</li></ol></details>
-       <div class="row"><input id="setupKey" type="password" autocomplete="off" aria-label="Google Places API key" aria-describedby="setupKey-err" placeholder="Paste the Google Places API key" style="flex:1;min-width:240px">
+       <div class="row"><input id="setupKey" type="password" autocomplete="off" aria-label="Google Places API key" aria-describedby="setupKey-err" placeholder="Paste the Google Places API key" class="grow wide">
          <button class="btn primary" id="setupKeySave">Save key and find phones</button></div>
        ${fieldError("setupKey")}`;
   const recState = rec.waiting ? done(`sent ${fmtDate(rec.last_request)}: waiting for the file`)
@@ -382,7 +498,8 @@ function setupGuide(addrLine) {
   const order = first === "records" ? ["records", "google"] : ["google", "records"];
   return `<div class="card mb12 setup" id="setupGuide">
     <h2 id="setupTitle" tabindex="-1">Get phone numbers and addresses for eviction leads${setupDone() ? "" : ` <span class="chip warn">${googleReady() || recordsStarted() ? "1 step" : "2 steps"} to do</span>`}</h2>
-    <p class="hint">Court cases name the landlord and the tenant but list no phone number and no property address, so a new eviction can't be called or visited until Lead Desk finds them. <b>Find phone</b> on a lead's row finds one number now, by hand. These two steps fill in most of the rest by themselves${first && todo.length > 1 ? "; start with the one marked" : ""}:</p>
+    <p class="hint">Court cases name the landlord and the tenant but list no phone number and no property address, so a new eviction can't be called or visited until Lead Desk finds them. The quickest start is <b>Find phones for the top 10</b> (above the list): ten landlords searched by hand, about 15 minutes, and your best leads can be called today. These two steps fill in more by themselves${first && todo.length > 1 ? "; start with the one marked" : ""}:</p>
+    ${autoYieldLine()}
     <ol class="setup-steps">
       ${order.map(id => steps[id]).join("")}
     </ol>

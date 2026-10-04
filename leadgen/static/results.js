@@ -39,7 +39,7 @@ function renderResults() {
     <p class="hint">Which outreach method turns leads into paid jobs, for the least money.</p>
     <div class="row mb12"><label class="wide-pick">Compare methods on <select id="rKind">${kinds.map(([v, t]) => `<option value="${v}" ${v === kind ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></div>
     <p class="hint" id="rBasis">${esc((S.comparison_basis || {})[kind] || "")}</p>
-    <div class="grid4" style="margin-bottom:16px">
+    <div class="grid4 mb16">
       <div class="kpi"><div class="v">${touched}</div><div class="l">leads contacted</div></div>
       <div class="kpi"><div class="v">${tot("responded")}</div><div class="l">responses</div></div>
       <div class="kpi"><div class="v">${tot("won")}</div><div class="l">jobs won</div></div>
@@ -60,9 +60,9 @@ function renderResults() {
           <td class="num">${r.cost_per_win == null ? "–" : money(r.cost_per_win)}</td><td class="num">${r.revenue_per_dollar == null ? (r.revenue ? "free" : "–") : money(r.revenue_per_dollar)}</td></tr>`).join("")}</tbody>
       </table></div>
     </div>
-    <div class="card"><h2>What each method got</h2><p class="hint">For a fair comparison these should be close: the same share of leads with an address, of evictions, and a similar average priority. Leads that went to the method already working their landlord are counted apart and left out of these shares; “Set by hand” counts only methods changed on the lead itself.</p>
-      <div class="tablewrap"><table><thead><tr><th>Method</th><th class="num">Leads</th><th class="num">With an address</th><th class="num">Evictions</th><th class="num">Average priority</th><th class="num">Followed their landlord</th><th class="num">Set by hand</th></tr></thead>
-      <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.mix.leads}</td><td class="num">${share(r.mix.with_address)}</td><td class="num">${share(r.mix.evictions)}</td><td class="num">${r.mix.avg_score ?? "–"}</td><td class="num">${r.mix.followed || 0}</td><td class="num">${r.mix.set_by_hand}</td></tr>`).join("")}</tbody></table></div></div>
+    <div class="card"><h2>What each method got</h2><p class="hint">For a fair comparison these should be close: the same share of leads with an address, of evictions, and a similar average priority. Leads that went to the method already working their landlord, or were dealt outside the balanced split because not every ticked method could work them, are counted apart and left out of these shares; “Set by hand” counts only methods changed on the lead itself.</p>
+      <div class="tablewrap"><table><thead><tr><th>Method</th><th class="num">Leads</th><th class="num">With an address</th><th class="num">Evictions</th><th class="num">Average priority</th><th class="num">Followed their landlord</th><th class="num">Outside the split</th><th class="num">Set by hand</th></tr></thead>
+      <tbody>${R.map(r => `<tr><td>${chDot(r.channel)}</td><td class="num">${r.mix.leads}</td><td class="num">${share(r.mix.with_address)}</td><td class="num">${share(r.mix.evictions)}</td><td class="num">${r.mix.avg_score ?? "–"}</td><td class="num">${r.mix.followed || 0}</td><td class="num">${r.mix.fitted || 0}</td><td class="num">${r.mix.set_by_hand}</td></tr>`).join("")}</tbody></table></div></div>
     <div class="card"><h2>Response rate</h2><p class="hint">Share of contacted leads that called back or said yes.</p>
       <div class="bars">${R.map(r => bar(r, r.response_rate || 0, maxRate, pct(r.response_rate))).join("")}</div></div>
     <div class="card"><h2>Revenue per dollar spent</h2><p class="hint">Phone and property-manager outreach cost Steve's time, not cash; add a cost per contact in Settings to compare them fairly.</p>
@@ -70,5 +70,5 @@ function renderResults() {
 }
 // One listener for the kind picker, which is redrawn with the tab.
 document.addEventListener("change", e => { if (e.target && e.target.id === "rKind") { ui.resultsKind = e.target.value; renderResults(); $("#rKind").focus(); } });
-const bar = (r, v, max, label) => `<div class="bar"><div>${chDot(r.channel)}</div><div class="track"><div class="fill" style="width:${Math.round(100 * v / max)}%;background:var(--c-${r.channel})"></div></div><div class="num" style="text-align:right">${label}</div></div>`;
+const bar = (r, v, max, label) => `<div class="bar"><div>${chDot(r.channel)}</div><div class="track"><div class="fill c-${r.channel}" style="width:${Math.round(100 * v / max)}%"></div></div><div class="num">${label}</div></div>`;
 

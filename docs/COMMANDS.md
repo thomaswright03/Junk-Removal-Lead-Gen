@@ -52,8 +52,8 @@ leadgen run
 That pulls new City of Tucson code cases, looks up each owner from the county
 assessor, geocodes addresses and checks they
 are in Pima County, marks leads whose latest event is older than 30 days as stale, and writes
-`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, in Lead Desk's order (writs, then
-judgments, then the rest, each highest priority first), with the priority, case stage, notice flag and
+`exports/leads-YYYY-MM-DD.csv` and `exports/leads-YYYY-MM-DD.html`, in Lead Desk's order (recent writs, then
+recent judgments, then the rest, each highest priority first), with the priority, case stage, notice flag and
 latest event (Filed, Judgment, Writ, Opened) in the first columns. Open the
 HTML file in a browser to search and filter; open the CSV in Excel or import it
 into a CRM.

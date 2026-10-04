@@ -289,6 +289,18 @@ def test_split_leads_says_what_it_can_hand_out_and_asks_first(server, page):
     page.check(".aCh[value=door_hanger]")
     page.wait_for_selector("#aSplit >> text=No unassigned evictions")
     assert page.is_disabled("#aGo")
+    # ...and offers to deal the eviction to a method it can use instead of a round of nothing.
+    assert "1 more eviction can be worked by some of the ticked methods but not all" in page.inner_text("#aSplit")
+    page.check("#aFit")
+    page.wait_for_selector("#aSplit >> text=outside the balanced split")
+    assert page.is_enabled("#aGo")
+    page.click("#aGo")
+    page.wait_for_selector("#confirmBox[open]")
+    assert "1 of them goes to a ticked method it can use (Phone call to owner 1)" in page.inner_text("#confirmBody")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#confirmBox:not([open])", state="attached")
+    page.uncheck("#aFit")
+    page.wait_for_selector("#aDrop")
     page.click("#aDrop")
     page.wait_for_selector("#aSplit >> text=1 eviction")
     # Code cases are a round of their own.
@@ -1087,3 +1099,99 @@ def test_theme_colour_and_column_names_stay_in_view(server, page):
     top = page.evaluate("getComputedStyle(document.querySelector('#leadTable thead th')).top")
     header = page.evaluate("document.querySelector('header').offsetHeight")
     assert top == f"{header}px"
+
+
+@pytest.mark.parametrize("width", [721, 768, 1024, 1280, 1440])
+def test_the_page_never_scrolls_sideways_on_a_tablet_or_laptop(server, page, width):
+    """From 721 px (the card layout ends) up, the page is never wider than
+    the window: a table too wide for it scrolls in its own box, with its
+    column names in view, and the Phone column can be scrolled to."""
+    url, app, path = server
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.wait_for_function("document.documentElement.scrollWidth === window.innerWidth")
+    phone = page.locator("#leadTable thead th", has_text="Phone")
+    phone.scroll_into_view_if_needed()
+    box = phone.bounding_box()
+    assert 0 <= box["x"] and box["x"] + box["width"] <= width, box
+    assert page.evaluate("document.documentElement.scrollWidth") == width
+    assert page.evaluate("getComputedStyle(document.querySelector('#leadTable thead th')).position") == "sticky"
+    # Back to another tab and back: still measured right.
+    page.click("#nav [data-tab=settings]")
+    page.click("#nav [data-tab=leads]")
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    assert page.evaluate("document.documentElement.scrollWidth") == width
+
+
+@pytest.mark.parametrize("width", [1280, 1440])
+def test_box_hints_are_whole_on_a_computer(server, page, width):
+    """The case-link and search boxes' hints fit their boxes."""
+    url, app, path = server
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    cut = page.evaluate(
+        """['#cLinks', '#q'].filter(sel => {
+          const el = document.querySelector(sel), cs = getComputedStyle(el);
+          const ctx = document.createElement('canvas').getContext('2d');
+          ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+          const room = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+          return ctx.measureText(el.placeholder).width > room - (el.type === 'search' ? 20 : 0);
+        })"""
+    )
+    assert cut == []
+
+
+def test_first_phones_pass_reaches_the_top_leads_from_the_status_line(server, page):
+    """A fresh list with no numbers: the status line offers the first-phones
+    pass; it says what Lead Desk fills in by itself and what it can't, lists
+    the landlords best first, and a saved number makes their leads reachable."""
+    url, app, path = server
+    add_unreachable_eviction(path)
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000005-EA",
+            "eviction",
+            "2026-09-27",
+            None,
+            plaintiff="SAMPLE PROPERTIES LLC",
+            defendant="ROE, JO",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute("UPDATE leads SET owner_phone = NULL")
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.click("#passShow")
+    page.wait_for_selector("#phonePass")
+    assert page.evaluate("document.activeElement.id") == "passTitle"
+    text = page.inner_text("#phonePass")
+    assert "What Lead Desk fills in by itself" in text and "What it can't" in text
+    assert "0 of 2 landlords below have a number" in text
+    rows = page.locator("#phonePass li.passrow")
+    assert rows.count() == 2
+    assert "1. Example Homes LLC · 1 open lead" in rows.first.inner_text()  # the best lead's landlord first
+    sample = page.locator("#phonePass li.passrow", has_text="Sample Properties LLC")
+    assert "2 open leads" in sample.inner_text()
+    sample.locator("input").fill("(520) 555-0188")
+    sample.locator("[data-passsave]").click()
+    page.wait_for_selector("text=Number saved for")
+    page.wait_for_function("document.querySelector('#passProgress').innerText.includes('1 of 2 landlords')")
+    assert page.evaluate("document.activeElement.id") == "pp-0"  # on to the next landlord without a number
+    phones = [
+        r[0]
+        for r in db.connect(path).execute("SELECT owner_phone FROM leads WHERE plaintiff = 'SAMPLE PROPERTIES LLC'")
+    ]
+    assert phones == ["(520) 555-0188", "(520) 555-0188"]
+    assert "2 of 3 open eviction leads can be reached now" in page.inner_text("#reachLine")
+    # A landlord with no number to be found is skipped, and can be brought back.
+    page.click("[data-passskip='0']")
+    page.wait_for_selector("#passUnskip")
+    page.click("#passHide")
+    assert page.locator("#phonePass").count() == 0

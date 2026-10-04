@@ -10,10 +10,17 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 
 from . import daily, db
-from .daily import run_daily
+from .daily import CHECK_MINUTES, run_daily
 from .lookup import find_contacts, providers_from
 from .sources.pima_jp_case import add_cases, update_cases
 from .util import PAUSED_MESSAGE, Conn, StopCheck, az_now, is_paused, now_iso
+
+# What the page says when Check for new evictions starts the check here.
+STARTED_MESSAGE = (
+    f"Checking for new evictions. This takes {CHECK_MINUTES}: Lead Desk reads each court case page "
+    "with a pause between them (up to 400 a day), and the header counts them as they're read. "
+    "The list fills in when the check finishes."
+)
 
 # Online, stop a long job this many seconds into a request (Vercel allows 60).
 SERVERLESS_SECONDS = 40
@@ -117,7 +124,7 @@ def start_github_check(session: Any = None) -> dict:
     return {
         "started": True,
         "running": False,
-        "message": "Started. The check takes about 15 minutes; reload then to see new leads.",
+        "message": f"Started. The check takes {CHECK_MINUTES}; reload then to see new leads.",
     }
 
 
@@ -178,6 +185,7 @@ class JobRunner:
                     case_limit=body.get("case_limit"),
                     contact_limit=int(body.get("contact_limit") or 60),
                     log=self._progress,
+                    progress=self._progress,
                 )
             finally:
                 self.daily_message = None
@@ -221,7 +229,7 @@ class JobRunner:
                 self.daily_message = f"the daily check stopped with an error ({type(e).__name__})"
 
         threading.Thread(target=work, daemon=True, name="daily").start()
-        return {"started": True, "running": True}
+        return {"started": True, "running": True, "message": STARTED_MESSAGE}
 
     def resume_daily(self) -> Optional[dict]:
         """After the pause is turned off: when today's check was stopped part

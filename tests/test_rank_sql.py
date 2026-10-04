@@ -32,7 +32,7 @@ def mixed_leads(conn):
     uses = [None, "APARTMENTS 5+ UNITS", "SINGLE FAMILY RESIDENCE", "CONDO COMMON AREA"]
     n = 0
     for stage, days, owner, use in itertools.product(
-        ("writ", "judgment", "notice", None, "dismissed"), (0, 5, 9, 20, -3), owners[:3], uses[:2]
+        ("writ", "judgment", "notice", None, "dismissed"), (0, 5, 9, 20, -3, 60), owners[:3], uses[:2]
     ):
         n += 1
         if n % 3:

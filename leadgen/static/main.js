@@ -35,7 +35,7 @@ document.querySelectorAll("#nav button").forEach(b => b.onclick = async () => {
   ui.tab = b.dataset.tab; syncUrl(true);
   await reloadList();  // the new tab's list comes with it
 });
-$("#refreshBtn").onclick = e => act(() => api("/api/refresh", {}), r => r.message || "Checking the court calendar. The leads update when the check finishes.", e.currentTarget);
+$("#refreshBtn").onclick = e => act(() => api("/api/refresh", {}), r => r.message || "Checking for new evictions. This takes about 15 minutes; the header counts the court cases as they're read.", e.currentTarget);
 // While the daily check or a job runs, ask for its progress every few
 // seconds (a small request: no leads), and reload the leads when it ends.
 // Drawer typing is kept (see drafts), and the page isn't redrawn under

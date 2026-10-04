@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from leadgen import db, leadlist, outreach
+from leadgen import db, dealing, leadlist, outreach, results
 from leadgen.enrich import enrich, is_entity, owner_fields
 from leadgen.models import Lead
 from leadgen.util import az_today
@@ -109,6 +109,45 @@ def test_owner_fields_absentee_and_entity():
     assert f["owner_absentee"] == 1 and f["owner_entity"] == 1
     assert owner_fields(owner("x", "SMITH JOHN", "10 E OWNER LN", "10 E OWNER LANE"))["owner_absentee"] == 0
     assert is_entity("DOE JANE TR") and not is_entity("DOE JANE")
+
+
+def test_owner_name_and_mailing_address_are_split_where_they_belong(tmp_path):
+    """A mailing address with two street lines comes from the county with the
+    first one on the name line: the owner shows the name alone and the
+    mailing address every street line in order (made-up owner)."""
+    rec = owner("P9", "SAMPLE VIEW TUCSON LLC 12112 N EXAMPLE VISTA BLVD", "STE 150 PMB 430", "1 W SITE ST")
+    f = owner_fields(rec)
+    assert f["owner_name"] == "SAMPLE VIEW TUCSON LLC"
+    assert f["owner_address"] == "12112 N EXAMPLE VISTA BLVD, STE 150 PMB 430"
+    assert f["owner_entity"] == 1 and f["owner_absentee"] == 1
+    # A box on the name line, and names that only look like they hold a number, are left alone.
+    assert owner_fields(owner("x", "EXAMPLE APARTMENTS LP PO BOX 4417", "ATTN OFFICE", "1 W SITE ST"))[
+        "owner_address"
+    ] == ("PO BOX 4417, ATTN OFFICE")
+    for name in ("1ST CHOICE HOMES LLC", "DOE JOHN 1999 TRUST", "TUCSON 22ND ST LLC", "FRC HOLDINGS OF TUCSON LLC"):
+        assert owner_fields(owner("x", name, "10 E OWNER LN", "1 W SITE ST"))["owner_name"] == name
+    # The same street on both lines isn't repeated.
+    assert owner_fields(owner("x", "ROE RIVER 10 E OWNER LN", "10 E OWNER LN", "10 E OWNER LN"))["owner_address"] == (
+        "10 E OWNER LN"
+    )
+    # Owners saved before the split are fixed once when the database opens.
+    path = tmp_path / "l.db"
+    conn = db.connect(path)
+    db.upsert(conn, Lead("tucson_code_cases", "CE-9", "code_violation", "2026-09-01", "1 W SITE ST"))
+    conn.execute(
+        "UPDATE leads SET owner_name = 'SAMPLE VIEW TUCSON LLC 12112 N EXAMPLE VISTA BLVD', "
+        "owner_address = 'STE 150 PMB 430'"
+    )
+    conn.execute("DELETE FROM settings WHERE key = 'owner_lines_split'")
+    conn.commit()
+    conn.close()
+    db.forget_ready()
+    conn = db.connect(path)
+    r = conn.execute("SELECT owner_name, owner_address FROM leads").fetchone()
+    assert (r["owner_name"], r["owner_address"]) == (
+        "SAMPLE VIEW TUCSON LLC",
+        "12112 N EXAMPLE VISTA BLVD, STE 150 PMB 430",
+    )
 
 
 def test_enrich_fills_owner_columns():
@@ -509,6 +548,68 @@ def test_a_round_names_the_leads_it_left_out(tmp_path):
     assert set(left) == {"id", "label", "reason"} and left["reason"] in ("needs_address", "needs_unit")
 
 
+def test_a_lead_only_some_methods_can_work_is_offered_not_silently_dropped(tmp_path):
+    """The review's case: a phone saved on a lead whose address is a guess.
+    A three-method round can't deal it (door hangers need a confirmed
+    address) and says why; with ``fit`` it goes to a method it can use,
+    outside the balanced split, and Results keeps it apart."""
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    db.upsert(
+        conn,
+        Lead(
+            "pima_jp_calendar",
+            "CV26-000777-EA",
+            "eviction",
+            "2026-09-30",
+            "77 W GUESS ST",
+            plaintiff="SAMPLE GUESS LLC",
+            in_pima=True,
+            eviction_notice=True,
+        ),
+    )
+    conn.execute("UPDATE leads SET address_source = 'landlord', owner_phone = '(520) 555-0177'")
+    conn.commit()
+    app = App(path)
+    three = list(outreach.CHANNELS)
+    out = app.assign({"count": 10, "channels": three, "preview": True})
+    assert sum(out["assigned"].values()) == 0 and out["left_out"]["needs_confirm"] == 1
+    assert out["left_out_leads"][0]["reason"] == "needs_confirm"
+    # The split numbers let the page count it as fitting some methods: phone and landlord pitch, not door hangers.
+    combos = app.state({"list": "queue"})["split"]["combos"]
+    assert combos["phone"] == 1 and combos["property_manager"] == 1 and combos["door_hanger"] == 0
+    assert combos["door_hanger+phone+property_manager"] == 0
+    out = app.assign({"count": 10, "channels": three, "fit": True})
+    assert out["fitted"] == {"phone": 1} and out["kinds"] == {"eviction": 1}
+    row = conn.execute("SELECT channel, assigned_by FROM leads").fetchone()
+    assert (row["channel"], row["assigned_by"]) == ("phone", dealing.BY_FIT)
+    phone = {r["channel"]: r for r in app.state()["results"]}["phone"]
+    assert phone["assigned"] == 1 and phone["mix"]["leads"] == 0 and phone["mix"]["fitted"] == 1
+    assert any("outside the balanced split" in n for n in results.comparison(app.state()["results"])["notes"])
+
+
+def test_fit_leads_fill_the_round_after_the_balanced_split(tmp_path):
+    """Leads every ticked method can work are split evenly first; leads only
+    some can work fill the room left, each landlord to one method."""
+    path = tmp_path / "leads.db"
+    conn = db.connect(path)
+    seed_evictions(conn, with_address=4, without=6)
+    conn.execute("UPDATE leads SET owner_phone = '(520) 555-0100'")
+    conn.commit()
+    app = App(path)
+    plain = app.assign({"count": 8, "channels": ["door_hanger", "phone"], "preview": True})
+    assert sum(plain["assigned"].values()) == 4 and not plain["fitted"]
+    out = app.assign({"count": 8, "channels": ["door_hanger", "phone"], "fit": True})
+    assert sum(out["assigned"].values()) == 4  # the balanced split is as before
+    # No address: only a call can work them. Landlords stay whole (groups of
+    # three here), so 3 of the 4 places left are filled.
+    assert out["fitted"] == {"phone": 3}
+    dealt = conn.execute("SELECT plaintiff, channel FROM leads WHERE channel IS NOT NULL").fetchall()
+    assert len(dealt) == 7 and len({(r["plaintiff"], r["channel"]) for r in dealt}) == len(
+        {r["plaintiff"] for r in dealt}
+    )
+
+
 def test_followed_leads_are_counted_apart_from_hand_set_ones(tmp_path):
     path = tmp_path / "leads.db"
     conn = db.connect(path)
@@ -775,10 +876,10 @@ def test_small_rounds_are_split_evenly_across_the_methods(tmp_path):
     app = App(path)
     for seed in range(25):
         for n in (2, 3, 5):
-            out = outreach.assign(conn, app.leads(conn), n, ["phone", "property_manager"], seed=seed, preview=True)
+            out = dealing.assign(conn, app.leads(conn), n, ["phone", "property_manager"], seed=seed, preview=True)
             got = sorted(out["assigned"].values())
             assert got == [n // 2, n - n // 2], (seed, n, out["assigned"])
-        out = outreach.assign(conn, app.leads(conn), 5, list(outreach.CHANNELS), seed=seed, preview=True)
+        out = dealing.assign(conn, app.leads(conn), 5, list(outreach.CHANNELS), seed=seed, preview=True)
         # Only two have an address, so a round with door hangers deals those two, one each.
         assert sorted(out["assigned"].values()) == [0, 1, 1]
 

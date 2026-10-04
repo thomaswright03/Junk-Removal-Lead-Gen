@@ -36,3 +36,21 @@ def test_one_definition_of_multifamily():
     for use in ("SINGLE FAMILY RESIDENCE", "MOBILE HOME (SINGLE)", "CONDOMINIUM COMMON AREA", "RESIDENTIAL RENTAL"):
         assert not is_multifamily(use), use
     assert is_residential("RESIDENTIAL RENTAL") and is_residential("CONDO")
+
+
+def test_page_layout_comes_from_the_stylesheet():
+    """Layout lives in app.css (its spacing scale and named classes); the
+    page's scripts set an inline style only for a value worked out at run
+    time (a Results bar's length)."""
+    import re
+    from pathlib import Path
+
+    static = Path(__file__).parent.parent / "leadgen" / "static"
+    inline = []
+    for f in sorted([*static.glob("*.js"), *static.glob("*.html")]):
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            for style in re.findall(r'style="([^"]*)"', line):
+                if style.startswith("width:${"):
+                    continue
+                inline.append(f"{f.name}:{n}: {style}")
+    assert inline == []

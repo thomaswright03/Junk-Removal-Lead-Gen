@@ -25,9 +25,13 @@ The daily check:
 4. Looks up the landlord's office phone, email and website.
 5. Adds new City of Tucson code cases.
 
-**Check for new evictions** runs the same check now. The header shows one
-short line: open leads, when the last check finished, and a warning sign if a
-lookup failed. **Details** shows the full summary.
+**Check for new evictions** runs the same check now. A first check takes
+about 15 minutes, because it reads up to 400 court case pages with a pause
+between them; while it runs the header counts them ("Reading court cases:
+120 of 400"). The header shows one short line: open leads, when the last
+check finished, and a warning sign if a lookup failed. **Details** shows the
+full summary, including how many landlords the automatic phone lookup has
+found a number for.
 
 ## The Leads tab
 
@@ -35,6 +39,7 @@ The list comes first. Above it are one status line and one toolbar:
 
 - **Status line:** "N of M open eviction leads can be reached now".
   - **Show the N that can't** filters to the leads still to work on.
+  - **Find phones for the top 10** opens the first-phones pass (below).
   - **Get phones and addresses** opens the setup steps. A chip says how many
     steps are left.
   - **How this works** opens the explanations, the area coverage note and a
@@ -54,13 +59,40 @@ The list comes first. Above it are one status line and one toolbar:
 
 **Order:**
 
-- Every writ (lockout) comes first, then every judgment, then everything
-  else.
+- Every recent writ (lockout) comes first, then every recent judgment, then
+  everything else. Recent means 45 days or less; an older one is ranked
+  like any other lead.
 - Within each group, leads are ordered by priority (see below).
 
 Click a lead, or Tab to it and press Enter, for its details, the owner's
 other properties, and to log outreach and results. The tab, filters and open
 lead are kept in the address bar, so a reload or Back keeps your place.
+
+### The first phones: Find phones for the top 10
+
+On the first day no eviction lead can be called: the court gives no phone
+number and no property address. What Lead Desk fills in by itself, and what
+it can't:
+
+- **By itself:** each morning it looks up company landlords on OpenStreetMap
+  (and Google Places, if you add a key). The pass and **Details** say how
+  many landlords it found a number for out of how many it looked up.
+  Expect only some on OpenStreetMap.
+- **Never by itself:** a private landlord (a person, not a company), and any
+  paid phone service.
+
+**Find phones for the top 10** on the status line lists the landlords of
+your best open eviction leads, best first, ten at a time. Each has the web,
+Google Maps and Corporation Commission searches and a box for the number.
+**Save** puts the number on every open lead of that landlord, so ten numbers
+reach at least your top ten leads; about a minute each, 15 minutes for ten.
+The pass shows "Top 10 leads: N can be reached now" as you go.
+
+- **Can't find one** skips a landlord so the next one moves up. **Bring back
+  the skipped** puts them back.
+- **Next 10 landlords** goes on down the list.
+- A number found on one lead of a landlord is filled in for you: check it
+  and save it on the rest.
 
 ### Getting a phone number: Find phone
 
@@ -135,8 +167,8 @@ addresses** links to it:
   the court sends:
   - Rows for cases already in Lead Desk fill in their address. An address
     you typed or confirmed is kept.
-  - New judgment and writ cases join the default view at the top of the
-    list.
+  - New judgment and writ cases join the default view, at the top of the
+    list while the judgment or writ is 45 days old or less.
 
 The address queue (**Work through the ones that need one**) lists evictions
 with no address or only a guess:
@@ -155,7 +187,12 @@ Up to 40 points for what the case says:
 - Vacant building, dumping and trash/debris score highest; weeds score
   lowest.
 - Evictions score 35, with 25 more for a writ of restitution or 15 more for
-  a judgment.
+  a judgment, while that writ or judgment is recent (45 days or less).
+
+The list puts recent writ cases first, then recent judgments, then
+everything else by priority. A judgment or writ older than 45 days gets no
+stage points and no place at the top: that unit was cleared long ago, so it
+ranks like any other lead.
 
 Then:
 
@@ -166,7 +203,9 @@ Then:
 - **+8** if it was 8 to 14 days ago.
 
 A lead becomes Old (stale) 30 days after its latest event. A case with a
-court date today or later is never marked Old.
+court date today or later is not marked Old, unless it already has a
+judgment or writ: a hearing after the judgment doesn't keep an old case
+fresh.
 
 ## Outreach and Results
 

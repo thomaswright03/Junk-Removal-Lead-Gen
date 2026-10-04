@@ -45,7 +45,9 @@ from .util import Conn, Log, StopCheck, az_now, az_today, is_paused, now_iso
 log_ = logging.getLogger(__name__)
 
 CALENDAR_DAYS_AHEAD = 30
-CASE_PAGES_PER_RUN = 400  # about 10 minutes at the polite pace; the rest wait for tomorrow
+CASE_PAGES_PER_RUN = 400  # about 10 to 15 minutes at the polite pace; the rest wait for tomorrow
+# How long a check that reads the most case pages takes, for the page and the README.
+CHECK_MINUTES = "about 15 minutes"
 # Minutes to wait before each same-day retry after a step failed outright.
 RETRY_AFTER_MINUTES = (30, 60, 120)
 # A scheduled run this many minutes before a retry is due runs it (the
@@ -84,6 +86,13 @@ def _step(summary: dict, name: str, fn: Callable[[], Any], log: Log) -> None:
         else:
             log(f"{label} failed because of an unexpected problem (run with --debug for details)")
         log_.debug("%s failed", label, exc_info=True)
+
+
+def _case_progress(progress: Optional[Callable[[str], Any]]) -> Optional[Callable[[int, int], Any]]:
+    """update_cases' ``progress(done, total)`` as the header's message."""
+    if progress is None:
+        return None
+    return lambda done, total: progress(f"reading court cases: {done} of {total}")
 
 
 def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
@@ -128,10 +137,13 @@ def run_daily(
     code_cases: Any = None,
     log: Log = print,
     now: Optional[datetime] = None,
+    progress: Optional[Callable[[str], Any]] = None,
 ) -> dict:
     """Run every step and return a summary dict. Each step's failure is logged
     and recorded, and the next step still runs. When a step failed outright
-    the day isn't counted as checked and a retry is set (see ``retry_pending``)."""
+    the day isn't counted as checked and a retry is set (see ``retry_pending``).
+    ``progress(message)`` hears how far the longest step has got ("reading
+    court cases: 120 of 400"), for the Lead Desk header."""
     now = now or az_now().replace(tzinfo=None)
     today = today or now.date()
     summary: dict[str, Any] = {"started_at": now_iso()}
@@ -182,6 +194,7 @@ def run_daily(
                 scheduled=True,
                 log=log,
                 should_stop=stop,
+                progress=_case_progress(progress),
             ),
         ),
         ("owners", lambda: enrich(conn, parcel_client or ParcelClient(), should_stop=stop)),

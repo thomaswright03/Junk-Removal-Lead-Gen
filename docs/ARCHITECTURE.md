@@ -19,7 +19,7 @@ flowchart LR
   end
   DAILY["Daily run<br/>daily.py"]
   DB[("Database<br/>db.py: SQLite file locally,<br/>Postgres (Neon) online via pg.py")]
-  DESK["Lead Desk<br/>web.py + routes.py + leadlist.py + outreach.py<br/>static/ (the page)"]
+  DESK["Lead Desk<br/>web.py + routes.py + leadlist.py + outreach.py + dealing.py<br/>static/ (the page)"]
   subgraph Run["Where it runs"]
     LOCAL["leadgen serve / leadgen schedule<br/>(this computer)"]
     VERCEL["Vercel: wsgi.py"]
@@ -60,15 +60,21 @@ flowchart LR
 | `leadgen/sources/csv_import.py` | Any CSV, including the court's records-request file (addresses, judgment and writ dates, disposition) |
 | `leadgen/enrich.py` | Owner of record and parcel from the Pima County Assessor layer |
 | `leadgen/geocode.py` | Census geocoder: coordinates, and whether an address is in Pima County |
-| `leadgen/lookup.py` | Business phone, email and website: OpenStreetMap (Overpass near the property, Nominatim by name in the Tucson area), company websites, Google Places when a key is set; daily and monthly Google limits |
+| `leadgen/lookup.py` | The business phone lookup run (`find_contacts`): which providers, in what order, retries, one lookup per company |
+| `leadgen/providers.py` | The lookup's providers: OpenStreetMap (Overpass near the property, Nominatim by name in the Tucson area), company websites, Google Places when a key is set; daily and monthly Google limits |
+| `leadgen/business.py` | Which company names a lead's lookup searches for, and matching a found business to them |
+| `leadgen/phonepass.py` | The first-phones pass (the landlords of the best eviction leads, ten at a time) and the automatic lookup's yield |
 | `leadgen/contacts.py` | Skip-trace export and contact import |
 | `leadgen/daily.py` | The daily run: each step in order, failures recorded, same-day retry |
 | `leadgen/jobs.py` | Background jobs (Update court cases, Find landlord phones) and the daily schedule inside Lead Desk |
 | `leadgen/db.py` | Schema, migrations (run once per database), upserts, rank triggers, settings, the kill switch watch |
 | `leadgen/pg.py` | Gives Postgres the small `sqlite3` interface the code uses, translating the SQL |
 | `leadgen/leadlist.py` | The list: views, filters, priority (stored rank columns kept fresh by triggers), paging in SQL, counts, address progress |
-| `leadgen/outreach.py` | The outreach experiment: methods, Assign leads, work queues, Results |
-| `leadgen/web.py` | `App`: everything the page can ask for (state, lead edits, touches, settings, imports, jobs) |
+| `leadgen/outreach.py` | Outreach methods, scripts and settings; a lead's priority, stage, latest event and which methods can work it |
+| `leadgen/dealing.py` | Assign leads: the balanced split across methods, landlords kept together, leads outside the split |
+| `leadgen/results.py` | The Results tab: each method's funnel and cost, the mix of leads it got, whether they can be ranked yet |
+| `leadgen/web.py` | `App`: everything the page can ask for (state, settings, Assign leads, imports, jobs) |
+| `leadgen/edits.py` | `App`'s edits to one lead: fields, a landlord's number on its other leads, logged contacts |
 | `leadgen/routes.py` | HTTP routes, static files, the local server |
 | `leadgen/wsgi.py` | The WSGI app Vercel runs |
 | `leadgen/forms.py` | Checks on what the page sends (money, counts, notes, settings) |
@@ -82,7 +88,7 @@ Priority is stored on each lead (`stage_rank`, `base_points`, `rank_latest`,
 `rank_score`, plus `rank_code`, `multi_home`, `lookup_name`). A trigger marks
 a lead for re-ranking when any input changes (`derived_src`). The next
 request re-ranks only those rows, plus the whole view once a day for
-recency. Filtering, ordering and paging then happen in SQL on indexes, and
+recency and for whether a judgment or writ is still recent (45 days). Filtering, ordering and paging then happen in SQL on indexes, and
 only the 100 leads on screen are turned into page rows. Counts and summaries
 are memoized in-process against a data-version counter that triggers bump
 on every change to `leads` or `touches`. A page of 100 leads takes about the

@@ -10,8 +10,9 @@ from pathlib import Path
 import requests
 
 from leadgen import daily, db, outreach
+from leadgen.business import Contact
 from leadgen.enrich import enrich_landlords, fix_inferred_addresses
-from leadgen.lookup import Contact, find_contacts
+from leadgen.lookup import find_contacts
 from leadgen.models import Lead
 from leadgen.sources.pima_jp_case import case_id, parse_case_html
 from leadgen.util import az_today, is_multifamily, is_residential
@@ -431,7 +432,7 @@ def test_retries_are_bounded_and_stop_once_a_service_is_down(tmp_path):
 
 
 def test_a_refused_google_key_points_to_settings(tmp_path):
-    from leadgen.lookup import GooglePlacesProvider
+    from leadgen.providers import GooglePlacesProvider
 
     conn = db.connect(tmp_path / "l.db")
     eviction(conn, "CV26-000001-EA", "2026-09-30")

@@ -11,9 +11,10 @@ that address, so exports show each property once.
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Iterator, Literal, Optional, Sequence
 
 from . import pg
 from .models import Lead
@@ -130,7 +131,7 @@ _ADDED_COLUMNS = {
     # The lead's rank, kept so the lead list can filter, rank and page in
     # SQL (see leadlist.refresh_ranking): the code case's violation code,
     # more than one home on the parcel, the company a phone lookup would
-    # search for, the stage (2 writ, 1 judgment, 0 the rest), the priority
+    # search for, the stage (2 recent writ, 1 recent judgment, 0 the rest), the priority
     # points that depend on the lead alone, its latest real event and its
     # priority in the chosen view. derived_src is RANK_VERSION when these
     # are up to date; a trigger empties it when a column in RANK_INPUTS changes.
@@ -148,7 +149,7 @@ _ADDED_COLUMNS = {
 # view it is in, as an owner's lead count is counted within the view). When
 # one changes, the trigger below marks the rank out of date. Raising
 # RANK_VERSION works every rank out again.
-RANK_VERSION = "rank 1"
+RANK_VERSION = "rank 2"  # 2: stage rank and points only while recent
 RANK_INPUTS = (
     "lead_type",
     "source",
@@ -351,6 +352,7 @@ def connect(path: Any) -> Conn:
             _version_counters(conn)
             _money_to_cents(conn)
             _upgrade_case_stages(conn)
+            _upgrade_owner_lines(conn)
             _READY.add(str(path))
         return conn
     path = Path(path)
@@ -388,6 +390,7 @@ def _migrate(conn: Conn) -> None:
     _version_counters(conn)
     _money_to_cents(conn)
     _upgrade_case_stages(conn)
+    _upgrade_owner_lines(conn)
     if "parcel" in added:
         # Tucson code cases from before parcels had their own column.
         for row in conn.execute("SELECT id, raw_json FROM leads WHERE source = 'tucson_code_cases'").fetchall():
@@ -423,6 +426,51 @@ def _upgrade_case_stages(conn: Conn) -> None:
         return
     rederive_stages(conn)
     put_settings(conn, {"case_stage_rules": STAGE_RULES_VERSION})
+    conn.commit()
+
+
+@contextmanager
+def write_lock(conn: Conn, lead_ids: Sequence[int] = ()) -> Iterator[None]:
+    """One transaction for a read-then-write that must not interleave with
+    the same one from another request (two identical "log contact" requests
+    at once must store one contact). Committed when the block ends, rolled
+    back on an error.
+
+    SQLite: ``BEGIN IMMEDIATE`` takes the database's write lock first, so a
+    second writer waits (busy timeout) and then reads what the first wrote.
+    Postgres: a transaction that locks the leads' rows (``FOR UPDATE``, in id
+    order so two requests can't deadlock); it works through Neon's
+    transaction pooler, unlike a session lock."""
+    if isinstance(conn, pg.Connection):
+        with conn.raw.transaction():
+            ids = sorted({int(i) for i in lead_ids})
+            for i in range(0, len(ids), 500):
+                chunk = ids[i : i + 500]
+                conn.execute(
+                    f"SELECT id FROM leads WHERE id IN ({','.join('?' * len(chunk))}) ORDER BY id FOR UPDATE", chunk
+                )
+            yield
+        return
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
+
+
+def _upgrade_owner_lines(conn: Conn) -> None:
+    """Once per database: owners saved with the first street line of their
+    mailing address on the name line (see enrich.split_owner_line) split."""
+    if conn.execute("SELECT 1 FROM settings WHERE key = 'owner_lines_split'").fetchone():
+        return
+    from .enrich import split_stored_owner_lines
+
+    split_stored_owner_lines(conn)
+    put_settings(conn, {"owner_lines_split": 1})
     conn.commit()
 
 
@@ -527,13 +575,16 @@ def mark_stale(conn: Conn, days: int, today: Optional[date] = None) -> int:
     """Move ``new`` leads to ``stale`` when their latest event is older than
     ``days``. For an eviction that is the latest of its filing, judgment and
     writ dates, so a writ that comes weeks after the filing keeps it fresh.
-    A case with a court date today or later is still under way: never stale."""
+    A case with a court date today or later is still under way: never stale,
+    unless it already has a judgment or writ (a later hearing on a decided
+    case is post-judgment business, not a unit about to need clearing)."""
     today = today or az_today()
     cutoff = (today - timedelta(days=days)).isoformat()
     cur = conn.execute(
         "UPDATE leads SET status = 'stale' WHERE status = 'new' AND event_date IS NOT NULL AND event_date < ? "
         "AND (judgment_date IS NULL OR judgment_date < ?) AND (writ_date IS NULL OR writ_date < ?) "
-        "AND (next_court_date IS NULL OR SUBSTR(next_court_date, 1, 10) < ?)",
+        "AND (next_court_date IS NULL OR SUBSTR(next_court_date, 1, 10) < ? "
+        "OR judgment_date IS NOT NULL OR writ_date IS NOT NULL OR COALESCE(case_stage, '') IN ('judgment', 'writ'))",
         (cutoff, cutoff, cutoff, today.isoformat()),
     )
     return cur.rowcount

@@ -482,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def names_of(providers: list) -> str:
-    from .lookup import PROVIDER_LABELS
+    from .providers import PROVIDER_LABELS
 
     return " and ".join(PROVIDER_LABELS.get(p.name, p.name) for p in providers) or "the lookup services"
 
