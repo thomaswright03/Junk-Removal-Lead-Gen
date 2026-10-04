@@ -213,6 +213,7 @@ def lead_dict(r: LeadRow, settings: dict, owner_counts: dict, today: Optional[da
     )
     d["score_parts"] = outreach.score_parts(r, owner_counts, today=today)
     d["score"] = sum(points for _label, points in d["score_parts"])
+    d["priority_reason"] = outreach.priority_reason(r, d["score_parts"])
     d["stage_rank"] = outreach.stage_rank(r, today)
     d["owner_lead_count"] = owner_counts.get(r["owner_name"], 0) if r["owner_name"] else 0
     d["owner_first"] = outreach.owner_first_name(r)
@@ -274,7 +275,10 @@ def one_lead(conn: Conn, settings: dict, lead_id: int) -> Optional[dict]:
             f"SELECT COUNT(*) AS n FROM leads WHERE {in_view(settings)} AND owner_name = ?", (r["owner_name"],)
         ).fetchone()["n"]
         owner_counts[r["owner_name"]] = n
-    return attach_touches(conn, [lead_dict(r, settings, owner_counts)])[0]
+    lead = attach_touches(conn, [lead_dict(r, settings, owner_counts)])[0]
+    norm = r["address_norm"]
+    lead["address_lead_count"] = address_counts_for(conn, settings, [norm]).get(norm, 0) if norm else 0
+    return lead
 
 
 def sort_leads(leads: list[dict], key: str = "score") -> list[dict]:
@@ -493,10 +497,12 @@ def refresh_ranking(conn: Conn, settings: dict, today: Optional[date] = None) ->
             conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_MS}")
 
 
-# A door hanger can go to the address (outreach.door_hanger_problem is None).
+# A door hanger can go to the address (outreach.door_hanger_problem is None):
+# a unit, or a single home that isn't an unconfirmed guess. A whole complex
+# with no unit isn't an address for the evicted household, confirmed or not.
 DOOR_HANGER_OK = (
-    f"({_filled('address')} AND ({_filled('unit')} OR COALESCE(address_source, '') = 'confirmed' "
-    f"OR (COALESCE(address_source, '') <> 'landlord' AND COALESCE(multi_home, 0) = 0)))"
+    f"({_filled('address')} AND ({_filled('unit')} OR (COALESCE(multi_home, 0) = 0 "
+    f"AND COALESCE(address_source, '') <> 'landlord')))"
 )
 # A phone number or email for the owner or landlord (outreach.has_contact).
 HAS_CONTACT = f"({_filled('owner_phone')} OR {_filled('owner_email')})"
@@ -614,7 +620,27 @@ def page(
     ).fetchall()
     owners = owner_counts_for(conn, settings, [r["owner_name"] for r in rows])
     shown = attach_touches(conn, [lead_dict(r, settings, owners, today) for r in rows])
+    at_address = address_counts_for(conn, settings, [r["address_norm"] for r in rows])
+    for lead, r in zip(shown, rows):
+        lead["address_lead_count"] = at_address.get(r["address_norm"], 0) if r["address_norm"] else 0
     return {"leads": shown, "total": total, "offset": offset, "limit": limit}
+
+
+def address_counts_for(conn: Conn, settings: dict, addresses: list) -> dict:
+    """How many open leads in the view share each of these property
+    addresses (tenants of one complex: the landlord answers for all)."""
+    keys = sorted({a for a in addresses if a})
+    closed = ", ".join(repr(s) for s in CLOSED)
+    out: dict[str, int] = {}
+    for i in range(0, len(keys), 500):
+        chunk = keys[i : i + 500]
+        for r in conn.execute(
+            f"SELECT address_norm, COUNT(*) AS n FROM leads WHERE {in_view(settings)} AND status NOT IN ({closed}) "
+            f"AND address_norm IN ({','.join('?' * len(chunk))}) GROUP BY address_norm",
+            chunk,
+        ).fetchall():
+            out[r["address_norm"]] = int(r["n"])
+    return out
 
 
 def counts(conn: Conn, settings: dict, refresh: bool = True) -> dict:
@@ -665,14 +691,16 @@ def eviction_reach(conn: Conn, settings: dict, refresh: bool = True) -> dict:
 
     And what each way of reaching more would yield, for the Leads tab's
     setup guide: ``lookup_leads`` (leads with no phone or email whose
-    landlord or owner is a company not looked up yet; a business lookup
+    landlord or owner is a company, which a Google lookup would try: one
+    the free lookup found nothing for is tried again once Google is set up,
+    see ``recheck_without_contact``; a business lookup
     can only find companies) and how many companies that is
     (``lookup_companies``); ``records_leads`` (leads with no usable address,
     which a court records request can fill)."""
     if refresh:
         refresh_ranking(conn, settings)
     closed = ", ".join(f"'{s}'" for s in CLOSED)
-    lookup = f"NOT {HAS_CONTACT} AND contact_checked_at IS NULL AND lookup_name IS NOT NULL"
+    lookup = f"NOT {HAS_CONTACT} AND lookup_name IS NOT NULL"
     r = conn.execute(
         "SELECT COUNT(*) AS evictions_open, "
         f"SUM(CASE WHEN {DOOR_HANGER_OK} THEN 1 ELSE 0 END) AS evictions_with_address, "
@@ -684,6 +712,19 @@ def eviction_reach(conn: Conn, settings: dict, refresh: bool = True) -> dict:
         f"FROM leads WHERE {in_view(settings)} AND lead_type = 'eviction' AND status NOT IN ({closed})"
     ).fetchone()
     return {k: int(r[k] or 0) for k in r.keys()}
+
+
+def recheck_without_contact(conn: Conn) -> int:
+    """Open leads the automatic lookup found no phone or email for, marked
+    to be looked up again (Google was just set up or turned on: the free
+    lookup's "nothing found" isn't Google's). A number typed or imported is
+    never touched. Returns how many."""
+    closed = ", ".join(f"'{s}'" for s in CLOSED)
+    n = conn.execute(
+        f"UPDATE leads SET contact_checked_at = NULL WHERE contact_checked_at IS NOT NULL AND NOT {HAS_CONTACT} "
+        f"AND COALESCE(contact_source, '') NOT IN ('manual', 'import') AND status NOT IN ({closed})"
+    ).rowcount
+    return int(n or 0)
 
 
 # ---- addresses: progress and the court records request ----------------------

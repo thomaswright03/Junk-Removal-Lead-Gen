@@ -1,5 +1,8 @@
-/* Lead Desk styles. Spacing comes from one scale: 4, 8, 12, 16, 20, 24, 32 px. */
+/* Lead Desk styles. Spacing comes from one scale: 4, 8, 12, 16, 20, 24, 32 px.
+   Text from one type scale: --fs-small (secondary text, never below 14px),
+   --fs-body, --fs-h3, --fs-h2, --fs-h1 and --fs-kpi. */
 :root {
+  --fs-small: 14px; --fs-body: 15px; --fs-h3: 15px; --fs-h2: 16px; --fs-h1: 18px; --fs-kpi: 22px;
   --bg: #f7f7f5; --panel: #ffffff; --fg: #1c1c1e; --muted: #64646a; --line: #e4e4e0;
   --accent: #1f6feb; --on-accent: #ffffff; --accent-soft: #e8f0fe; --good: #1a7f37; --good-soft: #e6f4ea;
   --warn: #8a5c00; --warn-soft: #fff4d6; --bad: #c62828; --bad-soft: #fdecea; --chip: #f0f0ec;
@@ -19,10 +22,10 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: var(--fs-body)/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
-header h1 { font-size: 17px; margin: 0; }
-header .sub { color: var(--muted); font-size: 13px; }
+header h1 { font-size: var(--fs-h1); margin: 0; }
+header .sub { color: var(--muted); font-size: var(--fs-small); }
 /* What Lead Desk is for, kept short so it is whole at every width. */
 #purpose { font-weight: 400; }
 nav { display: flex; gap: 4px; margin-left: 12px; }
@@ -33,7 +36,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 8px 12px; border-radius: 8px; font: inherit; line-height: 1.45; cursor: pointer; white-space: nowrap; text-decoration: none; }
 .btn:hover { border-color: var(--muted); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.btn.small { padding: 4px 8px; font-size: 13px; }
+.btn.small { padding: 4px 8px; font-size: var(--fs-small); }
 .btn.danger { color: var(--bad); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 tbody tr.click:focus-visible { outline-offset: -2px; }
@@ -46,35 +49,35 @@ button[aria-busy="true"] { cursor: progress; }
 input, select, textarea { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; max-width: 100%; }
 textarea { width: 100%; min-height: 110px; resize: vertical; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
-.card h2 { font-size: 15px; margin: 0 0 4px; }
-.card h3 { font-size: 14px; margin: 16px 0 8px; }
-.card p.hint, .hint { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
-.counter { color: var(--muted); font-size: 13px; }
+.card h2 { font-size: var(--fs-h2); margin: 0 0 4px; }
+.card h3 { font-size: var(--fs-h3); margin: 16px 0 8px; }
+.card p.hint, .hint { color: var(--muted); font-size: var(--fs-small); margin: 4px 0 12px; }
+.counter { color: var(--muted); font-size: var(--fs-small); }
 .counter.over { color: var(--bad); font-weight: 600; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
-.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.kpi .l { color: var(--muted); font-size: 13px; }
+.kpi .v { font-size: var(--fs-kpi); font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: var(--fs-small); }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font-size: 13px; color: var(--muted); font-weight: 600; background: var(--panel); }
+th { font-size: var(--fs-small); color: var(--muted); font-weight: 600; background: var(--panel); }
 tbody tr.click { cursor: pointer; }
 tbody tr.click:hover { background: var(--accent-soft); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-.chip { display: inline-block; padding: 0 8px; border-radius: 10px; background: var(--chip); font-size: 13px; white-space: nowrap; }
+.chip { display: inline-block; padding: 0 8px; border-radius: 10px; background: var(--chip); font-size: var(--fs-small); white-space: nowrap; }
 .chip.good { background: var(--good-soft); color: var(--good); }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.bad { background: var(--bad-soft); color: var(--bad); }
 .chip.acc { background: var(--accent-soft); color: var(--accent); }
-.ch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
+.ch { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-small); white-space: nowrap; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--ch, var(--muted)); }
 /* Each outreach method's colour, for its dot and its bar on Results. */
 .c-door_hanger { --ch: var(--c-door_hanger); } .c-phone { --ch: var(--c-phone); } .c-property_manager { --ch: var(--c-property_manager); }
 .score { display: inline-block; min-width: 32px; text-align: center; font-weight: 650; border-radius: 8px; padding: 0 4px; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
-.small-line { color: var(--muted); font-size: 13px; }
+.small-line { color: var(--muted); font-size: var(--fs-small); }
 .datecell { white-space: nowrap; }
 a { color: var(--accent); }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
@@ -82,11 +85,11 @@ a { color: var(--accent); }
 .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-top: 12px; }
 .drawer { position: fixed; top: 0; right: 0; width: min(520px, 100%); height: 100%; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.12); overflow-y: auto; padding: 20px; z-index: 20; display: none; }
 .drawer.open { display: block; }
-.drawer h2 { margin: 0 32px 4px 0; font-size: 17px; }
+.drawer h2 { margin: 0 32px 4px 0; font-size: var(--fs-h1); }
 .drawer .close { position: absolute; top: 16px; right: 16px; }
 dl { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; margin: 12px 0; }
-dt { color: var(--muted); font-size: 13px; } dd { margin: 0; overflow-wrap: anywhere; }
-.script { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 13px; }
+dt { color: var(--muted); font-size: var(--fs-small); } dd { margin: 0; overflow-wrap: anywhere; }
+.script { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: var(--fs-small); }
 .bars { display: grid; gap: 12px; }
 .bar { display: grid; grid-template-columns: 210px 1fr 80px; align-items: center; gap: 12px; }
 .bar .track { height: 14px; background: var(--chip); border-radius: 8px; overflow: hidden; }
@@ -125,7 +128,7 @@ body:has(.drawer.open) { overflow: hidden; }
 /* The confirm dialog (instead of the browser's OK / Cancel box). */
 dialog#confirmBox { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--fg); padding: 20px; max-width: min(440px, calc(100% - 32px)); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
 dialog#confirmBox::backdrop { background: rgba(0,0,0,.4); }
-dialog#confirmBox h2 { font-size: 16px; margin: 0 0 8px; }
+dialog#confirmBox h2 { font-size: var(--fs-h2); margin: 0 0 8px; }
 dialog#confirmBox p { margin: 0 0 16px; color: var(--muted); }
 .row.end { justify-content: flex-end; }
 /* The "page not found" page. */
@@ -135,14 +138,25 @@ dialog#confirmBox p { margin: 0 0 16px; color: var(--muted); }
 .notice { background: var(--warn-soft); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
 .notice.info { background: var(--accent-soft); }
 .notice .hint { color: var(--fg); }
-/* The Leads tab: one status line above the list, the tools in one row. */
-.statusline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 12px; font-size: 13px; }
-.statusline .sep { color: var(--muted); }
-.toolbar { padding: 12px 16px; }
-.toolbar .tools { flex: 1 1 520px; }
-.toolbar #cLinks { flex: 1 1 220px; min-width: 200px; }
+/* The Leads tab: one status line above the list (no separator dots, so
+   nothing is left alone on a line when it wraps), and the occasional tools
+   in one menu, each with a line saying what it does. */
+.statusline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 0 0 8px; }
+.tools-menu { list-style: none; margin: -4px 0 12px; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.tools-menu[hidden] { display: none; }
+.tools-menu li { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.tool-desc { color: var(--muted); font-size: var(--fs-small); }
+.tools-menu .nowrap-row { flex-wrap: nowrap; width: 100%; }
+.tools-menu #cLinks { flex: 1 1 auto; min-width: 0; }
+/* The lead table fits a laptop: long names, chips and emails wrap or are
+   cut short rather than widening the table. */
+#leadTable td { overflow-wrap: anywhere; }
+#leadTable .chip, #leadTable .ch { white-space: normal; }
+#leadTable .datecell { overflow-wrap: normal; }
+.contactcell .email { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.caseline { font-variant-numeric: tabular-nums; }
 /* Find phone on a lead's row. */
-.phonecell .btn.small { margin: 2px 0; }
+.contactcell .btn.small { margin: 2px 0; }
 tr.findrow > td { background: var(--accent-soft); }
 .findphone .hint { color: var(--fg); margin-top: 0; }
 /* While the first page loads: rows the shape of leads. */
@@ -159,7 +173,7 @@ ol.setup-steps { margin: 0 0 8px; padding-left: 20px; display: grid; gap: 12px; 
 ol.setup-steps > li > .chip { margin-left: 4px; }
 /* A value that can't be saved: the box is outlined and the reason is under it. */
 [aria-invalid="true"] { border-color: var(--bad); outline: 1px solid var(--bad); }
-.field-error { color: var(--bad); font-size: 13px; font-weight: 600; margin: 4px 0 0; flex-basis: 100%; }
+.field-error { color: var(--bad); font-size: var(--fs-small); font-weight: 600; margin: 4px 0 0; flex-basis: 100%; }
 .field-error[hidden] { display: none; }
 .btn.danger-fill { background: var(--bad); border-color: var(--bad); color: var(--panel); }
 
@@ -193,21 +207,27 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
   main { padding: 12px; }
   .banner { padding: 8px 12px; }
   .btn, .btn.small, nav button, .tabs2 button, select, input:not([type=checkbox]):not([type=radio]) { min-height: 44px; }
-  .btn.small { padding: 8px 12px; font-size: 14px; }
+  .btn.small { padding: 8px 12px; }
   label.ch, .row > label { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   input[type=checkbox] { width: 20px; height: 20px; }
   .wide-pick { width: 100%; }
   .wide-pick select { flex: 1; min-width: 0; width: 100%; }
   .filters > * { flex: 1 1 100%; min-width: 0; }
   .m-only { display: inline-flex; }
-  #leadTools:not(.open) { display: none; }
   .filters:not(.open) > select { display: none; }
+  .tools-menu { grid-template-columns: 1fr; padding: 12px; }
+  .tools-menu .nowrap-row { flex-wrap: wrap; }
+  .statusline { flex-direction: column; align-items: stretch; gap: 4px; }
+  .statusline > * { max-width: 100%; }
+  .statusline .btn { white-space: normal; justify-content: center; text-align: center; }
+  .statusline .linkbtn { align-self: flex-start; }
+  .contactcell .email { max-width: 100%; }
   .linkbtn, details.hint summary { min-height: 44px; }
   details.hint summary { display: flex; align-items: center; }
   details.setup > summary { min-height: 44px; }
   .m-hide { display: none; }
   .filters input[type=search] { min-width: 0; }
-  #cLinks { min-width: 0 !important; flex: 1 1 100%; }
+  #cLinks { flex: 1 1 100%; }
   a[href^="tel:"], a[href^="mailto:"] { display: inline-flex; align-items: center; min-height: 44px; }
   .bar { grid-template-columns: 120px 1fr 60px; }
   dl { grid-template-columns: 96px 1fr; }
@@ -216,12 +236,10 @@ ol.setup-steps > li > .chip { margin-left: 4px; }
   table.cards, table.cards tbody, table.cards tr, table.cards td { display: block; width: 100%; }
   table.cards tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
   table.cards td { border: 0; padding: 4px 12px; display: flex; gap: 8px; align-items: baseline; text-align: left; }
-  table.cards td::before { content: attr(data-th); flex: 0 0 88px; color: var(--muted); font-size: 13px; }
+  table.cards td::before { content: attr(data-th); flex: 0 0 88px; color: var(--muted); font-size: var(--fs-small); }
   table.cards td.empty { display: block; }
   table.cards td.empty::before, table.cards tr.aprops td::before, table.cards tr.findrow td::before { content: none; }
   table.cards tr.findrow td { display: block; }
-  .statusline { font-size: 14px; }
-  .toolbar { padding: 12px; }
   table.cards td.m-hide { display: none; }
   table.cards td > div.row { flex: 1; }
 }

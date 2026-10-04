@@ -166,7 +166,7 @@ def test_ten_numbers_reach_the_top_ten_leads(tmp_path):
     app, conn = first_run(tmp_path)
     state = app.state({"list": "leads", "pass": "0"})
     assert state["counts"]["evictions_reachable"] == 0
-    assert state["top_reach"] == {"leads": 10, "reached": 0}
+    assert {k: state["top_reach"][k] for k in ("leads", "reached")} == {"leads": 10, "reached": 0}
     P = state["phone_pass"]
     names = [g["name"] for g in P["landlords"]]
     assert len(names) == 10 and len(set(names)) == 10 and P["more"] is True
@@ -180,7 +180,7 @@ def test_ten_numbers_reach_the_top_ten_leads(tmp_path):
         )
         assert out.get("also", 0) == g["leads"] - 1
     state = app.state({"list": "leads", "pass": "0"})
-    assert state["top_reach"] == {"leads": 10, "reached": 10}
+    assert {k: state["top_reach"][k] for k in ("leads", "reached")} == {"leads": 10, "reached": 10}
     assert state["phone_pass"]["done"] == 10
     # Every one of the top ten leads in the list can be called now.
     assert all(l["reach"] != "none" for l in state["list"]["leads"][:10])

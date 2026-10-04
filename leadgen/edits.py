@@ -21,12 +21,14 @@ from .forms import (
     _address_fields,
     _lead_id,
     _seconds_between,
+    check_responded_after_filing,
     field,
     money_value,
     notes_value,
+    responded_value,
 )
 from .geocode import CensusGeocoder
-from .util import Conn, is_paused, now_iso
+from .util import Conn, is_multifamily, is_paused, now_iso
 
 
 class LeadEdits:
@@ -69,12 +71,9 @@ class LeadEdits:
         if "notes" in fields:
             with field("notes"):
                 fields["notes"] = notes_value(fields["notes"])
-        if (
-            "responded_at" in fields
-            and fields["responded_at"] is not None
-            and not isinstance(fields["responded_at"], str)
-        ):
-            raise ValueError("Responded at must be text.")
+        if "responded_at" in fields:
+            with field("responded_at"):
+                fields["responded_at"] = responded_value(fields["responded_at"])
         if "owner_phone" in fields:
             raw_phone = str(fields["owner_phone"] or "").strip()
             fields["owner_phone"] = clean_phone(raw_phone) if raw_phone else None
@@ -111,6 +110,8 @@ class LeadEdits:
                 raise NotFound("That lead no longer exists. Reload the page.")
             if fields.get("address_source") == "confirmed" and not row["address"]:
                 raise ValueError("Add the property address first, then confirm it.")
+            if "responded_at" in raw and fields.get("responded_at"):
+                check_responded_after_filing(fields["responded_at"], row)
             revenue = fields.get("revenue_cents")
             if revenue and revenue != row["revenue_cents"] and "status" not in fields:
                 # Job revenue means the job was done: the lead is Won, from
@@ -144,6 +145,13 @@ class LeadEdits:
                 also = self._same_landlord_phone(conn, row, fields["owner_phone"])
             if address:
                 message = self._locate(conn, lead_id)
+            elif (
+                fields.get("address_source") == "confirmed" and is_multifamily(row["property_use"]) and not row["unit"]
+            ):
+                message = (
+                    "Complex confirmed. A door hanger still needs the tenant's unit number: type it under "
+                    "Property address, or ask the landlord about every case at this complex."
+                )
         return {"ok": True, **({"message": message} if message else {}), **({"also": also} if also else {})}
 
     def _same_landlord_phone(self, conn: Conn, row: Any, phone: str) -> int:

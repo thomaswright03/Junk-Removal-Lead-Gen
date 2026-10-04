@@ -695,7 +695,7 @@ class DownParcels(FakeParcels):
 def test_assessor_outage_leaves_leads_for_the_next_run(caplog):
     conn = db.connect(":memory:")
     parcels = seed(conn)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG"):
         counts = enrich(conn, DownParcels([]))
     # Three code cases (by parcel) and the eviction's landlord: all failed, none marked as looked up.
     assert counts["errors"] == 4 and counts["found"] == counts["not_found"] == 0
@@ -707,7 +707,7 @@ def test_assessor_outage_leaves_leads_for_the_next_run(caplog):
 
     # A lead with only an address: the address match fails the same way.
     conn.execute("UPDATE leads SET parcel = NULL, enriched_at = NULL WHERE source_id = 'CE-2'")
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG"):
         counts = enrich(conn, DownParcels([]))
     assert counts["errors"] == 1
     assert "owner lookup failed for lead" in caplog.text

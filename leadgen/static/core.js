@@ -195,12 +195,13 @@ function showFieldErrors(e, boxes) {
 // ---------- helpers ---------------------------------------------------------
 const chName = c => S.channels[c] || "Unassigned";
 const chDot = c => c ? `<span class="ch"><span class="dot c-${c}"></span>${esc(chName(c))}</span>` : `<span class="muted">–</span>`;
-// The priority number, with what it is made of on hover (and read out by
-// screen readers): "Eviction 35 · owner lives elsewhere 20 · filed 3 days ago 15".
-const scoreParts = l => (l.score_parts || []).map(([t, p]) => `${t} ${p}`).join(" · ");
+// The priority number, with why it ranks there in plain words on hover (and
+// read out by screen readers): "Eviction notice, filed 3 days ago; company
+// landlord" (worked out on the server: outreach.priority_reason).
+const priorityWhy = l => l.priority_reason || "Nothing stands out yet";
 function scoreChip(l) {
   const s = l.score, cls = s >= 60 ? "good" : s >= 40 ? "acc" : s >= 25 ? "warn" : "";
-  const why = scoreParts(l);
+  const why = priorityWhy(l);
   return `<span class="score chip ${cls}" title="Priority ${s}: ${esc(why)}" aria-label="Priority ${s}: ${esc(why)}">${s}</span>`;
 }
 const STATUS_LABEL = { new: "New", contacted: "Contacted", responded: "Responded", quoted: "Quoted", won: "Won", lost: "Lost", skip: "Skip", stale: "Old" };
@@ -233,12 +234,15 @@ const fullAddress = l => l.address ? l.address + (l.unit ? " #" + String(l.unit)
 // manufactured home park...): the server decides, with one rule.
 const isMultifamily = l => !!l.multi_home;
 // Where an address came from, when it isn't certain: a guess from the
-// landlord's parcels, or an apartment complex with no unit number.
+// landlord's parcels, or a whole complex with no unit number (worked
+// through the landlord until the unit is known).
 function addressNote(l, plain) {
   const notes = [];
-  if (l.address_source === "landlord") notes.push([`landlord's only ${isMultifamily(l) ? "complex" : "property"} — confirm`,
-    "Court cases list no address. The landlord owns one property in the county, so the eviction is probably there. It's a guess, so no door hanger goes there until you check it and press Confirm address on the lead."]);
-  if (l.door_hanger_problem === "needs_unit") notes.push(["unit needed for a door hanger", "More than one home on this parcel (apartments, condos, a mobile or manufactured home park): type the unit or space number, or confirm the address, before a door hanger goes out."]);
+  const complex = l.door_hanger_problem === "needs_unit";
+  if (l.address_source === "landlord") notes.push([complex ? "landlord's only complex — unit needed" : "landlord's only property — confirm",
+    complex ? "Court cases list no address. The landlord owns one complex in the county, so the eviction is probably there, but a door hanger needs the tenant's unit. Until then, call the landlord."
+      : "Court cases list no address. The landlord owns one property in the county, so the eviction is probably there. It's a guess, so no door hanger goes there until you check it and press Confirm address on the lead."]);
+  else if (complex) notes.push(["complex — unit needed", "More than one home on this parcel (apartments, condos, a mobile or manufactured home park): a door hanger needs the unit or space number. Until then, call the landlord (about every case here at once)."]);
   if (plain) return notes.map(n => n[0]).join("; ");
   return notes.map(([t, tip]) => ` <span class="chip warn" title="${esc(tip)}">${esc(t)}</span>`).join("");
 }
@@ -267,7 +271,7 @@ function fillText(text, channel, l) {
     .replaceAll("{at_address}", addr ? ` at ${addr}` : "")
     .replaceAll("{address}", addr || "your property")
     .replaceAll("{phone}", phone)
-    .replaceAll("{business}", st.business_name || "");
+    .replaceAll("{business}", st.business_name || "[business name]");
 }
 // A warning when this method's message would go out with no phone number:
 // the template has {phone} but neither a tracking number nor the main phone
@@ -295,13 +299,13 @@ function noticeChip(l) {
   if (l.lead_type === "code_violation") return ` <span class="chip acc" title="Open City of Tucson code-enforcement case (code cases cover the City of Tucson only)">city code case</span>`;
   if (l.lead_type !== "eviction") return "";
   const stage = l.case_stage;
-  if (stage === "writ") return ` <span class="chip bad" title="Writ of restitution: the tenant is being locked out, so the unit needs clearing now">writ issued${l.writ_date ? " " + esc(fmtDate(l.writ_date)) : ""}</span>`;
-  if (stage === "judgment") return ` <span class="chip warn" title="The court ruled for the landlord; a writ (lockout) usually follows within days">judgment${l.judgment_date ? " " + esc(fmtDate(l.judgment_date)) : ""}</span>`;
+  if (stage === "writ") return ` <span class="chip bad" title="Writ of restitution (lockout order): the tenant must leave within days, so the unit needs clearing now">writ issued${l.writ_date ? " " + esc(fmtDate(l.writ_date)) : ""}</span>`;
+  if (stage === "judgment") return ` <span class="chip warn" title="Judgment: the court ruled for the landlord. A lockout order (writ) usually follows within days, then the unit needs clearing">judgment${l.judgment_date ? " " + esc(fmtDate(l.judgment_date)) : ""}</span>`;
   if (stage === "dismissed") return ` <span class="chip" title="The case was dismissed, or the court ruled for the tenant: no clean-out">dismissed</span>`;
   if (stage === "satisfied") return ` <span class="chip" title="Satisfaction of judgment: the tenant paid, so the eviction is over">judgment paid</span>`;
   if (stage === "closed") return ` <span class="chip" title="The court closed the case with no judgment for the landlord and no writ">case closed</span>`;
-  if (l.eviction_notice === 1) return ` <span class="chip good" title="An eviction notice is filed in the court case">notice filed</span>`;
-  if (l.eviction_notice === 0) return ` <span class="chip" title="No eviction notice in the case documents yet">no notice yet</span>`;
+  if (l.eviction_notice === 1) return ` <span class="chip good" title="Eviction notice filed in the court case: the eviction is under way, and a clean-out may be needed once the tenant leaves">notice filed</span>`;
+  if (l.eviction_notice === 0) return ` <span class="chip" title="No eviction notice in the case documents yet: too early to tell whether a clean-out will be needed">no notice yet</span>`;
   return ` <span class="chip warn" title="${l.url ? "Case page not read yet; the daily check reads it, or press Update court cases." : "Added by you, with no court case link to check."}">${l.url ? "case not checked" : "added by you"}</span>`;
 }
 // One date format everywhere: "Oct 1, 2026" and "2:00 PM". Plain dates are
@@ -342,7 +346,7 @@ function phoneCell(l) {
 // Evictions with no phone, email or known address can't be contacted yet.
 function reachChip(l) {
   if (l.lead_type !== "eviction" || l.reach !== "none") return "";
-  return ` <span class="chip warn" title="No phone, email or confirmed property address yet. Find phone finds a number now; Google lookups or a court records request fill in more.">can't reach yet</span>`;
+  return ` <span class="chip warn" title="No phone, email or usable property address yet. Find phone finds a number now; Google lookups or a court records request fill in more.">can't reach yet</span>`;
 }
 function emailCell(l) {
   return l.owner_email ? `<a href="mailto:${esc(l.owner_email)}">${esc(l.owner_email)}</a>` : '<span class="muted">–</span>';

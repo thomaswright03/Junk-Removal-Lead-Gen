@@ -343,6 +343,7 @@ def connect(path: Any) -> Conn:
         conn = pg.Connection(str(path))
         if str(path) not in _READY:
             conn.executescript(pg.SCHEMA)
+            _keep_old_defaults(conn)
             for col, kind in _ADDED_COLUMNS.items():
                 conn.execute(f"ALTER TABLE leads ADD COLUMN IF NOT EXISTS {col} {pg.TYPES.get(kind, kind)}")
             for col, kind in _ADDED_TOUCH_COLUMNS.items():
@@ -378,6 +379,7 @@ def forget_ready() -> None:
 
 
 def _migrate(conn: Conn) -> None:
+    _keep_old_defaults(conn)
     have = {r["name"] for r in conn.execute("PRAGMA table_info(leads)")}
     added = [c for c in _ADDED_COLUMNS if c not in have]
     for col in added:
@@ -459,6 +461,28 @@ def write_lock(conn: Conn, lead_ids: Sequence[int] = ()) -> Iterator[None]:
     except BaseException:
         conn.rollback()
         raise
+    conn.commit()
+
+
+def _keep_old_defaults(conn: Conn) -> None:
+    """Once per database, before anything else writes a setting: a database
+    in use before the business name and base address started out blank
+    keeps the values it ran with (outreach.LEGACY_DEFAULTS), saved, unless
+    it already has its own. A new, empty database is only marked, so Lead
+    Desk asks for both."""
+    if conn.execute("SELECT 1 FROM settings WHERE key = 'old_defaults_kept'").fetchone():
+        return
+    in_use = (
+        conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone()
+        or conn.execute("SELECT 1 FROM leads LIMIT 1").fetchone()
+    )
+    values: dict[str, Any] = {"old_defaults_kept": True}
+    if in_use:
+        from .outreach import LEGACY_DEFAULTS
+
+        have = {r["key"] for r in conn.execute("SELECT key FROM settings").fetchall()}
+        values.update({k: v for k, v in LEGACY_DEFAULTS.items() if k not in have})
+    put_settings(conn, values)
     conn.commit()
 
 

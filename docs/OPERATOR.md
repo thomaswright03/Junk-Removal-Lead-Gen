@@ -35,17 +35,36 @@ found a number for.
 
 ## The Leads tab
 
-The list comes first. Above it are one status line and one toolbar:
+The list comes first. Above it are the filters, one status line and the
+one next step; **Check for new evictions** is in the header:
 
-- **Status line:** "N of M open eviction leads can be reached now".
-  - **Show the N that can't** filters to the leads still to work on.
-  - **Find phones for the top 10** opens the first-phones pass (below).
-  - **Get phones and addresses** opens the setup steps. A chip says how many
-    steps are left.
-  - **How this works** opens the explanations, the area coverage note and a
-    glossary (notice, judgment, writ, parcel).
-- **Toolbar:** search, filters and the buttons (Check for new evictions,
-  Update court cases, Find landlord phones, Add cases, Import).
+- **Filters:** Show (the view), search, kind of lead, status, outreach
+  method and order, then **More tools**.
+- **Status line:** "N of M open eviction leads can be reached now", then the
+  next step: **Find phones for the top 10** while any of the top ten can't be
+  reached (it opens the first-phones pass, below), and **How this works**
+  (the explanations, the coverage note and a glossary of the court and
+  property words). To list the leads still to work on, pick **Can't be
+  reached yet** under the kind of lead.
+- **Top 10 line:** how many of the top ten can be reached, and what Lead
+  Desk's free lookup found for them ("found numbers for 1 of the 3 it looked
+  up"). When that's little and no Google key is set, it says so and offers
+  the Google option with its cost.
+- **More tools** holds the occasional tools, each with a line saying what it
+  does: Add cases (paste case links), Update court cases, Find landlord
+  phones now, Import a court file or saved page, Import phones / emails,
+  Download the phone-lookup list, and Set up phone lookups and court
+  addresses (a chip says how many setup steps are left).
+- **First run:** until the business name and base address are saved, a card
+  above the list asks for them. Messages use the name; miles and routes start
+  from the address, and stay blank until it's set.
+
+Each eviction row shows its case number and the tenant's surname, so two
+cases at one complex never look the same. When several open cases share an
+address, **N cases at this complex** lists them together: call the landlord
+about all of them at once. Hover a priority number for why it ranks there,
+in words ("Eviction notice, filed 3 days ago; company landlord"), and a court
+stage chip (notice filed, judgment, writ) for what it means for a clean-out.
 
 **Show** picks the view:
 
@@ -114,8 +133,9 @@ minute.
 
 ### Phone lookups that run by themselves
 
-**Find landlord phones & emails**, which also runs in the daily check, looks
-up office numbers for businesses only. Owners who are people are never
+**Find landlord phones now** (under More tools), which also runs in the
+daily check, looks up office numbers for businesses only, starting at the
+top of the list, so the best leads are looked up first. Owners who are people are never
 looked up this way. It uses:
 
 - **OpenStreetMap (free):**
@@ -127,7 +147,9 @@ looked up this way. It uses:
 - **The company's website**, for a phone and email.
 - **Google Places**, only if you add a key:
   - It finds most apartment complexes and property managers.
-  - **Get phones and addresses → How to get a key** lists the exact clicks.
+  - **More tools → Set up phone lookups and court addresses → How to get a
+    key** lists the exact clicks.
+  - Saving a key looks up again the leads the free lookup found nothing for.
   - Google gives about 1,000 searches a month free, then charges about $35
     per 1,000.
   - Lead Desk stops at 30 a day and 1,000 a month unless you change the
@@ -136,9 +158,10 @@ looked up this way. It uses:
 Other ways to get numbers:
 
 - **Skip-trace file:**
-  1. **Download skip-trace list** writes the owners still missing a phone.
+  1. **Download the phone-lookup list** (More tools) writes the owners still
+     missing a phone.
   2. Send it to a skip-tracing service (paid per record).
-  3. **Import phones / emails** brings back the file the service sends.
+  3. **Import phones / emails** (More tools) brings back the file the service sends.
      Imports only fill empty fields.
 - **Type a number into the lead.** Hand-entered numbers are never
   overwritten.
@@ -153,8 +176,8 @@ upcoming hearings. Cases already past their hearing, which are the judgments
 and writs that need clearing now, come in only through a Justice Court
 records request.
 
-The records card sits above the address queue (below), and **Get phones and
-addresses** links to it:
+The records card sits above the address queue (below), and **More tools →
+Set up phone lookups and court addresses** links to it:
 
 - **What to ask for:**
   - The first request covers the last month. Later ones cover the dates since
@@ -163,7 +186,8 @@ addresses** links to it:
 - **Copy the request**, then open the court's form from the link.
 - **I've sent the request** records the date. The next one is due two weeks
   later.
-- **Import the court's file** (or **Import court page / CSV**) takes the file
+- **Import the court's file** (or **More tools → Import a court file or saved
+  page**) takes the file
   the court sends:
   - Rows for cases already in Lead Desk fill in their address. An address
     you typed or confirmed is kept.
@@ -177,8 +201,14 @@ with no address or only a guess:
 - **Landlord's properties** lists the landlord's parcels, with a **Use**
   button on each.
 
-An address on a parcel with more than one home needs a unit number, or
-**Confirm address**, before a door hanger goes there.
+An address on a parcel with more than one home (an apartment complex, a
+mobile home park) needs the tenant's unit number before a door hanger goes
+there. Without it the whole complex is not counted as an address a door
+hanger can go to, nor as "can be reached": the row says **complex — unit
+needed**, the lead page asks for the unit, and the lead is worked through the
+landlord (ask for the unit when you call). Confirming a guessed complex
+records that the tenant lived there; it doesn't replace the unit. A guessed
+single home only needs **Confirm address**.
 
 ### Priority
 
@@ -241,7 +271,10 @@ cost.
 
 ## Settings
 
-- Business name and phone.
+- Business name, phone and base address. A new install starts with these
+  blank and asks for the name and address on the Leads tab; miles stay
+  blank until the base address is saved. (An install from before this kept
+  the name and address it ran with.)
 - A tracking number and cost per contact for each outreach method.
 - Message templates. Each one is previewed with one of your leads of the
   kind it is for, from any view.
@@ -262,8 +295,9 @@ To stop only Google, untick **Use Google lookups**, or set its limits to 0.
 
 ## Language
 
-English only, for now. Spanish waits until it is asked for (see
-[DECISIONS.md](DECISIONS.md)).
+English only, for now: every page, script and door-hanger message is in
+English, and there is no language switch. Spanish waits until the client asks
+for it (see [DECISIONS.md](DECISIONS.md)).
 
 ## How Lead Desk reads a court case
 

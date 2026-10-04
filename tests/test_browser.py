@@ -71,7 +71,16 @@ def server(tmp_path):
     )
     conn.execute("UPDATE leads SET owner_name = 'ROE RIVER', owner_entity = 0 WHERE source_id = 'CE-1'")
     conn.execute("UPDATE leads SET owner_phone = '(520) 555-0101' WHERE source_id = 'CV26-000001-EA'")
-    db.put_settings(conn, {"lead_view": "all", "base_lat": 32.36, "base_lon": -111.12})
+    db.put_settings(
+        conn,
+        {
+            "lead_view": "all",
+            "business_name": "Steve's Junk Removal",
+            "base_address": "1 Example Base Rd, Tucson, AZ",
+            "base_lat": 32.36,
+            "base_lon": -111.12,
+        },
+    )
     conn.commit()
     app = App(path, geocoder=NoGeocode(), parcel_client=NoParcels())
     handler = type("H", (Handler,), {"app": app})
@@ -174,13 +183,18 @@ def test_details_priority_and_header_are_readable(server, page):
     assert page.is_hidden("#subDetails")
     page.click("#subMore")
     page.wait_for_selector("#subDetails >> text=2 owner lookups failed")
-    # Hovering the priority shows what it is made of.
+    # Hovering the priority says why it ranks there, in words, not a points formula.
     chip = lead_row(page, "Example Homes").locator(".score")
-    assert chip.get_attribute("title").startswith("Priority ") and "Eviction 35" in chip.get_attribute("title")
+    why = chip.get_attribute("title")
+    assert why.startswith("Priority ") and "Eviction notice, filed" in why and "35" not in why and " · " not in why
+    # The court stage says what it means for a clean-out.
+    assert "clean-out" in lead_row(page, "Example Homes").locator(".chip", has_text="notice filed").get_attribute(
+        "title"
+    )
     # Details: readable lines, nothing the drawer already shows.
     lead_row(page, "Example Homes").click()
     page.wait_for_selector("#drawer.open")
-    assert "Eviction 35" in page.inner_text("#dWhy")
+    assert "Eviction notice, filed" in page.inner_text("#dWhy") and "35" not in page.inner_text("#dWhy")
     text = page.inner_text("#drawer dl")
     assert " | " not in text and "Eviction Action" not in text
     # An eviction with no address says how to find it.
@@ -545,13 +559,23 @@ def test_dates_and_guessed_addresses_are_labelled(server, page):
         assert cell.split()[0] in ("Filed", "Opened", "Hearing", "Writ", "Judgment"), cell
     assert any(c.startswith("Hearing") and "2099" in c for c in cells)
     row = lead_row(page, "100 W Example Apts")
-    assert "landlord's only complex — confirm" in row.inner_text()
+    # A whole complex: the missing item is the unit, and the case tells the row apart.
+    assert "landlord's only complex — unit needed" in row.inner_text()
+    assert "CV26-000001-EA · tenant Doe" in row.inner_text()
     row.click()
     page.wait_for_selector("#dConfirm")
+    assert "Unit or space number needed" in page.inner_text("#dUnitNeeded")
     assert page.locator("#dChannel option[value=door_hanger]").is_disabled()
     page.click("#dConfirm")
-    page.wait_for_selector("text=Address confirmed")
+    page.wait_for_selector("text=Complex confirmed")
     page.wait_for_selector("#drawer.open:not(:has(#dConfirm))")
+    # Confirming the complex isn't a door: still no door hanger until the unit is typed.
+    assert page.locator("#dChannel option[value=door_hanger]").is_disabled()
+    assert page.locator("#dUnitNeeded").is_visible()
+    page.fill("#dUnit", "12")
+    page.click("#dSaveAddress")
+    page.wait_for_selector("text=Address saved")
+    page.wait_for_selector("#drawer.open:not(:has(#dUnitNeeded))")
     assert not page.locator("#dChannel option[value=door_hanger]").is_disabled()
 
 
@@ -676,14 +700,22 @@ def add_unreachable_eviction(path):
 def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
     url, app, path = server
     add_unreachable_eviction(path)
+    conn = db.connect(path)  # the morning check looked its landlord up and found nothing
+    conn.execute("UPDATE leads SET contact_checked_at = '2026-10-03T13:00:00+00:00' WHERE source_id = 'CV26-000002-EA'")
+    conn.commit()
     app.providers = []  # "find phones" looks nothing up here
     page.goto(url)
     # One status line above the list says how many can be reached and how many
     # steps are left; the guide opens from it (shut, so the list starts on screen).
     page.wait_for_selector("#leadTable tbody tr[data-id]")
     assert "1 of 2 open eviction leads can be reached now" in page.inner_text("#reachLine")
-    assert "2 steps to do" in page.inner_text("#reachLine")
+    # The free lookup found nothing for the top leads: Google is offered, with its cost, above the list.
+    assert "Top 2 leads" in page.inner_text("#topYield") and "1,000 lookups a month are free" in page.inner_text(
+        "#topYield"
+    )
     assert page.locator("#setupGuide").count() == 0
+    page.click("#toolsToggle")
+    assert "2 steps to do" in page.inner_text("#leadTools")
     page.click("#setupShow")
     guide = page.locator("#setupGuide")
     guide.wait_for()
@@ -718,10 +750,10 @@ def test_first_run_guide_explains_how_to_reach_eviction_leads(server, page):
     assert db.get_settings(db.connect(path))["records_requested"]["date"]
     page.click("#setupHide")
     page.wait_for_selector("#setupGuide", state="detached")
-    # The reach numbers stay above the list, with the way back to the guide.
+    # The reach numbers stay above the list, with the way back to the guide under More tools.
     assert "1 of 2 open eviction leads can be reached now" in page.inner_text("#reachLine")
-    assert "to do" not in page.inner_text("#reachLine")
-    page.click("#fUnreach")
+    assert "to do" not in page.inner_text("#leadTools")
+    page.select_option("#fType", "unreachable")
     page.wait_for_function("document.querySelectorAll('#leadTable tbody tr[data-id]').length === 1")
     assert "Sample Properties" in page.inner_text("#leadTable")
 
@@ -1105,13 +1137,13 @@ def test_theme_colour_and_column_names_stay_in_view(server, page):
 def test_the_page_never_scrolls_sideways_on_a_tablet_or_laptop(server, page, width):
     """From 721 px (the card layout ends) up, the page is never wider than
     the window: a table too wide for it scrolls in its own box, with its
-    column names in view, and the Phone column can be scrolled to."""
+    column names in view, and the Contact column can be scrolled to."""
     url, app, path = server
     page.set_viewport_size({"width": width, "height": 800})
     page.goto(url)
     page.wait_for_selector("#leadTable tbody tr[data-id]")
     page.wait_for_function("document.documentElement.scrollWidth === window.innerWidth")
-    phone = page.locator("#leadTable thead th", has_text="Phone")
+    phone = page.locator("#leadTable thead th", has_text="Contact")
     phone.scroll_into_view_if_needed()
     box = phone.bounding_box()
     assert 0 <= box["x"] and box["x"] + box["width"] <= width, box
@@ -1131,6 +1163,7 @@ def test_box_hints_are_whole_on_a_computer(server, page, width):
     page.set_viewport_size({"width": width, "height": 800})
     page.goto(url)
     page.wait_for_selector("#leadTable tbody tr[data-id]")
+    page.click("#toolsToggle")
     cut = page.evaluate(
         """['#cLinks', '#q'].filter(sel => {
           const el = document.querySelector(sel), cs = getComputedStyle(el);
@@ -1195,3 +1228,138 @@ def test_first_phones_pass_reaches_the_top_leads_from_the_status_line(server, pa
     page.wait_for_selector("#passUnskip")
     page.click("#passHide")
     assert page.locator("#phonePass").count() == 0
+
+
+def test_the_leads_screen_shows_the_list_and_one_next_step(server, page):
+    """At 1440 px: the list, its search and filters, Check for new evictions
+    and one next step. The occasional tools are in one menu, each saying
+    what it does."""
+    url, app, path = server
+    add_unreachable_eviction(path)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    primary = page.evaluate(
+        "[...document.querySelectorAll('header .btn.primary, #tab-leads .btn.primary')].filter(e => e.offsetParent)"
+        ".map(e => e.textContent.trim())"
+    )
+    assert primary == ["Check for new evictions", "Find phones for the top 2 (about 15 minutes)"], primary
+    above = page.evaluate(
+        """(() => { const top = document.querySelector('#leadTable').getBoundingClientRect().top;
+          const all = document.querySelectorAll('#tab-leads :is(button, select, input, a, label.btn)');
+          return [...all].filter(e => e.offsetParent && e.getBoundingClientRect().bottom <= top)
+            .map(e => e.id || e.textContent.trim()); })()"""
+    )
+    # Show, search, four filters, More tools, the next step and How this works.
+    assert above == ["fView", "q", "fType", "fStatus", "fChannel", "fSort", "toolsToggle", "passShow", "helpToggle"], (
+        above
+    )
+    assert page.is_hidden("#leadTools")
+    page.click("#toolsToggle")
+    tools = page.locator("#leadTools > li")
+    assert tools.count() == 7
+    for i in range(tools.count()):
+        assert len(tools.nth(i).locator(".tool-desc").inner_text()) > 30
+    for label in (
+        "Add cases",
+        "Update court cases",
+        "Find landlord phones now",
+        "Import a court file",
+        "Import phones",
+    ):
+        assert label in page.inner_text("#leadTools")
+
+
+@pytest.mark.parametrize("width", [1280, 1440])
+def test_the_lead_table_fits_a_laptop_with_status_in_view(server, page, width):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    conn = db.connect(path)
+    conn.execute(
+        "UPDATE leads SET owner_email = 'leasing.office.for.the.whole.portfolio@example-property-management.com', "
+        "address = '12345 N VERY LONG SAMPLE BOULEVARD EXTENSION', property_use = 'APARTMENTS 100+ UNITS', "
+        "address_source = 'landlord' WHERE source_id = 'CV26-000002-EA'"
+    )
+    conn.commit()
+    page.set_viewport_size({"width": width, "height": 800})
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    fit = page.evaluate(
+        "(() => { const w = document.querySelector('#leadTable').closest('.tablewrap');"
+        " return [w.scrollWidth, w.clientWidth]; })()"
+    )
+    assert fit[0] <= fit[1], fit
+    status = page.locator("#leadTable thead th", has_text="Status").bounding_box()
+    assert status["x"] + status["width"] <= width, status
+    headers = page.locator("#leadTable thead th").all_inner_texts()
+    assert "Contact" in headers and "Email" not in headers and "Phone" not in headers
+
+
+def test_tenants_at_one_complex_are_told_apart_and_grouped(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    for case, tenant in (("CV26-000011-EA", "ROE, SAM"), ("CV26-000012-EA", "POE, JO")):
+        db.upsert(
+            conn,
+            Lead(
+                "pima_jp_calendar",
+                case,
+                "eviction",
+                "2026-09-28",
+                None,
+                plaintiff="VERTICAL EXAMPLE LLC",
+                defendant=tenant,
+                in_pima=True,
+                eviction_notice=True,
+            ),
+        )
+    conn.execute(
+        "UPDATE leads SET address = '2050 N SAMPLE RD', address_norm = '2050 N SAMPLE RD', "
+        "property_use = 'APARTMENTS 100+ UNITS', next_court_date = '2026-10-05 09:00' "
+        "WHERE plaintiff = 'VERTICAL EXAMPLE LLC'"
+    )
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#leadTable tbody tr[data-id]")
+    rows = page.locator("#leadTable tbody tr.click", has_text="2050 N Sample Rd")
+    assert rows.count() == 2
+    a, b = rows.nth(0).inner_text(), rows.nth(1).inner_text()
+    assert a != b
+    assert {"tenant Roe" in a or "tenant Roe" in b, "tenant Poe" in a or "tenant Poe" in b} == {True}
+    assert "2 cases at this complex" in a and "complex — unit needed" in a
+    # The button lists the complex's cases together (the landlord answers for all of them).
+    rows.nth(0).locator("[data-sameaddr]").click()
+    page.wait_for_function("document.querySelectorAll('#leadTable tbody tr.click').length === 2")
+    assert page.input_value("#q") == "2050 N SAMPLE RD"
+
+
+def test_a_new_install_asks_for_the_business_name_and_base_address(server, page):
+    url, app, path = server
+    conn = db.connect(path)
+    db.put_settings(conn, {"business_name": "", "base_address": "", "base_lat": None, "base_lon": None})
+    conn.commit()
+    page.goto(url)
+    page.wait_for_selector("#firstRun")
+    assert all(m == "–" for m in page.locator("#leadTable td[data-th=Miles]").all_inner_texts())
+    page.click("#frSave")
+    page.wait_for_selector("#frName-err:not([hidden])")
+    page.fill("#frName", "Desert Haul")
+    page.fill("#frBase", "1 W Example St, Tucson, AZ")
+    page.click("#frSave")
+    page.wait_for_selector("#firstRun", state="detached")
+    saved = db.get_settings(db.connect(path))
+    assert saved["business_name"] == "Desert Haul" and saved["base_address"] == "1 W Example St, Tucson, AZ"
+
+
+def test_the_status_line_stacks_cleanly_on_a_phone(server, page):
+    url, app, path = server
+    add_unreachable_eviction(path)
+    page.set_viewport_size({"width": 375, "height": 740})
+    page.goto(url)
+    page.wait_for_selector("#reachLine")
+    # No separator dots to be left alone on a line, and each item starts at the left edge.
+    assert "·" not in page.inner_text("#reachLine")
+    lefts = page.evaluate(
+        "[...document.querySelectorAll('#reachLine > *')].map(e => Math.round(e.getBoundingClientRect().left))"
+    )
+    assert len(set(lefts)) == 1, lefts

@@ -238,7 +238,7 @@ def enrich_landlords(
         try:
             owner, site = landlord_property(client, r["plaintiff"])
         except Exception as e:  # assessor unreachable: left for the next run
-            log.warning("landlord lookup failed for lead %s: %s", r["id"], type(e).__name__)
+            log.debug("landlord lookup failed for lead %s: %s", r["id"], type(e).__name__)
             counts["errors"] += 1
             continue
         fields = {}
@@ -279,7 +279,7 @@ def enrich_lead(
         try:
             attrs = client.by_site_address(row["address"])
         except Exception as e:
-            log.warning("owner lookup failed for lead %s: %s", row["id"], type(e).__name__)
+            log.debug("owner lookup failed for lead %s: %s", row["id"], type(e).__name__)
             return None
     now = now or now_iso()
     if not attrs:
@@ -356,7 +356,7 @@ def enrich(
     try:
         by_parcel = client.by_parcels(r["parcel"] for r in rows if r["parcel"])
     except Exception as e:
-        log.warning("owner lookup by parcel failed for %d leads: %s", len(rows), type(e).__name__)
+        log.debug("owner lookup by parcel failed for %d leads: %s", len(rows), type(e).__name__)
         errors += sum(1 for r in rows if r["parcel"])
         rows = [r for r in rows if not r["parcel"]]
         by_parcel = {}

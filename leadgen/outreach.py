@@ -90,10 +90,16 @@ TOUCH_KINDS = {
     "property_manager": [["emailed", "Emailed"], ["voicemail", "Left voicemail"], ["talked", "Talked"]],
 }
 
+# What a database made before these were blank used as its business name and
+# base address: db.py saves them into such a database once, so an install
+# that never typed them keeps them. A new install starts blank and Lead Desk
+# asks for both (miles stay hidden until a base address is saved).
+LEGACY_DEFAULTS = {"business_name": "Steve's Junk Removal", "base_address": "8790 N Wellside Dr, Tucson, AZ"}
+
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "business_name": "Steve's Junk Removal",
+    "business_name": "",
     "business_phone": "",
-    "base_address": "8790 N Wellside Dr, Tucson, AZ",
+    "base_address": "",
     "base_lat": None,
     "base_lon": None,
     # Which leads Lead Desk shows and assigns: "eviction_notice" (eviction
@@ -305,6 +311,34 @@ def score_parts(
     return parts
 
 
+def priority_reason(lead: LeadRow, parts: list[tuple[str, int]]) -> str:
+    """Why a lead ranks where it does, in plain words: ``score_parts``
+    without the points, e.g. "Eviction notice, filed 3 days ago; company
+    landlord; several cases on the list for this landlord"."""
+    eviction = _get(lead, "lead_type") == "eviction"
+    labels = [label for label, _points in parts]
+    known = {"Eviction", "writ issued", "judgment", "owner lives elsewhere", "company owner", "repeat owner"}
+    recent = next((x for x in labels if x not in known and not x.startswith("Code case")), "")
+    if "writ issued" in labels:
+        first = "lockout ordered (writ): the unit needs clearing now"
+    elif "judgment" in labels:
+        first = "court ruled for the landlord: a lockout usually follows within days"
+    elif eviction:
+        first = "eviction notice" if _get(lead, "eviction_notice") else "eviction case"
+    else:
+        code = next((x for x in labels if x.startswith("Code case")), "Code case")
+        first = f"City code case for {code.split(': ', 1)[1]}" if ": " in code else "City code case"
+    out = [f"{first}, {recent}" if recent else first]
+    if "owner lives elsewhere" in labels:
+        out.append("owner lives elsewhere (a landlord)")
+    if "company owner" in labels:
+        out.append("company landlord" if eviction else "company owner")
+    if "repeat owner" in labels:
+        out.append("several cases on the list for this " + ("landlord" if eviction else "owner"))
+    text = "; ".join(out)
+    return text[:1].upper() + text[1:]
+
+
 # How far an eviction has got, for the list order: a writ (lockout) means the
 # unit needs clearing now, a judgment means a writ usually follows within days.
 # Every recent writ case comes before every recent judgment case, which comes
@@ -362,17 +396,21 @@ def door_hanger_problem(lead: LeadRow) -> Optional[str]:
       tenant may never have lived there.
     - ``"needs_unit"``: a parcel with more than one home (apartments, condos,
       a mobile or manufactured home park; see util.is_multifamily) and no
-      unit number, so there's no single door to hang it on.
+      unit number, so there's no single door to hang it on. The whole
+      complex is not an address for the evicted household: until the unit
+      is known the lead is worked through the landlord. Confirming the
+      complex doesn't change that; typing the unit does.
 
-    Typing the unit, or confirming the address on the lead, clears the last two."""
+    Typing the unit clears both; confirming the address clears the second
+    on a single home."""
     if not lead["address"]:
         return "no_address"
-    if _get(lead, "unit") or _get(lead, "address_source") == "confirmed":
+    if _get(lead, "unit"):
         return None
-    if _get(lead, "address_source") == "landlord":
-        return "unconfirmed"
     if is_multifamily(_get(lead, "property_use")):
         return "needs_unit"
+    if _get(lead, "address_source") == "landlord":
+        return "unconfirmed"
     return None
 
 

@@ -60,9 +60,9 @@ function renderSettings() {
     </div>
     <div class="card"><h2>Business</h2>
       <div class="grid4">
-        <label>Business name<br><input id="sName" class="w-full" value="${esc(st.business_name)}">${fieldError("sName")}</label>
+        <label>Business name<br><input id="sName" class="w-full" value="${esc(st.business_name)}" placeholder="e.g. Desert Junk Removal">${fieldError("sName")}</label>
         <label>Main phone<br><input id="sPhone" value="${esc(st.business_phone)}" placeholder="(520) 555-0100" class="w-full">${fieldError("sPhone")}</label>
-        <label>Base address (for miles and routes)<br><input id="sBase" class="w-full" value="${esc(st.base_address)}">${fieldError("sBase")}</label>
+        <label>Base address (for miles and routes; miles stay blank until it's set)<br><input id="sBase" class="w-full" value="${esc(st.base_address)}" placeholder="Where you start from, e.g. 123 W Main St, Tucson, AZ">${fieldError("sBase")}</label>
       </div>
       <p class="hint" id="baseFound">${st.base_lat != null ? "Base address found on the map: miles and the door-hanger route start from it." : "Base address not found on the map yet. It's looked up when you save; if this stays, check the address (street, city and “AZ”). Miles and the route start from it once found."}</p>
     </div>

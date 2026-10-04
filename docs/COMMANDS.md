@@ -83,7 +83,7 @@ Add any spreadsheet of leads (a records-request export, a writ list, referrals):
 leadgen fetch --source csv_import --lead-type eviction --file data/inbox/filings.csv
 ```
 
-In Lead Desk, **Import court page / CSV** does the same, and rows whose case
+In Lead Desk, **More tools → Import a court file or saved page** does the same, and rows whose case
 number matches a court case already in Lead Desk fill in that case's
 property address instead of adding a lead (an address you typed or
 confirmed is kept). That is the way to get real addresses for evictions: a
@@ -107,6 +107,12 @@ leadgen status 42 won
 Statuses: `new, contacted, responded, quoted, won, lost, skip, stale`
 (Lead Desk sets `responded` when a lead answers; `stale` is shown as Old).
 Re-running a fetch never overwrites a status or notes.
+
+`list`, `export`, `status`, `age`, `enrich`, `geocode` and `contacts` work
+on leads already in the database: given a database file that doesn't exist
+(a mistyped `--db`), they stop with "No lead database at …" and exit with an
+error instead of starting an empty one. `serve`, `daily`, `run`, `fetch`,
+`cases` and `check-court` start a new database when there is none.
 
 ## Other commands
 

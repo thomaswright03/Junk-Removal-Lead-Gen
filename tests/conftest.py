@@ -46,6 +46,13 @@ def postgres_instead_of_sqlite(monkeypatch):
         if db.pg.is_url(path):
             return real_connect(path)
         key = str(path)
+        if key != ":memory:":
+            # The SQLite file it stands in for exists too, as it would
+            # (commands on existing leads refuse a missing database file).
+            from pathlib import Path
+
+            Path(key).parent.mkdir(parents=True, exist_ok=True)
+            Path(key).touch()
         if key not in schemas:
             schemas[key] = "t_" + uuid.uuid4().hex[:12]
             with psycopg.connect(PG_URL, autocommit=True) as c:

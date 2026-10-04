@@ -31,7 +31,7 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Iterable, Optional, TextIO
 
-from . import db, leadlist
+from . import db, leadlist, phonepass
 from .enrich import ParcelClient, enrich
 from .geocode import CensusGeocoder
 from .lookup import find_contacts, providers_from
@@ -103,7 +103,12 @@ def _upsert_all(conn: Conn, leads: Iterable[Lead]) -> dict:
     return counts
 
 
-def geocode_new(conn: Conn, geocoder: Any = None, limit: int = 100, should_stop: StopCheck = None) -> dict:
+def geocode_new(
+    conn: Conn, geocoder: Any = None, limit: int = 100, should_stop: StopCheck = None, log: Optional[Log] = None
+) -> dict:
+    """Map locations for new addresses. A lookup that fails (the map service
+    down) is left for the next check; ``log`` hears how many, in a plain
+    sentence (the error itself only with ``--debug``)."""
     geocoder = geocoder or CensusGeocoder()
     counts: dict[str, Any] = {"geocoded": 0, "not_found": 0}
     for row in db.needs_geocode(conn, limit=limit):
@@ -112,14 +117,26 @@ def geocode_new(conn: Conn, geocoder: Any = None, limit: int = 100, should_stop:
             break
         try:
             result = geocoder.geocode(row["address"], row["city"], row["zip"])
-        except Exception as e:  # network trouble: try again next run
-            log_.warning("map lookup failed for lead %s: %s", row["id"], type(e).__name__)
+        except Exception:  # network trouble: try again next run
+            log_.debug("map lookup failed for lead %s", row["id"], exc_info=True)
             counts["errors"] = counts.get("errors", 0) + 1
             continue
         db.save_geocode(conn, row["id"], result)
         counts["geocoded" if result else "not_found"] += 1
         conn.commit()
+    if counts.get("errors") and log:
+        log(unreachable_line("the map service", counts["errors"]))
     return counts
+
+
+def unreachable_line(site: str, n: int) -> str:
+    """ "the map service couldn't be reached for 1 lead; it will be tried
+    again on the next check"."""
+    many = n != 1
+    return (
+        f"{site} couldn't be reached for {n} lead{'s' if many else ''}; "
+        f"{'they' if many else 'it'} will be tried again on the next check"
+    )
 
 
 def run_daily(
@@ -175,7 +192,15 @@ def run_daily(
         counts["pages"] = client.pages
         return counts
 
+    def owners() -> dict:
+        counts = enrich(conn, parcel_client or ParcelClient(), should_stop=stop)
+        if counts.get("errors"):
+            log(unreachable_line("the county assessor", counts["errors"]))
+        return counts
+
     def contacts() -> dict:
+        # find_contacts looks up the best leads first (list order), so the
+        # top of the list is looked up before the run's limit is reached.
         provs = providers if providers is not None else providers_from(settings, conn=conn)
         return find_contacts(conn, provs, limit=contact_limit, lead_types=("eviction",), log=log, should_stop=stop)
 
@@ -197,8 +222,8 @@ def run_daily(
                 progress=_case_progress(progress),
             ),
         ),
-        ("owners", lambda: enrich(conn, parcel_client or ParcelClient(), should_stop=stop)),
-        ("geocode", lambda: geocode_new(conn, geocoder, should_stop=stop)),
+        ("owners", owners),
+        ("geocode", lambda: geocode_new(conn, geocoder, should_stop=stop, log=log)),
         ("contacts", contacts),
         ("stale", lambda: db.mark_stale(conn, stale_days, today=today)),
     ]
@@ -209,6 +234,15 @@ def run_daily(
             summary.update(paused=True, paused_during=name)
             break
     summary["finished_at"] = now_iso()
+    try:
+        # How the top of the list stands after the check: reached, and what
+        # the free lookup found for it (Lead Desk's header and this log say so).
+        top = phonepass.top_reach(conn, settings)
+        summary["top"] = top
+        if top["leads"]:
+            log(top_line(top))
+    except Exception:  # a progress number must never fail the check
+        log_.debug("top leads not counted", exc_info=True)
     try:
         leadlist.record_address_share(conn, settings, today)
     except Exception:  # a progress number must never fail the check
@@ -247,6 +281,17 @@ def run_daily(
     db.put_settings(conn, values)
     conn.commit()
     return summary
+
+
+def top_line(top: dict) -> str:
+    """ "top 10 leads: 4 can be reached now; the free lookup found numbers
+    for 3 of the 7 it could look up"."""
+    n, reached = top.get("leads", 0), top.get("reached", 0)
+    line = f"top {n} lead{'' if n == 1 else 's'}: {reached} can be reached now"
+    looked = top.get("looked_up", 0)
+    if looked:
+        line += f"; the free lookup found numbers for {top.get('found', 0)} of the {looked} it looked up"
+    return line
 
 
 def failed_steps(summary: dict) -> list[str]:
@@ -337,6 +382,9 @@ def describe(summary: dict) -> str:
         failed = n(step, "errors")
         if failed:
             parts.append(f"{failed} {what} lookup{'' if failed == 1 else 's'} failed (will retry tomorrow)")
+    top = summary.get("top") or {}
+    if top.get("leads"):
+        parts.append(top_line(top))
     errors = failed_steps(summary)
     if errors:
 

@@ -9,6 +9,7 @@ Typical daily run::
 """
 
 import argparse
+import logging
 import re
 import sys
 from datetime import timedelta
@@ -22,6 +23,12 @@ from .enrich import enrich
 from .geocode import CensusGeocoder
 from .sources import AUTOMATIC, SOURCES
 from .util import PAUSED_MESSAGE, Conn, az_today, decode_text, env_flag, is_paused
+
+log_ = logging.getLogger(__name__)
+
+
+def _leads(n: int) -> str:
+    return f"{n} lead{'' if n == 1 else 's'}"
 
 
 def _connect(args: argparse.Namespace) -> Conn:
@@ -100,7 +107,7 @@ def cmd_geocode(args: argparse.Namespace, conn: Conn = None) -> None:
         except Exception as e:  # network trouble: try again next run
             errors += 1
             last_error = e
-            print(f"  map lookup failed for lead {row['id']} ({type(e).__name__})", file=sys.stderr)
+            log_.debug("map lookup failed for lead %s", row["id"], exc_info=True)
             continue
         db.save_geocode(conn, row["id"], result)
         if result is None:
@@ -111,6 +118,8 @@ def cmd_geocode(args: argparse.Namespace, conn: Conn = None) -> None:
             outside += 1
         conn.commit()
     print(f"geocoded {ok} in Pima County, {outside} outside, {failed} not found")
+    if errors:
+        print(f"the map service couldn't be reached for {_leads(errors)}; tried again on the next check")
     _exit_if_all_failed(errors, ok + outside + failed, last_error, "the US Census map service", "map lookups")
 
 
@@ -539,12 +548,32 @@ def network_message(error: BaseException) -> str:
     )
 
 
+# Commands that bring leads in or run Lead Desk, and may start a new database.
+# The others work on leads already there: a mistyped --db path must say so,
+# not show an empty new database as "0 leads".
+CREATES_DATABASE = {"serve", "daily", "run", "fetch", "cases", "check-court", "schedule", "sources"}
+
+
+def missing_database(args: argparse.Namespace) -> Optional[str]:
+    """The message for a command that needs an existing SQLite file that
+    isn't there, else None."""
+    if args.command in CREATES_DATABASE or db.pg.is_url(args.db) or str(args.db) == ":memory:":
+        return None
+    if Path(args.db).is_file():
+        return None
+    return (
+        f"No lead database at {args.db}. Check the path (--db, or DATABASE_URL), "
+        "or start one with `leadgen daily` or `leadgen serve`."
+    )
+
+
 def main(argv: Optional[list] = None) -> None:
     args = build_parser().parse_args(argv)
+    missing = missing_database(args)
+    if missing:
+        sys.exit(missing)
     debug = args.debug or env_flag("LEADGEN_DEBUG")
     if debug:
-        import logging
-
         logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
     try:
         args.func(args)

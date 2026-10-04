@@ -139,7 +139,8 @@ def find_contacts(
     should_stop: StopCheck = None,
     retry_delays: Optional[tuple[float, ...]] = None,
 ) -> dict:
-    """Look up phone/email/website for business owners and landlords.
+    """Look up phone/email/website for business owners and landlords, the
+    best-ranked leads first (the order the lead list shows them in).
 
     A lookup that fails for a passing reason is tried again within the run
     (``retry_delays``, default ``RETRY_DELAYS``) before the lead waits for
@@ -151,6 +152,11 @@ def find_contacts(
     ``should_stop()`` before each (True stops early). Returns counts.
     """
     scanner = scanner if scanner is not None else WebsiteScanner()
+    # In the lead list's order (best first: writs, judgments, then priority),
+    # so a run that stops at its limit has looked up the top of the list.
+    from . import db, leadlist, outreach
+
+    leadlist.refresh_ranking(conn, outreach.merged_settings(db.get_settings(conn)))
     stale_google = (utc_now() - timedelta(days=GOOGLE_MAX_AGE_DAYS)).isoformat()
     due = (
         ""
@@ -165,7 +171,8 @@ def find_contacts(
           {due}
         ORDER BY CASE WHEN lead_type = 'eviction' AND eviction_notice = 1 THEN 0
                       WHEN lead_type = 'eviction' THEN 1 ELSE 2 END,
-                 event_date DESC, id DESC
+                 COALESCE(stage_rank, 0) DESC, COALESCE(rank_score, 0) DESC,
+                 COALESCE(rank_latest, '') DESC, id DESC
         """,
         () if refresh else (stale_google,),
     ).fetchall()
@@ -238,7 +245,7 @@ def find_contacts(
                 try:
                     w = scanner.scan(contact.website) if scanner else None
                 except Exception as e:  # the company's site down: keep what the provider found
-                    _log.warning("website scan failed for lead %s: %s", lead["id"], type(e).__name__)
+                    _log.debug("website scan failed for lead %s: %s", lead["id"], type(e).__name__)
                     counts["website_errors"] = counts.get("website_errors", 0) + 1
                     w = None
                 if w:
